@@ -36,7 +36,14 @@ os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 FAULT_CODE_PATTERN = re.compile(r'(d[a-z0-9]+[-~]\d[\d~-]*)', re.IGNORECASE)
 
 # 强故障关键词 — 只要命中就走故障查询，不走聊天
-FAULT_KEYWORDS = ["故障", "报错", "异常", "告警", "停机", "急停"]
+FAULT_KEYWORDS = [
+    # 原有关键词
+    "故障", "报错", "异常", "告警", "停机", "急停",
+    # 新增常用说法
+    "坏了", "报警", "错误", "断开", "跳闸", "失效",
+    "没反应", "不工作", "不启动", "不发电", "断电",
+    "不转", "不通", "漏电", "过热",
+]
 
 # 自然语言特征词 — 用来判断是否为复杂自然语言（需要 LLM 提取关键词）
 NL_MARKERS = ["的", "了", "吗", "呢", "吧", "是", "怎么回事", "怎么",
@@ -245,7 +252,11 @@ def _format_semantic_results(results: dict, query: str) -> str | None:
             f"────────── 结果 {i+1}{score_tag} ──────────\n{numbered}"
         )
 
-    return header + "\n\n" + "\n\n".join(result_blocks)
+    footer = (
+        "\n\n⚠️ 如果以上结果未找到对应故障，可联系主管添加故障模式并更新，"
+        "或换种说法尝试提问"
+    )
+    return header + "\n\n" + "\n\n".join(result_blocks) + footer
 
 
 def handle(query: str) -> dict:
@@ -272,6 +283,14 @@ def handle(query: str) -> dict:
     # ===== 第 2 关：自然语言提取关键词 =====
     search_query = _extract_keywords_with_llm(q)
 
+    # 如果 LLM 提取了关键词且与原文不同，给用户展示提取结果
+    keyword_hint = ""
+    if search_query != q and _is_natural_language(q):
+        keyword_hint = (
+            f"💡 提取的搜索关键词：{search_query}\n"
+            "↙ 可根据此判断提取是否准确，结果不对可换种说法重新提问\n\n"
+        )
+
     # ===== 第 3 关：语义搜索 =====
     results = collection.query(
         query_texts=[search_query],
@@ -280,7 +299,7 @@ def handle(query: str) -> dict:
     formatted = _format_semantic_results(results, q)
 
     if formatted:
-        return {"answer": formatted, "source": "语义搜索"}
+        return {"answer": keyword_hint + formatted, "source": "语义搜索"}
 
     # ===== 兜底：没找到 =====
     tip = (
@@ -288,4 +307,4 @@ def handle(query: str) -> dict:
         "请检查故障代码是否正确，或换一种描述方式。\n"
         "如需补充数据，请更新 Excel 后运行：python scripts/sync_kb.py"
     )
-    return {"answer": tip, "source": ""}
+    return {"answer": keyword_hint + tip, "source": ""}

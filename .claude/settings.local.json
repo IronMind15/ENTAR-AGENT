@@ -35,7 +35,18 @@
       "Bash(curl -s \"http://localhost:8000/ask?q=%E4%BB%8A%E5%A4%A9%E5%A4%A9%E6%B0%94%E6%80%8E%E4%B9%88%E6%A0%B7\")",
       "Bash(python -c \"import sys,json; r=json.loads\\(sys.stdin.read\\(\\)\\); print\\(f'source: {r[\\\\\"source\\\\\"]}\\\\nanswer: {r[\\\\\"answer\\\\\"][:80]}...'\\)\")",
       "Bash(curl -s \"http://localhost:8000/ask?q=asdf1234\")",
-      "Bash(python -c \"import docx; print\\('python-docx available'\\)\")"
+      "Bash(python -c \"import docx; print\\('python-docx available'\\)\")",
+      "Bash(wmic process *)",
+      "Bash(powershell -Command \"Get-Process python | Select-Object Id, CommandLine\")",
+      "Bash(powershell -Command \"Get-CimInstance Win32_Process -Filter \\\\\"name='python.exe'\\\\\" | Select-Object ProcessId, CommandLine\")",
+      "Bash(powershell -Command \"netstat -ano | findstr 8000 | findstr LISTEN\")",
+      "Bash(taskkill //PID 29692 //F)",
+      "Bash(python3 scripts/main.py)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('路由:', 'error_query' if '故障' in d.get\\('answer',''\\) or 'd4' in d.get\\('answer',''\\) else 'chat'\\); print\\('回答前100字:', d.get\\('answer',''\\)[:100]\\)\")",
+      "Bash(curl -s \"http://localhost:8000/ask?q=%E6%88%91%E8%BF%99%E4%B8%AA%E9%80%86%E5%8F%98%E5%99%A8%E6%8A%A5%E9%94%99%E4%BA%86\")",
+      "Bash(curl -s \"http://localhost:8000/ask?q=%E4%BD%A0%E5%A5%BD\")",
+      "Bash(curl -s \"http://localhost:8000/ask?q=%E4%B8%8D%E5%8F%91%E7%94%B5\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('来源:', d.get\\('source',''\\)\\); print\\('前80字:', d.get\\('answer',''\\)[:80]\\)\")"
     ]
   }
 }
