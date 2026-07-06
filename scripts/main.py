@@ -4,7 +4,6 @@
 """
 
 import os
-import re
 import sys
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -19,46 +18,25 @@ import uvicorn
 
 from skills import error_query
 from skills import chat
+from skills.error_query import FAULT_CODE_PATTERN, FAULT_KEYWORDS
 from skills.dingtalk_bot import start_bot as start_dingtalk_bot
 
 app = FastAPI(title="恩特小助手")
 
-# 故障代码正则（与 error_query 保持一致）
-_FAULT_CODE_PATTERN = re.compile(r'(d[a-z0-9]+[-~]\d[\d~-]*)', re.IGNORECASE)
-
-# 强故障信号 — 只要包含这些词，一定走故障查询
-_FAULT_KEYWORDS = ["故障", "报错", "异常", "告警", "停机", "急停"]
-
-# 非故障的自然语言触发 — 只要包含这些，直接走聊天
-_CHAT_TRIGGERS = ["你好", "嗨", "hello", "hi", "你是谁", "你叫什么",
-                  "谢谢", "再见", "拜拜", "帮个忙", "帮帮忙", "帮我"]
-
 
 def _is_fault_related(query: str) -> bool:
-    """判断是否与故障相关（强信号）"""
+    """判断是否与故障相关（强信号）
+
+    判定条件（任一命中即走故障查询）：
+      1. 查询中包含故障代码（d4-1 等格式）
+      2. 查询中包含强故障关键词（故障/报错/异常/告警/停机/急停）
+    """
     q = query.strip().lower()
     if not q:
         return False
-    # 有故障代码（d4-1 等）
-    if _FAULT_CODE_PATTERN.search(query):
+    if FAULT_CODE_PATTERN.search(query):
         return True
-    # 有强故障关键词
-    return any(kw in q for kw in _FAULT_KEYWORDS)
-
-
-def _is_chat_query(query: str) -> bool:
-    """判断是否明显为聊天性质的问题"""
-    q = query.strip().lower()
-    if not q:
-        return False
-    # 显式触发词
-    if any(kw in q for kw in _CHAT_TRIGGERS):
-        return True
-    # 自然语言特征词
-    NL_MARKERS = ["的", "了", "吗", "呢", "吧", "是", "怎么回事", "怎么",
-                   "为什么", "如何", "怎么办", "什么", "哪个", "请问",
-                   "谁", "可以", "能", "好", "嗯", "哦", "哈"]
-    return any(marker in q for marker in NL_MARKERS)
+    return any(kw in q for kw in FAULT_KEYWORDS)
 
 
 @app.get("/", response_class=HTMLResponse)

@@ -1,15 +1,25 @@
 """
 钉钉 Stream 模式机器人
-接收群聊/单聊消息 → 故障查询 → Markdown 回复
+接收单聊/群聊消息 → 故障查询 → Markdown 回复
 
 用法：在 main.py 中 import 并调用 start_bot()
 需要先在 local_config.py 配置 DINGTALK_CLIENT_ID 和 DINGTALK_CLIENT_SECRET
+
+Stream 模式说明：
+  - 我们主动连钉钉（WebSocket 长连接），不需要公网 IP
+  - ChatbotHandler.process() 是 async def
+  - 但 reply_markdown() / reply_text() 是同步方法，不可 await
 """
 
 import os
-import re
+import sys
 import logging
 import threading
+
+# 确保 scripts/ 在模块搜索路径中
+_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PARENT not in sys.path:
+    sys.path.insert(0, _PARENT)
 
 from dingtalk_stream import (
     DingTalkStreamClient,
@@ -20,26 +30,8 @@ from dingtalk_stream import (
 )
 from dingtalk_stream.frames import CallbackMessage
 
-# ===== 读取钉钉凭证 =====
-_CONFIG_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "local_config.py"
-)
-
-
-def _read_config(key: str) -> str:
-    """从 local_config.py 读取配置项"""
-    try:
-        with open(_CONFIG_PATH, encoding="utf-8") as f:
-            for line in f:
-                if line.startswith(key):
-                    return line.split("=", 1)[1].strip().strip('"').strip("'")
-    except Exception:
-        pass
-    return os.environ.get(key, "")
-
-
-DINGTALK_CLIENT_ID = _read_config("DINGTALK_CLIENT_ID")
-DINGTALK_CLIENT_SECRET = _read_config("DINGTALK_CLIENT_SECRET")
+from config import DINGTALK_CLIENT_ID, DINGTALK_CLIENT_SECRET
+from skills.error_query import FAULT_CODE_PATTERN, FAULT_KEYWORDS
 
 logger = logging.getLogger("dingtalk_bot")
 
@@ -71,15 +63,11 @@ class ErrorQueryHandler(ChatbotHandler):
         if not text:
             return AckMessage.STATUS_OK, "ok"
 
-        # ---- 意图路由（与 main.py 保持一致） ----
+        # ---- 意图路由（与 main.py 保持一致，常量从 error_query import） ----
         from skills import error_query, chat
 
-        # 故障代码正则
-        _FAULT_CODE = re.compile(r'(d[a-z0-9]+[-~]\d[\d~-]*)', re.IGNORECASE)
-        _FAULT_KW = ["故障", "报错", "异常", "告警", "停机", "急停"]
-
-        has_fault_code = bool(_FAULT_CODE.search(text))
-        has_fault_kw = any(kw in text.lower() for kw in _FAULT_KW)
+        has_fault_code = bool(FAULT_CODE_PATTERN.search(text))
+        has_fault_kw = any(kw in text.lower() for kw in FAULT_KEYWORDS)
 
         if has_fault_code or has_fault_kw:
             result = error_query.handle(text)

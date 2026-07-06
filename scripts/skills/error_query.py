@@ -1,5 +1,5 @@
 """
-故障查询模块（技能 1 — 重构版）
+故障查询模块（技能 1 — V2）
 两级查询：
   1. 精确匹配故障代码 → 直接返回（不调 LLM，秒回）
   2. 语义搜索名称/原因/自然语言 → Chroma 检索 → 返回格式化结果
@@ -9,29 +9,39 @@
 import os
 import re
 import sys
+import logging
 
 # Windows UTF-8
 if sys.platform == "win32":
     sys.stdin.reconfigure(encoding="utf-8")
     sys.stdout.reconfigure(encoding="utf-8")
 
+# 确保 scripts/ 在模块搜索路径中（用于 from config import ...）
+_PARENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PARENT_DIR not in sys.path:
+    sys.path.insert(0, _PARENT_DIR)
+
 import httpx
 from chromadb import PersistentClient
 from chromadb.utils import embedding_functions
 
-# ===== 读取 API Key =====
-_CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "local_config.py")
-DEEPSEEK_API_KEY = ""
-try:
-    with open(_CONFIG_PATH, encoding="utf-8") as f:
-        for line in f:
-            if line.startswith("DEEPSEEK_API_KEY"):
-                DEEPSEEK_API_KEY = line.split("=", 1)[1].strip().strip('"').strip("'")
-                break
-except Exception:
-    DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+from config import DEEPSEEK_API_KEY
+
+logger = logging.getLogger("error_query")
 
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+
+# ===== 共享常量（被 main.py / dingtalk_bot.py import 使用） =====
+# 故障代码正则 — 匹配 d4-1, df-8, d10-1~d10-16 等格式
+FAULT_CODE_PATTERN = re.compile(r'(d[a-z0-9]+[-~]\d[\d~-]*)', re.IGNORECASE)
+
+# 强故障关键词 — 只要命中就走故障查询，不走聊天
+FAULT_KEYWORDS = ["故障", "报错", "异常", "告警", "停机", "急停"]
+
+# 自然语言特征词 — 用来判断是否为复杂自然语言（需要 LLM 提取关键词）
+NL_MARKERS = ["的", "了", "吗", "呢", "吧", "是", "怎么回事", "怎么",
+              "为什么", "如何", "怎么办", "什么", "哪个", "报错",
+              "故障", "查一下", "请问"]
 
 # ===== 路径 =====
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -45,18 +55,11 @@ ef = embedding_functions.SentenceTransformerEmbeddingFunction(
 )
 collection = client.get_collection("error_codes", embedding_function=ef)
 
-# ===== 故障代码正则 =====
-# 匹配 d4-1, df-8, d10-1~d10-16 等格式
-FAULT_CODE_PATTERN = re.compile(r'(d[a-z0-9]+[-~]\d[\d~-]*)', re.IGNORECASE)
-
-# ===== 自然语言特征词（用来判断是否为复杂自然语言） =====
-NL_MARKERS = ["的", "了", "吗", "呢", "吧", "是", "怎么回事", "怎么", "为什么",
-              "如何", "怎么办", "什么", "哪个", "报错", "故障", "查一下", "请问"]
-
 
 def call_deepseek(prompt: str, max_tokens: int = 200) -> str:
     """调 DeepSeek API（轻量调用，用于关键词提取）"""
     if not DEEPSEEK_API_KEY:
+        logger.warning("DEEPSEEK_API_KEY 未配置，跳过 LLM 提取")
         return ""
     try:
         with httpx.Client(timeout=15) as c:
@@ -77,8 +80,14 @@ def call_deepseek(prompt: str, max_tokens: int = 200) -> str:
                 body = r.json()
                 if body:
                     return body["choices"][0]["message"]["content"].strip()
-    except Exception:
-        pass
+            else:
+                logger.warning(f"DeepSeek API 返回非 200: {r.status_code}")
+    except httpx.TimeoutException:
+        logger.warning("DeepSeek API 超时")
+    except httpx.RequestError as e:
+        logger.warning(f"DeepSeek API 请求失败: {e}")
+    except Exception as e:
+        logger.warning(f"DeepSeek API 未知错误: {e}")
     return ""
 
 
@@ -139,6 +148,28 @@ def _add_line_numbers(text: str) -> str:
     return "\n".join(result)
 
 
+def _format_meta_fields(meta: dict) -> list[str]:
+    """格式化 metadata 中的扩展字段（地址、位地址、属性等），返回行列表
+
+    被 _format_exact_result 和 _format_semantic_results 共用，避免重复。
+    """
+    fields = [
+        ("地址", "address"),
+        ("位地址", "bit_address"),
+        ("属性", "attribute"),
+        ("数据类型", "data_type"),
+        ("默认值", "default_value"),
+        ("备注", "notes"),
+        ("说明", "description"),
+        ("备注2", "notes2"),
+    ]
+    lines = []
+    for label, key in fields:
+        val = meta.get(key, "") or "-"
+        lines.append(f"【{label}】{val}")
+    return lines
+
+
 def _format_exact_result(meta: dict) -> str:
     """格式化精确匹配结果（纯文本，不调 LLM）"""
     lines = []
@@ -149,20 +180,8 @@ def _format_exact_result(meta: dict) -> str:
     lines.append(f"【故障代码】{meta.get('fault_code', '')}")
     lines.append("")
 
-    # 4. 其他信息（一对一行，紧凑排列）
-    other_fields = [
-        ("地址", "address"),
-        ("位地址", "bit_address"),
-        ("属性", "attribute"),
-        ("数据类型", "data_type"),
-        ("默认值", "default_value"),
-        ("备注", "notes"),
-        ("说明", "description"),
-        ("备注2", "notes2"),
-    ]
-    for label, key in other_fields:
-        val = meta.get(key, "") or "-"
-        lines.append(f"【{label}】{val}")
+    # 4. 其他字段（通过共享函数实现，与语义搜索复用）
+    lines.extend(_format_meta_fields(meta))
 
     lines.append("")
     # 5. 分割线
@@ -212,19 +231,7 @@ def _format_semantic_results(results: dict, query: str) -> str | None:
         block_lines.append(f"【故障代码】{code or '-'}")
         block_lines.append("")
 
-        other_fields = [
-            ("地址", "address"),
-            ("位地址", "bit_address"),
-            ("属性", "attribute"),
-            ("数据类型", "data_type"),
-            ("默认值", "default_value"),
-            ("备注", "notes"),
-            ("说明", "description"),
-            ("备注2", "notes2"),
-        ]
-        for label, key in other_fields:
-            val = meta.get(key, "") or "-"
-            block_lines.append(f"【{label}】{val}")
+        block_lines.extend(_format_meta_fields(meta))
 
         block_lines.append("")
         block_lines.append("---")

@@ -5,23 +5,15 @@
 
 import os
 import sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# 确保 scripts/ 在模块搜索路径中
+_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PARENT not in sys.path:
+    sys.path.insert(0, _PARENT)
 
 import httpx
 
-# ===== 读取 API Key =====
-_CONFIG_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "local_config.py"
-)
-DEEPSEEK_API_KEY = ""
-try:
-    with open(_CONFIG_PATH, encoding="utf-8") as f:
-        for line in f:
-            if line.startswith("DEEPSEEK_API_KEY"):
-                DEEPSEEK_API_KEY = line.split("=", 1)[1].strip().strip('"').strip("'")
-                break
-except Exception:
-    DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+from config import DEEPSEEK_API_KEY
 
 # ===== 系统提示词 =====
 SYSTEM_PROMPT = (
