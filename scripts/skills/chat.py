@@ -14,6 +14,7 @@ if _PARENT not in sys.path:
 import httpx
 
 from config import DEEPSEEK_API_KEY
+from skills import BaseSkill, register
 
 # ===== 系统提示词 =====
 SYSTEM_PROMPT = (
@@ -30,7 +31,7 @@ SYSTEM_PROMPT = (
 )
 
 
-def handle(query: str) -> dict:
+def _handle_impl(query: str) -> dict:
     """处理通用聊天，返回 {answer, source}"""
     q = query.strip()
     if not q:
@@ -65,3 +66,25 @@ def handle(query: str) -> dict:
         return {"answer": f"抱歉，连接大模型时出错了：{e}", "source": "chat"}
 
     return {"answer": "抱歉，我暂时无法回答这个问题。", "source": "chat"}
+
+
+# ===== 注册技能类 =====
+@register
+class ChatSkill(BaseSkill):
+    """通用聊天技能：非故障问题与 DeepSeek 直接对话（托底）"""
+    name = "通用聊天"
+    description = "非故障问题时与 DeepSeek 直接对话（托底技能，始终匹配）"
+    priority = 0  # 最低优先级，作为兜底
+
+    @classmethod
+    def match(cls, query: str) -> bool:
+        """始终匹配 — 作为兜底技能"""
+        return True
+
+    @classmethod
+    def handle(cls, query: str) -> dict:
+        return _handle_impl(query)
+
+
+# 向后兼容：保留模块级 handle 函数
+handle = _handle_impl

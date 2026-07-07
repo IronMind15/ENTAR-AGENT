@@ -1,1 +1,73 @@
-# skills 包初始化
+"""
+恩特小助手 — 技能注册中心
+
+所有技能模块通过 @register 装饰器注册到 _skill_registry。
+main.py 和 dingtalk_bot.py 通过 get_matched_skill() 统一路由。
+
+添加新技能只需：
+  1. 在 skills/ 下新建 .py 文件
+  2. 定义继承 BaseSkill 的类，实现 match() 和 handle()
+  3. 用 @register 装饰
+  4. 在本文件底部加入 from . import 新模块
+"""
+
+from typing import Optional
+
+
+class BaseSkill:
+    """技能基类 — 所有技能模块继承此类
+
+    子类需定义类属性:
+        name: str        — 技能名称
+        description: str — 一句话描述
+        priority: int    — 优先级（数值越大越先匹配）
+
+    子类需实现类方法:
+        match(cls, query)  → bool   判断是否应处理该查询
+        handle(cls, query) → dict   处理查询，返回 {"answer": str, "source": str}
+    """
+    name: str = ""
+    description: str = ""
+    priority: int = 0
+
+    @classmethod
+    def match(cls, query: str) -> bool:
+        raise NotImplementedError
+
+    @classmethod
+    def handle(cls, query: str) -> dict:
+        raise NotImplementedError
+
+
+# ===== 注册中心 =====
+_skill_registry: list[type[BaseSkill]] = []
+
+
+def register(cls):
+    """注册技能类（用作类装饰器）"""
+    _skill_registry.append(cls)
+    _skill_registry.sort(key=lambda s: s.priority, reverse=True)
+    return cls
+
+
+def get_matched_skill(query: str) -> Optional[type[BaseSkill]]:
+    """遍历已注册技能，返回第一个 match() 返回 True 的
+
+    技能按 priority 降序遍历（高优先级先匹配）。
+    chat 技能作为兜底（priority=0，match 始终返回 True），
+    因此此函数始终有返回值，但在防御性编程中仍保留 None 分支。
+    """
+    for skill_cls in _skill_registry:
+        if skill_cls.match(query):
+            return skill_cls
+    return None
+
+
+def get_skill_list() -> list[type[BaseSkill]]:
+    """获取所有注册的技能列表（调试/启动展示用）"""
+    return list(_skill_registry)
+
+
+# ===== 自动导入技能模块（确保 @register 装饰器执行） =====
+from . import error_query  # noqa: E402, F811
+from . import chat         # noqa: E402, F811

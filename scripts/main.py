@@ -1,6 +1,6 @@
 """
 恩特小助手 — 统一入口
-根据意图路由到不同技能模块
+通过技能注册中心路由到不同技能模块
 """
 
 import os
@@ -16,27 +16,10 @@ from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 import uvicorn
 
-from skills import error_query
-from skills import chat
-from skills.error_query import FAULT_CODE_PATTERN, FAULT_KEYWORDS
+from skills import get_matched_skill, get_skill_list
 from skills.dingtalk_bot import start_bot as start_dingtalk_bot
 
 app = FastAPI(title="恩特小助手")
-
-
-def _is_fault_related(query: str) -> bool:
-    """判断是否与故障相关（强信号）
-
-    判定条件（任一命中即走故障查询）：
-      1. 查询中包含故障代码（d4-1 等格式）
-      2. 查询中包含强故障关键词（故障/报错/异常/告警/停机/急停）
-    """
-    q = query.strip().lower()
-    if not q:
-        return False
-    if FAULT_CODE_PATTERN.search(query):
-        return True
-    return any(kw in q for kw in FAULT_KEYWORDS)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -70,7 +53,7 @@ def home():
                 const res = await fetch('/ask?q=' + encodeURIComponent(q));
                 const data = await res.json();
                 document.getElementById('loading').style.display = 'none';
-                document.getElementById('result').innerHTML = data.answer.replace(/\n/g, '<br>');
+                document.getElementById('result').innerHTML = data.answer.replace(/\\n/g, '<br>');
             }
         </script>
     </body>
@@ -80,19 +63,20 @@ def home():
 
 @app.get("/ask")
 def ask(q: str = Query("", description="用户问题")):
-    """统一问答接口"""
+    """统一问答接口 — 通过技能注册中心路由"""
     if not q:
         return JSONResponse({"answer": "请输入问题"})
 
     print(f"[query] {q}")
 
-    # 1. 与故障相关（故障代码、强故障关键词）→ 故障查询
-    if _is_fault_related(q):
-        print(f"  → error_query")
-        result = error_query.handle(q)
-
-    # 2. 其他情况一律走聊天（托底）
+    # 遍历已注册技能，找到第一个匹配的处理
+    skill_cls = get_matched_skill(q)
+    if skill_cls:
+        print(f"  → {skill_cls.name}")
+        result = skill_cls.handle(q)
     else:
+        # 理论上不会走到这里（chat 始终匹配），保留兜底
+        from skills import chat
         print(f"  → chat (fallback)")
         result = chat.handle(q)
 
@@ -102,12 +86,13 @@ def ask(q: str = Query("", description="用户问题")):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
 
+    skill_names = ", ".join(s.name for s in get_skill_list())
     print(f"\n🔧 恩特小助手启动：http://localhost:{port}")
-    print(f"  技能: 故障查询、通用聊天（托底）")
+    print(f"  已注册技能: {skill_names}")
 
     # 启动钉钉机器人（后台线程）
     start_dingtalk_bot()
 
-    print(f"  将来扩展: 项目经验、多模态...")
+    print(f"  将来扩展: 添加新技能 → 新建 skills/*.py + __init__.py 一行注册")
     print()
     uvicorn.run(app, host="0.0.0.0", port=port)

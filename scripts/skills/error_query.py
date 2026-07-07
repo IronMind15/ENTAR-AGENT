@@ -26,6 +26,7 @@ from chromadb import PersistentClient
 from chromadb.utils import embedding_functions
 
 from config import DEEPSEEK_API_KEY
+from skills import BaseSkill, register
 
 logger = logging.getLogger("error_query")
 
@@ -259,7 +260,7 @@ def _format_semantic_results(results: dict, query: str) -> str | None:
     return header + "\n\n" + "\n\n".join(result_blocks) + footer
 
 
-def handle(query: str) -> dict:
+def _handle_impl(query: str) -> dict:
     """处理故障查询，返回 {answer, source}
 
     查询策略：
@@ -308,3 +309,35 @@ def handle(query: str) -> dict:
         "如需补充数据，请更新 Excel 后运行：python scripts/sync_kb.py"
     )
     return {"answer": keyword_hint + tip, "source": ""}
+
+
+# ===== 注册技能类 =====
+@register
+class ErrorQuerySkill(BaseSkill):
+    """故障查询技能：精确匹配 + 语义搜索 PCS 故障代码"""
+    name = "故障查询"
+    description = "精准或语义搜索 PCS 故障代码"
+    priority = 100  # 高优先级：故障相关先查
+
+    @classmethod
+    def match(cls, query: str) -> bool:
+        """判断是否与故障相关（强信号）
+
+        判定条件（任一命中即走故障查询）：
+          1. 查询中包含故障代码（d4-1 等格式）
+          2. 查询中包含强故障关键词（故障/报错/异常/告警/停机/急停等）
+        """
+        q = query.strip().lower()
+        if not q:
+            return False
+        if FAULT_CODE_PATTERN.search(query):
+            return True
+        return any(kw in q for kw in FAULT_KEYWORDS)
+
+    @classmethod
+    def handle(cls, query: str) -> dict:
+        return _handle_impl(query)
+
+
+# 向后兼容：保留模块级 handle 函数（旧代码 from skills.error_query import handle）
+handle = _handle_impl

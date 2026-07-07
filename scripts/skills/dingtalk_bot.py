@@ -31,7 +31,6 @@ from dingtalk_stream import (
 from dingtalk_stream.frames import CallbackMessage
 
 from config import DINGTALK_CLIENT_ID, DINGTALK_CLIENT_SECRET
-from skills.error_query import FAULT_CODE_PATTERN, FAULT_KEYWORDS
 
 logger = logging.getLogger("dingtalk_bot")
 
@@ -63,18 +62,16 @@ class ErrorQueryHandler(ChatbotHandler):
         if not text:
             return AckMessage.STATUS_OK, "ok"
 
-        # ---- 意图路由（与 main.py 保持一致，常量从 error_query import） ----
-        from skills import error_query, chat
+        # ---- 通过技能注册中心路由 ----
+        from skills import get_matched_skill, chat as chat_skill
 
-        has_fault_code = bool(FAULT_CODE_PATTERN.search(text))
-        has_fault_kw = any(kw in text.lower() for kw in FAULT_KEYWORDS)
-
-        if has_fault_code or has_fault_kw:
-            result = error_query.handle(text)
-            logger.info(f"  → error_query: {text[:40]}")
+        skill_cls = get_matched_skill(text)
+        if skill_cls:
+            logger.info(f"  → {skill_cls.name}: {text[:40]}")
+            result = skill_cls.handle(text)
         else:
-            result = chat.handle(text)
-            logger.info(f"  → chat: {text[:40]}")
+            result = chat_skill.handle(text)
+            logger.info(f"  → chat (fallback): {text[:40]}")
 
         answer = result.get("answer", "") or "抱歉，我没有找到相关信息。"
 
