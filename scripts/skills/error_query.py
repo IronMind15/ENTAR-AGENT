@@ -23,6 +23,9 @@ if _PARENT_DIR not in sys.path:
 
 import httpx
 from chromadb import PersistentClient
+
+# 共享 HTTP 客户端（复用连接，避免每次建新连接）
+_HTTP_CLIENT = httpx.Client(timeout=15)
 from chromadb.utils import embedding_functions
 
 from config import DEEPSEEK_API_KEY
@@ -70,26 +73,25 @@ def call_deepseek(prompt: str, max_tokens: int = 200) -> str:
         logger.warning("DEEPSEEK_API_KEY 未配置，跳过 LLM 提取")
         return ""
     try:
-        with httpx.Client(timeout=15) as c:
-            r = c.post(
-                "https://api.deepseek.com/chat/completions",
-                headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
-                json={
-                    "model": "deepseek-v4-flash",
-                    "messages": [
-                        {"role": "system", "content": "你是一个只输出关键词的工具，不要解释，不要多余内容。"},
-                        {"role": "user", "content": prompt},
-                    ],
-                    "temperature": 0.1,
-                    "max_tokens": max_tokens,
-                },
-            )
-            if r.status_code == 200:
-                body = r.json()
-                if body:
-                    return body["choices"][0]["message"]["content"].strip()
-            else:
-                logger.warning(f"DeepSeek API 返回非 200: {r.status_code}")
+        r = _HTTP_CLIENT.post(
+            "https://api.deepseek.com/chat/completions",
+            headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
+            json={
+                "model": "deepseek-v4-flash",
+                "messages": [
+                    {"role": "system", "content": "你是一个只输出关键词的工具，不要解释，不要多余内容。"},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.1,
+                "max_tokens": max_tokens,
+            },
+        )
+        if r.status_code == 200:
+            body = r.json()
+            if body:
+                return body["choices"][0]["message"]["content"].strip()
+        else:
+            logger.warning(f"DeepSeek API 返回非 200: {r.status_code}")
     except httpx.TimeoutException:
         logger.warning("DeepSeek API 超时")
     except httpx.RequestError as e:

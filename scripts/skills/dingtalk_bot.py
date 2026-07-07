@@ -76,12 +76,15 @@ class ErrorQueryHandler(ChatbotHandler):
         answer = result.get("answer", "") or "抱歉，我没有找到相关信息。"
 
         # 回复 Markdown（注意：reply_markdown 是同步方法，不要 await）
-        self.reply_markdown(
-            title="恩特小助手",
-            text=answer,
-            incoming_message=bot_msg,
-        )
-        logger.info(f"回复成功: {answer[:50]}...")
+        try:
+            self.reply_markdown(
+                title="恩特小助手",
+                text=answer,
+                incoming_message=bot_msg,
+            )
+            logger.info(f"回复成功: {answer[:50]}...")
+        except Exception as e:
+            logger.error(f"回复钉钉消息失败: {e}")
 
         return AckMessage.STATUS_OK, "ok"
 

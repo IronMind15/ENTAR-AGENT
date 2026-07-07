@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>恩特小助手 — 恩特能源 AI Agent</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --blue: #4361ee;
+    --blue-light: #eef1ff;
+    --pink: #f72585;
+    --green: #06d6a0;
+    --green-light: #ecfdf5;
+    --orange: #fb8500;
+    --orange-light: #fff8f0;
+    --purple: #7209b7;
+    --dark: #1a1a2e;
+    --gray: #64748b;
+    --gray-light: #f1f5f9;
+    --bg: #f8fafc;
+    --card-shadow: 0 4px 24px rgba(0,0,0,0.06);
+    --card-hover-shadow: 0 8px 40px rgba(0,0,0,0.10);
+  }
+
+  body {
+    font-family: 'Inter', -apple-system, 'Microsoft YaHei', 'PingFang SC', sans-serif;
+    background: var(--bg);
+    color: var(--dark);
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+
+  /* ===== Top Bar ===== */
+  .top-bar {
+    position: fixed; top: 0; left: 0; right: 0;
+    background: rgba(255,255,255,0.85);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    z-index: 100;
+    border-bottom: 1px solid rgba(0,0,0,0.04);
+    padding: 0 40px;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .top-bar .logo { font-weight: 700; font-size: 16px; color: var(--dark); letter-spacing: 0.5px; }
+  .top-bar .logo span { color: var(--pink); }
+  .top-bar nav { display: flex; gap: 24px; }
+  .top-bar nav a {
+    text-decoration: none; font-size: 13px; font-weight: 500;
+    color: var(--gray); transition: color 0.2s;
+  }
+  .top-bar nav a:hover { color: var(--dark); }
+
+  /* ===== Hero ===== */
+  .hero {
+    padding: 120px 40px 80px;
+    max-width: 1100px; margin: 0 auto;
+    display: flex; align-items: center; gap: 60px;
+  }
+  .hero-text { flex: 1; }
+  .hero-badge {
+    display: inline-block;
+    font-size: 12px; font-weight: 600;
+    padding: 4px 14px;
+    border-radius: 20px;
+    background: var(--pink);
+    color: #fff;
+    margin-bottom: 16px;
+    letter-spacing: 0.5px;
+  }
+  .hero-text h1 {
+    font-size: 42px; font-weight: 800;
+    line-height: 1.2; margin-bottom: 16px;
+  }
+  .hero-text h1 .highlight {
+    background: linear-gradient(135deg, var(--blue), var(--pink));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .hero-text p {
+    font-size: 16px; color: var(--gray);
+    max-width: 520px; margin-bottom: 28px;
+  }
+  .hero-stats {
+    display: flex; gap: 36px;
+  }
+  .hero-stat { }
+  .hero-stat .num {
+    font-size: 28px; font-weight: 800; color: var(--dark);
+  }
+  .hero-stat .label {
+    font-size: 13px; color: var(--gray);
+  }
+
+  .hero-visual {
+    flex-shrink: 0;
+    width: 320px; height: 320px;
+    background: linear-gradient(135deg, var(--blue-light), var(--green-light));
+    border-radius: 24px;
+    display: flex; align-items: center; justify-content: center;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 8px 40px rgba(67,97,238,0.10);
+  }
+  .hero-visual .orbit-container {
+    width: 240px; height: 240px;
+    position: relative;
+  }
+  /* Animation bubbles */
+  .bubble {
+    position: absolute;
+    border-radius: 50%;
+    animation: float 4s ease-in-out infinite;
+  }
+  .bubble-1 {
+    width: 60px; height: 60px;
+    background: var(--blue); opacity: 0.15;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    animation-delay: 0s;
+  }
+  .bubble-2 {
+    width: 40px; height: 40px;
+    background: var(--pink); opacity: 0.12;
+    top: 10%; left: 30%;
+    animation-delay: 0.8s;
+  }
+  .bubble-3 {
+    width: 50px; height: 50px;
+    background: var(--green); opacity: 0.12;
+    bottom: 15%; right: 20%;
+    animation-delay: 1.6s;
+  }
+  .bubble-4 {
+    width: 30px; height: 30px;
+    background: var(--orange); opacity: 0.10;
+    top: 20%; right: 15%;
+    animation-delay: 2.4s;
+  }
+  .center-icon {
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 64px;
+    filter: drop-shadow(0 4px 12px rgba(67,97,238,0.20));
+    animation: pulse 3s ease-in-out infinite;
+  }
+  @keyframes float {
+    0%, 100% { transform: translateY(0px) scale(1); }
+    50% { transform: translateY(-12px) scale(1.05); }
+  }
+  @keyframes pulse {
+    0%, 100% { transform: translate(-50%, -50%) scale(1); }
+    50% { transform: translate(-50%, -50%) scale(1.08); }
+  }
+
+  /* ===== Section Common ===== */
+  section { padding: 80px 40px; }
+  .section-inner {
+    max-width: 1000px; margin: 0 auto;
+  }
+  .section-label {
+    display: inline-block;
+    font-size: 12px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 2px;
+    padding: 4px 12px; border-radius: 4px;
+    margin-bottom: 8px;
+  }
+  .section-title {
+    font-size: 30px; font-weight: 700;
+    margin-bottom: 12px;
+  }
+  .section-desc {
+    font-size: 15px; color: var(--gray);
+    max-width: 600px; margin-bottom: 40px;
+  }
+
+  /* ===== Current Features ===== */
+  #features {
+    background: #fff;
+  }
+  #features .section-label { background: var(--blue-light); color: var(--blue); }
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 24px;
+  }
+  .feature-card {
+    background: #fff;
+    border: 1px solid #eef2f6;
+    border-radius: 16px;
+    padding: 28px;
+    transition: box-shadow 0.3s, transform 0.2s;
+    cursor: default;
+  }
+  .feature-card:hover {
+    box-shadow: var(--card-hover-shadow);
+    transform: translateY(-2px);
+  }
+  .feature-card .card-icon {
+    width: 44px; height: 44px;
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+    margin-bottom: 16px;
+  }
+  .feature-card h3 { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+  .feature-card p { font-size: 13px; color: var(--gray); line-height: 1.7; }
+  .feature-card .tag {
+    display: inline-block;
+    font-size: 11px; font-weight: 600;
+    padding: 2px 10px; border-radius: 4px;
+    margin-top: 12px;
+  }
+  .tag-done { background: #d1fae5; color: #065f46; }
+  .tag-wip  { background: #fef3c7; color: #92400e; }
+
+  /* ===== Query Flow ===== */
+  .query-flow {
+    margin-top: 48px;
+    background: var(--gray-light);
+    border-radius: 16px;
+    padding: 32px;
+  }
+  .query-flow h3 { font-size: 16px; font-weight: 700; margin-bottom: 20px; }
+  .flow-steps {
+    display: flex; align-items: flex-start; gap: 0;
+    flex-wrap: wrap;
+  }
+  .flow-step {
+    display: flex; align-items: center; gap: 8px;
+  }
+  .flow-step .step-dot {
+    width: 32px; height: 32px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700; color: #fff;
+    flex-shrink: 0;
+  }
+  .flow-step .step-text { font-size: 13px; color: var(--dark); white-space: nowrap; }
+  .flow-step .step-arrow { color: #ccc; font-size: 14px; margin: 0 6px; }
+
+  /* ===== Architecture Image ===== */
+  .arch-section {
+    margin-top: 32px;
+    text-align: center;
+  }
+  .arch-section a {
+    display: inline-block;
+    margin-top: 12px;
+    padding: 10px 24px;
+    background: var(--dark);
+    color: #fff;
+    border-radius: 8px;
+    text-decoration: none;
+    font-size: 13px; font-weight: 600;
+    transition: background 0.2s;
+  }
+  .arch-section a:hover { background: #2d2d4a; }
+
+  /* ===== Roadmap ===== */
+  #roadmap {
+    background: linear-gradient(180deg, #fff 0%, var(--bg) 100%);
+  }
+  #roadmap .section-label { background: #fef3c7; color: #92400e; }
+  .roadmap-phases {
+    display: flex; flex-direction: column; gap: 20px;
+  }
+  .phase-card {
+    background: #fff;
+    border-radius: 16px;
+    padding: 28px 32px;
+    border: 1px solid #eef2f6;
+    display: flex; gap: 24px;
+    align-items: flex-start;
+    transition: box-shadow 0.3s;
+  }
+  .phase-card:hover { box-shadow: var(--card-hover-shadow); }
+  .phase-number {
+    width: 48px; height: 48px; border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; font-weight: 800; color: #fff;
+    flex-shrink: 0;
+  }
+  .phase-content { flex: 1; }
+  .phase-header {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 8px;
+    flex-wrap: wrap;
+  }
+  .phase-header h3 { font-size: 17px; font-weight: 700; }
+  .phase-header .phase-pct {
+    font-size: 12px; font-weight: 700; padding: 2px 10px;
+    border-radius: 4px;
+  }
+  .phase-progress {
+    height: 4px; background: var(--gray-light); border-radius: 2px;
+    margin: 8px 0 12px; overflow: hidden;
+  }
+  .phase-progress-bar {
+    height: 100%; border-radius: 2px;
+    transition: width 1s ease;
+  }
+  .phase-content p { font-size: 14px; color: var(--gray); margin-bottom: 12px; }
+  .phase-todos { list-style: none; }
+  .phase-todos li {
+    font-size: 13px; padding: 4px 0;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .phase-todos li .ckb { font-size: 14px; }
+  .todo-done { color: var(--green); }
+  .todo-pending { color: #ccc; }
+  .phase-todos li span.text { color: var(--dark); }
+  .phase-todos li span.text-muted { color: #aaa; }
+
+  /* ===== Arch Diagram Section ===== */
+  #diagram {
+    background: #fff;
+    padding: 60px 40px;
+    text-align: center;
+  }
+  #diagram .section-inner { max-width: 900px; }
+  #diagram .section-label { background: var(--purple); color: #fff; }
+  #diagram img, #diagram svg {
+    max-width: 100%; border-radius: 12px;
+    box-shadow: var(--card-shadow);
+  }
+
+  /* ===== Footer ===== */
+  footer {
+    text-align: center; padding: 32px 40px;
+    font-size: 13px; color: #aaa;
+    border-top: 1px solid #eef2f6;
+  }
+  footer strong { color: var(--dark); }
+
+  /* ===== Responsive ===== */
+  @media (max-width: 768px) {
+    .hero { flex-direction: column; padding: 100px 20px 60px; gap: 32px; }
+    .hero-text h1 { font-size: 30px; }
+    .hero-visual { width: 220px; height: 220px; }
+    .hero-visual .orbit-container { width: 180px; height: 180px; }
+    section { padding: 56px 20px; }
+    .phase-card { flex-direction: column; }
+    .top-bar { padding: 0 20px; }
+    .top-bar nav { display: none; }
+    .flow-step .step-text { white-space: normal; font-size: 12px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ===== Top Bar ===== -->
+<div class="top-bar">
+  <div class="logo">⚡ 恩特<span>小助手</span></div>
+  <nav>
+    <a href="#features">当前功能</a>
+    <a href="#roadmap">未来规划</a>
+    <a href="#diagram">架构图</a>
+  </nav>
+</div>
+
+<!-- ===== Hero ===== -->
+<div class="hero">
+  <div class="hero-text">
+    <div class="hero-badge">✨ 第一步 · 95% 完成</div>
+    <h1>恩特能源<br><span class="highlight">AI Agent</span> 内测中</h1>
+    <p>
+      恩特小助手是面向公司内部的 AI 助手，已上线钉钉机器人 + Web 页面。
+      输入故障代码秒回原因，自然语言也能搜。三步走 AI 赋能计划第一步即将完成。
+    </p>
+    <div class="hero-stats">
+      <div class="hero-stat">
+        <div class="num">133</div>
+        <div class="label">故障代码已入库</div>
+      </div>
+      <div class="hero-stat">
+        <div class="num">3s</div>
+        <div class="label">平均响应速度</div>
+      </div>
+      <div class="hero-stat">
+        <div class="num">2</div>
+        <div class="label">接入渠道</div>
+      </div>
+    </div>
+  </div>
+  <div class="hero-visual">
+    <div class="orbit-container">
+      <div class="bubble bubble-1"></div>
+      <div class="bubble bubble-2"></div>
+      <div class="bubble bubble-3"></div>
+      <div class="bubble bubble-4"></div>
+      <div class="center-icon">🤖</div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Current Features ===== -->
+<section id="features">
+  <div class="section-inner">
+    <div class="section-label">✦ 当前功能</div>
+    <h2 class="section-title">现在能做什么</h2>
+    <p class="section-desc">面向公司同事的故障代码智能查询工具，已接入钉钉和 Web 两个入口。</p>
+
+    <div class="feature-grid">
+      <div class="feature-card">
+        <div class="card-icon" style="background:var(--blue-light)">🔍</div>
+        <h3>精确匹配</h3>
+        <p>输入 <code>d4-1</code>、<code>de-6</code> 等故障代码，毫秒级返回完整参数——名称、原因、地址、数据类型等全部信息。</p>
+        <span class="tag tag-done">✅ 已完成</span>
+      </div>
+
+      <div class="feature-card">
+        <div class="card-icon" style="background:var(--green-light)">🧠</div>
+        <h3>语义搜索</h3>
+        <p>记不住故障代码？输入「外部急停信号闭合」「逆变器报错」等自然描述，Chroma 向量检索找到最匹配的结果。</p>
+        <span class="tag tag-done">✅ 已完成</span>
+      </div>
+
+      <div class="feature-card">
+        <div class="card-icon" style="background:var(--orange-light)">💬</div>
+        <h3>通用聊天</h3>
+        <p>非故障问题自动托底到 DeepSeek 对话。问天气、问公司制度、闲聊都行，像同事一样自然交流。</p>
+        <span class="tag tag-done">✅ 已完成</span>
+      </div>
+
+      <div class="feature-card">
+        <div class="card-icon" style="background:#f0f0ff">📱</div>
+        <h3>钉钉机器人</h3>
+        <p>搜索「恩特小助手」进入单聊即可使用。Stream 模式长连接，无需公网 IP、无需域名、无需 SSL。</p>
+        <span class="tag tag-done">✅ 已上线</span>
+      </div>
+
+      <div class="feature-card">
+        <div class="card-icon" style="background:#f0faf0">🌐</div>
+        <h3>Web 页面</h3>
+        <p>http://localhost:8000 局域网内均可访问。适合办公电脑直接打开使用，与钉钉机器人共享同一后端。</p>
+        <span class="tag tag-done">✅ 已上线</span>
+      </div>
+
+      <div class="feature-card">
+        <div class="card-icon" style="background:#faf5ff">⚡</div>
+        <h3>秒级响应</h3>
+        <p>两级查询策略：精确匹配不调 LLM（毫秒级），语义搜索走本地 Chroma（秒级），LLM 只用在自然语言关键词提取。</p>
+        <span class="tag tag-done">✅ 已优化</span>
+      </div>
+    </div>
+
+    <!-- Query Flow -->
+    <div class="query-flow">
+      <h3>⚡ 查询策略（3 级递进）</h3>
+      <div class="flow-steps">
+        <div class="flow-step">
+          <div class="step-dot" style="background:var(--green)">1</div>
+          <span class="step-text">精确匹配故障代码</span>
+          <span class="step-arrow">→</span>
+        </div>
+        <div class="flow-step">
+          <div class="step-dot" style="background:var(--blue)">2</div>
+          <span class="step-text">语义搜索 Chroma</span>
+          <span class="step-arrow">→</span>
+        </div>
+        <div class="flow-step">
+          <div class="step-dot" style="background:var(--orange)">3</div>
+          <span class="step-text">LLM 提取关键词 · 再搜索</span>
+          <span class="step-arrow">→</span>
+        </div>
+        <div class="flow-step">
+          <div class="step-dot" style="background:var(--gray)">💬</div>
+          <span class="step-text">兜底 · 直接聊天</span>
+        </div>
+      </div>
+      <p style="margin-top:16px;font-size:12px;color:var(--gray);">
+        🔵 = 不调 LLM · 毫秒级 &nbsp;&nbsp;|&nbsp;&nbsp; 🟠 = 调 LLM（仅关键词提取，极小 prompt）
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ===== Roadmap ===== -->
+<section id="roadmap">
+  <div class="section-inner">
+    <div class="section-label">✦ 未来规划</div>
+    <h2 class="section-title">三步走 AI 赋能计划</h2>
+    <p class="section-desc">2026 年 7 月与胡总敲定的 AI 落地路线图，从工具到平台，逐步升级。</p>
+
+    <div class="roadmap-phases">
+
+      <!-- Phase 1 -->
+      <div class="phase-card">
+        <div class="phase-number" style="background:var(--green)">1</div>
+        <div class="phase-content">
+          <div class="phase-header">
+            <h3>智能快速查询</h3>
+            <span class="phase-pct" style="background:#d1fae5;color:#065f46;">95%</span>
+            <span style="font-size:12px;color:var(--gray);">🔥 必达 · 第 1-3 周</span>
+          </div>
+          <div class="phase-progress">
+            <div class="phase-progress-bar" style="width:95%;background:var(--green);"></div>
+          </div>
+          <p>故障代码智能查询工具，让同事能通过钉钉或 Web 秒查故障原因和参数，不用翻手册。</p>
+          <ul class="phase-todos">
+            <li><span class="ckb todo-done">✅</span><span class="text">PCS 故障代码入库（133条）</span></li>
+            <li><span class="ckb todo-done">✅</span><span class="text">钉钉 Stream 模式机器人上线</span></li>
+            <li><span class="ckb todo-done">✅</span><span class="text">Web 页面可访问</span></li>
+            <li><span class="ckb todo-done">✅</span><span class="text">局域网共享</span></li>
+            <li><span class="ckb todo-pending">⬜</span><span class="text-muted">补充其他 sheet 故障数据</span></li>
+            <li><span class="ckb todo-pending">⬜</span><span class="text-muted">云服务器部署（7×24 在线）</span></li>
+            <li><span class="ckb todo-pending">⬜</span><span class="text-muted">SQLite 会话记忆</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Phase 2 -->
+      <div class="phase-card">
+        <div class="phase-number" style="background:var(--orange)">2</div>
+        <div class="phase-content">
+          <div class="phase-header">
+            <h3>项目经验全流程沉淀</h3>
+            <span class="phase-pct" style="background:#fef3c7;color:#92400e;">0%</span>
+            <span style="font-size:12px;color:var(--gray);">🎯 争取 · 第 4-6 周</span>
+          </div>
+          <div class="phase-progress">
+            <div class="phase-progress-bar" style="width:0%;background:var(--orange);"></div>
+          </div>
+          <p>从「查故障」升级到「记经验」—— 售后和研发的排查过程、处理方案自动沉淀为公司知识资产。</p>
+          <ul class="phase-todos">
+            <li><span class="ckb todo-pending">⬜</span><span class="text-muted">经验知识库搭建</span></li>
+            <li><span class="ckb todo-pending">⬜</span><span class="text-muted">常见问题 + 维修记录导入</span></li>
+            <li><span class="ckb todo-pending">⬜</span><span class="text-muted">故障 → 排查步骤 → 解决方案 三件套</span></li>
+            <li><span class="ckb todo-pending">⬜</span><span class="text-muted">知识贡献流程（同事可提交经验）</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Phase 3 -->
+      <div class="phase-card">
+        <div class="phase-number" style="background:var(--blue)">3</div>
+        <div class="phase-content">
+          <div class="phase-header">
+            <h3>AI 辅助研发调研</h3>
+            <span class="phase-pct" style="background:#eef2f6;color:#64748b;">0%</span>
+            <span style="font-size:12px;color:var(--gray);">🔭 探索 · 第 7-8 周</span>
+          </div>
+          <div class="phase-progress">
+            <div class="phase-progress-bar" style="width:0%;background:var(--blue);"></div>
+          </div>
+          <p>探索 AI 在研发流程中的深层应用 —— 技术调研、方案评审、文档生成等场景的智能化辅助。</p>
+          <ul class="phase-todos">
+            <li><span class="ckb todo-pending">⬜</span><span class="text-muted">AI 辅助技术调研</span></li>
+            <li><span class="ckb todo-pending">⬜</span><span class="text-muted">方案评审辅助</span></li>
+            <li><span class="ckb todo-pending">⬜</span><span class="text-muted">文档自动生成</span></li>
+          </ul>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ===== Architecture Diagram ===== -->
+<section id="diagram">
+  <div class="section-inner">
+    <div class="section-label">✦ 系统架构</div>
+    <h2 class="section-title">技术架构总览</h2>
+    <p style="font-size:15px;color:var(--gray);margin-bottom:28px;">
+      数据流、组件关系、部署方式一目了然。👇 点击下载可编辑的 drawio 源文件
+    </p>
+
+    <!-- SVG Inline Architecture -->
+    <svg viewBox="0 0 860 540" xmlns="http://www.w3.org/2000/svg" style="max-width:100%;height:auto;">
+      <defs>
+        <linearGradient id="g-blue" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#4361ee" stop-opacity="0.12"/>
+          <stop offset="100%" stop-color="#4361ee" stop-opacity="0.04"/>
+        </linearGradient>
+        <linearGradient id="g-pink" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#f72585" stop-opacity="0.12"/>
+          <stop offset="100%" stop-color="#f72585" stop-opacity="0.04"/>
+        </linearGradient>
+        <linearGradient id="g-green" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#06d6a0" stop-opacity="0.12"/>
+          <stop offset="100%" stop-color="#06d6a0" stop-opacity="0.04"/>
+        </linearGradient>
+        <linearGradient id="g-purple" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#7209b7" stop-opacity="0.12"/>
+          <stop offset="100%" stop-color="#7209b7" stop-opacity="0.04"/>
+        </linearGradient>
+        <filter id="shadow">
+          <feDropShadow dx="0" dy="2" stdDeviation="4" flood-opacity="0.06"/>
+        </filter>
+      </defs>
+
+      <!-- Background -->
+      <rect width="860" height="540" fill="#f8fafc" rx="12"/>
+
+      <!-- Group 1: 用户入口 -->
+      <rect x="120" y="30" width="220" height="64" rx="10" fill="#f0f3ff" stroke="#4361ee" stroke-width="1.5" filter="url(#shadow)"/>
+      <text x="230" y="55" text-anchor="middle" fill="#2d47b8" font-size="14" font-weight="700">💬 钉钉·恩特小助手</text>
+      <text x="230" y="75" text-anchor="middle" fill="#2d47b8" font-size="10">Stream 模式 · 无需公网 IP</text>
+
+      <rect x="450" y="30" width="220" height="64" rx="10" fill="#f0f3ff" stroke="#4361ee" stroke-width="1.5" filter="url(#shadow)"/>
+      <text x="560" y="55" text-anchor="middle" fill="#2d47b8" font-size="14" font-weight="700">🌐 Web 页面</text>
+      <text x="560" y="75" text-anchor="middle" fill="#2d47b8" font-size="10">localhost:8000 · 局域网</text>
+
+      <text x="30" y="62" fill="#4361ee" font-size="12" font-weight="600" opacity="0.6">用户入口</text>
+
+      <!-- Arrow down -->
+      <line x1="230" y1="94" x2="340" y2="130" stroke="#4361ee" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+      <line x1="560" y1="94" x2="450" y2="130" stroke="#4361ee" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+
+      <defs>
+        <marker id="arrow-blue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+          <path d="M0,0 L8,3 L0,6" fill="#4361ee" stroke="none"/>
+        </marker>
+        <marker id="arrow-pink" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+          <path d="M0,0 L8,3 L0,6" fill="#f72585" stroke="none"/>
+        </marker>
+        <marker id="arrow-green" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+          <path d="M0,0 L8,3 L0,6" fill="#06d6a0" stroke="none"/>
+        </marker>
+      </defs>
+
+      <!-- Group 2: 路由层 -->
+      <rect x="280" y="128" width="230" height="56" rx="10" fill="#fff0f6" stroke="#f72585" stroke-width="1.5" filter="url(#shadow)"/>
+      <text x="395" y="152" text-anchor="middle" fill="#c9184a" font-size="13" font-weight="700">🔀 FastAPI 统一入口</text>
+      <text x="395" y="170" text-anchor="middle" fill="#c9184a" font-size="10">技能注册中心 · 优先级路由</text>
+
+      <text x="30" y="156" fill="#f72585" font-size="12" font-weight="600" opacity="0.6">路由层</text>
+
+      <!-- Split arrows -->
+      <line x1="340" y1="184" x2="230" y2="220" stroke="#f72585" stroke-width="1.5" marker-end="url(#arrow-pink)"/>
+      <line x1="450" y1="184" x2="540" y2="220" stroke="#f72585" stroke-width="1.5" marker-end="url(#arrow-pink)"/>
+
+      <!-- Group 3: 处理层 -->
+      <rect x="80" y="218" width="300" height="130" rx="10" fill="#ecfdf5" stroke="#06d6a0" stroke-width="1.5" filter="url(#shadow)"/>
+      <text x="230" y="240" text-anchor="middle" fill="#057855" font-size="13" font-weight="700">🔧 故障查询（高优先级）</text>
+      <text x="230" y="256" text-anchor="middle" fill="#057855" font-size="10">error_query.py</text>
+      <line x1="110" y1="264" x2="350" y2="264" stroke="#06d6a0" stroke-width="0.5" opacity="0.3"/>
+      <text x="230" y="282" text-anchor="middle" fill="#057855" font-size="10">✅ 精确匹配故障代码 → 毫秒级</text>
+      <text x="230" y="298" text-anchor="middle" fill="#057855" font-size="10">✅ 语义搜索 → Chroma 检索</text>
+      <text x="230" y="314" text-anchor="middle" fill="#057855" font-size="10">✅ 复杂 NL → DeepSeek 提取关键词</text>
+
+      <rect x="410" y="218" width="300" height="130" rx="10" fill="#fff8f0" stroke="#fb8500" stroke-width="1.5" filter="url(#shadow)"/>
+      <text x="560" y="240" text-anchor="middle" fill="#b96300" font-size="13" font-weight="700">💬 通用聊天（托底）</text>
+      <text x="560" y="256" text-anchor="middle" fill="#b96300" font-size="10">chat.py</text>
+      <line x1="440" y1="264" x2="680" y2="264" stroke="#fb8500" stroke-width="0.5" opacity="0.3"/>
+      <text x="560" y="282" text-anchor="middle" fill="#b96300" font-size="10">✅ 非故障问题 → DeepSeek 对话</text>
+      <text x="560" y="298" text-anchor="middle" fill="#b96300" font-size="10">✅ 系统提示词限定身份</text>
+      <text x="560" y="314" text-anchor="middle" fill="#b96300" font-size="10">✅ 知道的说，不知道不瞎编</text>
+
+      <text x="30" y="283" fill="#06d6a0" font-size="12" font-weight="600" opacity="0.6">处理层</text>
+
+      <!-- Arrows from processing to data -->
+      <line x1="230" y1="348" x2="230" y2="390" stroke="#06d6a0" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+      <line x1="560" y1="348" x2="560" y2="390" stroke="#fb8500" stroke-width="1.5"/>
+
+      <!-- Dashed line from DeepSeek back to error_query (keyword extraction) -->
+      <line x1="560" y1="390" x2="560" y2="283" stroke="#fb8500" stroke-width="1" stroke-dasharray="5,3"/>
+      <line x1="380" y1="283" x2="560" y2="283" stroke="#fb8500" stroke-width="1" stroke-dasharray="5,3"/>
+      <text x="470" y="275" text-anchor="middle" fill="#fb8500" font-size="9">← 提取关键词</text>
+
+      <!-- Group 4: 数据层 -->
+      <rect x="80" y="388" width="300" height="64" rx="10" fill="#f8f0ff" stroke="#7209b7" stroke-width="1.5" filter="url(#shadow)"/>
+      <text x="230" y="412" text-anchor="middle" fill="#5a0496" font-size="13" font-weight="700">🗄️ Chroma 向量数据库</text>
+      <text x="230" y="432" text-anchor="middle" fill="#5a0496" font-size="10">133 条故障 · bge-small-zh 嵌入</text>
+
+      <rect x="410" y="388" width="300" height="64" rx="10" fill="#fff8f0" stroke="#fb8500" stroke-width="1.5" filter="url(#shadow)"/>
+      <text x="560" y="412" text-anchor="middle" fill="#b96300" font-size="13" font-weight="700">🤖 DeepSeek API</text>
+      <text x="560" y="432" text-anchor="middle" fill="#b96300" font-size="10">deepseek-v4-flash · 关键词提取 + 对话</text>
+
+      <text x="30" y="420" fill="#7209b7" font-size="12" font-weight="600" opacity="0.6">数据层</text>
+
+      <!-- Arrow to data source -->
+      <line x1="230" y1="452" x2="320" y2="480" stroke="#7209b7" stroke-width="1.5"/>
+
+      <!-- Group 5: 数据源 -->
+      <rect x="280" y="476" width="230" height="48" rx="10" fill="#fafafa" stroke="#1a1a2e" stroke-width="1.5" filter="url(#shadow)"/>
+      <text x="395" y="496" text-anchor="middle" fill="#1a1a2e" font-size="12" font-weight="700">📊 PCS参数表 V1.6.2.xlsx</text>
+      <text x="395" y="512" text-anchor="middle" fill="#888" font-size="9">sync_kb.py → 同步到 Chroma</text>
+
+      <text x="30" y="500" fill="#1a1a2e" font-size="12" font-weight="600" opacity="0.6">数据源</text>
+
+    </svg>
+
+    <div class="arch-section">
+      <a href="恩特小助手架构图.drawio" download>📥 下载可编辑架构图 (.drawio)</a>
+      <p style="margin-top:8px;font-size:12px;color:#aaa;">用 draw.io 打开即可自由编辑</p>
+    </div>
+  </div>
+</section>
+
+<!-- ===== Footer ===== -->
+<footer>
+  <strong>恩特能源（天津）科技有限公司</strong> · 内部 AI Agent 项目 · 2026.07<br>
+  <span style="font-size:11px;">ENTAR AI Agent · 三步走 AI 赋能计划 · 第一步即将完成 🚀</span>
+</footer>
+
+</body>
+</html>

@@ -14,6 +14,9 @@ if _PARENT not in sys.path:
 import httpx
 
 from config import DEEPSEEK_API_KEY
+
+# 共享 HTTP 客户端（复用连接，避免每次建新连接）
+_HTTP_CLIENT = httpx.Client(timeout=60)
 from skills import BaseSkill, register
 
 # ===== 系统提示词 =====
@@ -41,27 +44,26 @@ def _handle_impl(query: str) -> dict:
         return {"answer": "DeepSeek API 未配置，无法回答此问题。请先在 local_config.py 中设置 DEEPSEEK_API_KEY。", "source": "chat"}
 
     try:
-        with httpx.Client(timeout=60) as c:
-            r = c.post(
-                "https://api.deepseek.com/chat/completions",
-                headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
-                json={
-                    "model": "deepseek-v4-flash",
-                    "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": q},
-                    ],
-                    "temperature": 0.7,
-                    "max_tokens": 4000,  # 约 3000 中文字，足够回答绝大多数问题
-                },
-            )
-            if r.status_code == 200:
-                body = r.json()
-                if body and body.get("choices"):
-                    answer = body["choices"][0]["message"]["content"].strip()
-                    return {"answer": answer, "source": "chat"}
-            else:
-                return {"answer": f"抱歉，大模型暂时无响应（状态码：{r.status_code}）", "source": "chat"}
+        r = _HTTP_CLIENT.post(
+            "https://api.deepseek.com/chat/completions",
+            headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
+            json={
+                "model": "deepseek-v4-flash",
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": q},
+                ],
+                "temperature": 0.7,
+                "max_tokens": 4000,  # 约 3000 中文字，足够回答绝大多数问题
+            },
+        )
+        if r.status_code == 200:
+            body = r.json()
+            if body and body.get("choices"):
+                answer = body["choices"][0]["message"]["content"].strip()
+                return {"answer": answer, "source": "chat"}
+        else:
+            return {"answer": f"抱歉，大模型暂时无响应（状态码：{r.status_code}）", "source": "chat"}
     except Exception as e:
         return {"answer": f"抱歉，连接大模型时出错了：{e}", "source": "chat"}
 

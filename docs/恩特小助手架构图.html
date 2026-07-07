@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>恩特小助手 - 系统架构图</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #f0f2f5;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    font-family: -apple-system, "Microsoft YaHei", "PingFang SC", sans-serif;
+  }
+  .diagram {
+    width: 900px;
+    background: #fff;
+    border-radius: 16px;
+    padding: 40px 48px 36px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+  }
+  h1 {
+    font-size: 22px;
+    font-weight: 600;
+    color: #1a1a2e;
+    text-align: center;
+    margin-bottom: 4px;
+    letter-spacing: 2px;
+  }
+  .subtitle {
+    text-align: center;
+    font-size: 13px;
+    color: #888;
+    margin-bottom: 28px;
+  }
+  .phase-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: #999;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    margin-bottom: 10px;
+  }
+
+  /* ===== layer ===== */
+  .layer { margin-bottom: 20px; }
+  .layer:last-child { margin-bottom: 0; }
+
+  .layer-row {
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+  }
+
+  /* ===== node ===== */
+  .node {
+    background: #fff;
+    border: 1.5px solid #e0e0e0;
+    border-radius: 10px;
+    padding: 14px 22px;
+    text-align: center;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.03);
+    position: relative;
+    flex: 1;
+    max-width: 260px;
+  }
+  .node .icon { font-size: 22px; display: block; margin-bottom: 3px; }
+  .node .label { font-size: 14px; font-weight: 600; color: #1a1a2e; }
+  .node .desc { font-size: 11px; color: #888; margin-top: 2px; line-height: 1.4; }
+
+  /* colored variants */
+  .node-entry    { border-color: #4361ee; background: #f0f3ff; }
+  .node-entry .label { color: #2d47b8; }
+  .node-core    { border-color: #f72585; background: #fff0f6; }
+  .node-core .label { color: #c9184a; }
+  .node-db      { border-color: #06d6a0; background: #ecfdf5; }
+  .node-db .label { color: #057855; }
+  .node-llm     { border-color: #fb8500; background: #fff8f0; }
+  .node-llm .label { color: #b96300; }
+  .node-data    { border-color: #7209b7; background: #f8f0ff; }
+  .node-data .label { color: #5a0496; }
+
+  /* ===== arrow ===== */
+  .arrow-row {
+    display: flex;
+    justify-content: center;
+    padding: 2px 0;
+  }
+  .arrow {
+    font-size: 16px; color: #bbb;
+    letter-spacing: 4px;
+  }
+  .arrow-text {
+    font-size: 11px;
+    color: #aaa;
+    margin: 0 20px;
+  }
+
+  /* ===== split ===== */
+  .split-row {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 40px;
+  }
+  .split-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .split-col .node { width: 100%; max-width: 260px; }
+
+  .branch-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: #999;
+    margin: 4px 0 8px;
+    letter-spacing: 1px;
+  }
+
+  /* ===== connector lines ===== */
+  .connector-v {
+    width: 2px; height: 16px;
+    background: #d0d5dd;
+    margin: 0 auto;
+  }
+
+  /* ===== footer ===== */
+  .footer {
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 1px solid #eee;
+    font-size: 12px;
+    color: #aaa;
+    text-align: center;
+    line-height: 1.6;
+  }
+  .footer strong { color: #666; }
+
+  /* ===== badge ===== */
+  .badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 8px;
+    border-radius: 4px;
+    margin-left: 4px;
+    vertical-align: middle;
+  }
+  .badge-green  { background: #d1fae5; color: #065f46; }
+  .badge-orange { background: #fef3c7; color: #92400e; }
+  .badge-red    { background: #fee2e2; color: #991b1b; }
+  .badge-blue   { background: #dbeafe; color: #1e40af; }
+
+  /* ===== subtle decorations ===== */
+  .flow-hint {
+    font-size: 10px;
+    color: #ccc;
+    text-align: center;
+    margin: 1px 0;
+  }
+
+  /* responsive */
+  @media (max-width: 720px) {
+    .diagram { width: 100%; padding: 20px; }
+    .layer-row { flex-direction: column; align-items: center; }
+    .split-row { flex-direction: column; align-items: center; gap: 12px; }
+    .node { max-width: 100%; }
+  }
+</style>
+</head>
+<body>
+
+<div class="diagram">
+
+  <h1>⚡ 恩特小助手 — 系统架构图</h1>
+  <div class="subtitle">ENTAR AI Agent · 恩特能源内部工具 · 2026.07</div>
+
+  <!-- ===== Layer 1: 用户入口 ===== -->
+  <div class="phase-label">▎用户入口</div>
+  <div class="layer">
+    <div class="layer-row">
+      <div class="node node-entry">
+        <span class="icon">💬</span>
+        <div class="label">钉钉「恩特小助手」</div>
+        <div class="desc">单聊搜索即可使用 · Stream 模式<br>无需公网 IP / 域名 / SSL</div>
+      </div>
+      <div class="node node-entry">
+        <span class="icon">🌐</span>
+        <div class="label">Web 页面</div>
+        <div class="desc">http://localhost:8000<br>局域网内同事均可访问</div>
+      </div>
+    </div>
+  </div>
+  <div class="arrow-row"><span class="arrow">▽</span></div>
+
+  <!-- ===== Layer 2: 路由层 ===== -->
+  <div class="phase-label" style="margin-top:4px;">▎路由 &amp; 处理</div>
+  <div class="layer">
+    <div class="layer-row">
+      <div class="node node-core" style="max-width:320px;">
+        <span class="icon">🔀</span>
+        <div class="label">FastAPI 统一入口</div>
+        <div class="desc">技能注册中心路由<br>高优→故障查询 · 低优→通用聊天托底</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- split arrow -->
+  <div class="arrow-row"><span class="arrow">▽</span><span class="arrow-text" style="margin:0 60px">匹配策略</span><span class="arrow">▽</span></div>
+
+  <!-- ===== Layer 3: 双分支 ===== -->
+  <div class="layer">
+    <div class="split-row">
+
+      <!-- 左：故障查询 -->
+      <div class="split-col">
+        <div class="branch-label">🔧 故障查询（高优先级）</div>
+        <div class="node node-core" style="border-color:#f72585;">
+          <div class="label" style="font-size:13px;">error_query.py</div>
+          <div class="desc" style="text-align:left; font-size:11px; line-height:1.7;">
+            ✅ 精确匹配故障代码 → <span class="badge badge-green">毫秒级 · 不调 LLM</span><br>
+            ✅ 语义搜索名称/原因 → Chroma 检索<br>
+            ✅ 复杂 NL → DeepSeek 提取关键词<br>
+            ❌ 不匹配 → 走聊天托底
+          </div>
+        </div>
+        <div style="margin-top:6px;">
+          <div class="node node-db" style="padding:10px 16px; max-width:240px;">
+            <span class="icon" style="font-size:18px;">🗄️</span>
+            <div class="label" style="font-size:13px;">Chroma 向量数据库</div>
+            <div class="desc" style="font-size:10px;">133 条故障记录 · bge-small-zh<br>PCS参数表 → 遥信（DI）sheet</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右：通用聊天 -->
+      <div class="split-col">
+        <div class="branch-label">💬 通用聊天（托底）</div>
+        <div class="node node-core" style="border-color:#06d6a0;">
+          <div class="label" style="font-size:13px;">chat.py</div>
+          <div class="desc" style="text-align:left; font-size:11px; line-height:1.7;">
+            ✅ 非故障问题 → 直接对话<br>
+            ✅ 系统提示词限定助手身份<br>
+            ✅ 知道的说，不知道不瞎编<br>
+            <span style="color:#999;">入口：任何不命中故障的问题</span>
+          </div>
+        </div>
+        <div style="margin-top:6px;">
+          <div class="node node-llm" style="padding:10px 16px; max-width:240px;">
+            <span class="icon" style="font-size:18px;">🤖</span>
+            <div class="label" style="font-size:13px;">DeepSeek API</div>
+            <div class="desc" style="font-size:10px;">deepseek-v4-flash<br>仅用于：关键词提取 + 聊天回复</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ===== Layer 4: 数据源 ===== -->
+  <div class="arrow-row"><span class="arrow">▽</span><span class="arrow-text">数据同步</span><span class="arrow">▽</span></div>
+
+  <div class="phase-label" style="margin-top:4px;">▎数据来源</div>
+  <div class="layer">
+    <div class="layer-row">
+      <div class="node node-data">
+        <span class="icon">📊</span>
+        <div class="label">PCS参数表 V1.6.2.xlsx</div>
+        <div class="desc">
+          遥信（DI） · 133 条故障<br>
+          脚本 <strong>sync_kb.py</strong> → Chroma<br>
+          <span class="badge badge-orange">待补充：其他 sheet</span>
+        </div>
+      </div>
+      <div class="node node-data" style="border-color:#888; background:#fafafa; opacity:0.6;">
+        <span class="icon">📝</span>
+        <div class="label">经验知识库（规划中）</div>
+        <div class="desc">
+          售后/研发排查记录 → 知识库<br>
+          让 AI 不止查到原因，还能给出<br>「以前怎么修的」
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Footer ===== -->
+  <div class="footer">
+    <strong>当前阶段</strong> 第一步：智能快速查询（95%）&nbsp;&nbsp;|&nbsp;&nbsp;
+    <strong>下一步</strong> ① 补全数据 &nbsp;② 上云 &nbsp;③ 记忆 &nbsp;④ 经验沉淀<br>
+    <span style="font-size:11px; color:#ccc;">恩特能源 · 天津 · ENTAR</span>
+  </div>
+
+</div>
+
+</body>
+</html>
