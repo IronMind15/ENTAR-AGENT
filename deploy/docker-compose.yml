@@ -2,15 +2,17 @@ version: "3.8"
 
 services:
   entar-agent:
-    build: ..
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
     container_name: entar-agent
     ports:
       - "8000:8000"
     volumes:
       # 配置文件挂载出来，方便修改 API 密钥
-      - ./local_config.py:/app/scripts/local_config.py
+      - ../scripts/local_config.py:/app/scripts/local_config.py
       # 知识库持久化，更新 Excel 后重新同步
-      - ./knowledge_base:/app/knowledge_base
+      - ../knowledge_base:/app/knowledge_base
     environment:
       - HF_ENDPOINT=https://hf-mirror.com
     restart: unless-stopped
