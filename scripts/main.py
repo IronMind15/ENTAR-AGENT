@@ -3,9 +3,18 @@
 通过技能注册中心路由到不同技能模块
 """
 
+import logging
 import os
 import sys
 sys.path.insert(0, os.path.dirname(__file__))
+
+# 统一日志配置
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger("main")
 
 # Windows UTF-8
 if sys.platform == "win32":
@@ -67,17 +76,17 @@ def ask(q: str = Query("", description="用户问题")):
     if not q:
         return JSONResponse({"answer": "请输入问题"})
 
-    print(f"[query] {q}")
+    logger.info(f"[query] {q}")
 
     # 遍历已注册技能，找到第一个匹配的处理
     skill_cls = get_matched_skill(q)
     if skill_cls:
-        print(f"  → {skill_cls.name}")
+        logger.info(f"  → {skill_cls.name}")
         result = skill_cls.handle(q)
     else:
         # 理论上不会走到这里（chat 始终匹配），保留兜底
         from skills import chat
-        print(f"  → chat (fallback)")
+        logger.info(f"  → chat (fallback)")
         result = chat.handle(q)
 
     return JSONResponse(result)
@@ -87,12 +96,11 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
 
     skill_names = ", ".join(s.name for s in get_skill_list())
-    print(f"\n🔧 恩特小助手启动：http://localhost:{port}")
-    print(f"  已注册技能: {skill_names}")
+    logger.info(f"🔧 恩特小助手启动：http://localhost:{port}")
+    logger.info(f"  已注册技能: {skill_names}")
 
     # 启动钉钉机器人（后台线程）
     start_dingtalk_bot()
 
-    print(f"  将来扩展: 添加新技能 → 新建 skills/*.py + __init__.py 一行注册")
-    print()
+    logger.info(f"  将来扩展: 添加新技能 → 新建 skills/*.py + __init__.py 一行注册")
     uvicorn.run(app, host="0.0.0.0", port=port)

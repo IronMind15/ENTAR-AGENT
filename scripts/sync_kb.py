@@ -1,10 +1,23 @@
 """
 同步脚本：PCS参数表 V1.6.2.xlsx → Chroma 向量库
 读取「遥信（DI）」sheet，从第 51 行开始解析故障代码数据
+
+增量同步模式：
+  - 首次运行：全量写入
+  - 后续运行：只新增不存在的 fault_code（不会删除或覆盖已有记录）
 """
 
+import logging
 import os
 import sys
+
+# 统一日志
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger("sync_kb")
 
 # Windows UTF-8
 if sys.platform == "win32":
@@ -60,16 +73,16 @@ def read_excel_data():
     """读取 Excel，返回结构化记录列表"""
     filepath = os.path.join(DATA_DIR, EXCEL_FILE)
     if not os.path.exists(filepath):
-        print(f"  [FAIL] 未找到文件: {filepath}")
+        logger.error(f"未找到文件: {filepath}")
         return []
 
-    print(f"  Excel 文件: {EXCEL_FILE}")
-    print(f"  Sheet:      {SHEET_NAME}")
-    print(f"  起始行:     {START_ROW}")
+    logger.info(f"  Excel 文件: {EXCEL_FILE}")
+    logger.info(f"  Sheet:      {SHEET_NAME}")
+    logger.info(f"  起始行:     {START_ROW}")
 
     wb = openpyxl.load_workbook(filepath, data_only=True)
     if SHEET_NAME not in wb.sheetnames:
-        print(f"  [FAIL] 未找到 sheet: {SHEET_NAME}（已有: {wb.sheetnames}）")
+        logger.error(f"未找到 sheet: {SHEET_NAME}（已有: {wb.sheetnames}）")
         return []
 
     ws = wb[SHEET_NAME]
@@ -121,66 +134,84 @@ def read_excel_data():
 
 
 def sync():
-    print("=" * 50)
-    print("  恩特能源 - 知识库同步")
-    print("=" * 50)
+    logger.info("=" * 50)
+    logger.info("  恩特能源 - 知识库同步（增量模式）")
+    logger.info("=" * 50)
     print()
 
     # [1/3] 读取 Excel
-    print("[1/3] 读取 Excel 数据...")
+    logger.info("[1/3] 读取 Excel 数据...")
     records = read_excel_data()
     if not records:
-        print("  [FAIL] 未读取到任何数据，终止同步")
+        logger.error("未读取到任何数据，终止同步")
         return
-    print(f"  [OK] 读取到 {len(records)} 条故障记录")
+    logger.info(f"  [OK] 读取到 {len(records)} 条故障记录")
     print()
 
     # [2/3] 初始化 Chroma
-    print("[2/3] 初始化 Chroma 向量库...")
+    logger.info("[2/3] 连接 Chroma 向量库...")
     os.makedirs(CHROMA_DIR, exist_ok=True)
     client = PersistentClient(path=CHROMA_DIR)
 
-    # 删除旧集合，重建
-    try:
-        client.delete_collection(COLLECTION_NAME)
-        print("  [OK] 已清除旧知识库集合")
-    except Exception:
-        print("  [OK] 无旧集合，直接创建")
-
-    print("  加载 embedding 模型（首次下载约 30MB）...")
+    logger.info("  加载 embedding 模型（首次约 30MB）...")
     ef = embedding_functions.SentenceTransformerEmbeddingFunction(
         model_name="BAAI/bge-small-zh-v1.5"
     )
-    collection = client.create_collection(
-        name=COLLECTION_NAME,
-        embedding_function=ef,
-        metadata={"hnsw:space": "cosine"},
-    )
-    print("  [OK] Chroma 初始化完成")
+
+    # 获取已有集合（不存在则新建）
+    existing_fault_codes: set[str] = set()
+    try:
+        collection = client.get_collection(COLLECTION_NAME, embedding_function=ef)
+        old_count = collection.count()
+        # 读取已有 fault_code 索引
+        existing = collection.get()
+        for meta in existing.get("metadatas", []):
+            if meta and meta.get("fault_code"):
+                existing_fault_codes.add(meta["fault_code"])
+        logger.info(f"  [OK] Chroma 已有 {old_count} 条记录，{len(existing_fault_codes)} 个故障代码")
+    except ValueError:
+        collection = client.create_collection(
+            name=COLLECTION_NAME,
+            embedding_function=ef,
+            metadata={"hnsw:space": "cosine"},
+        )
+        logger.info("  [OK] Chroma 集合不存在，已新建")
     print()
 
-    # [3/3] 写入数据
-    print("[3/3] 写入 Chroma（分批写入）...")
-    BATCH_SIZE = 50
-    total = len(records)
-    for i in range(0, total, BATCH_SIZE):
-        batch = records[i : i + BATCH_SIZE]
-        ids = [f"row_{r['metadata']['row_num']}" for r in batch]
-        documents = [r["doc_text"] for r in batch]
-        metadatas = [r["metadata"] for r in batch]
+    # [3/3] 增量写入
+    # 筛选出 fault_code 尚未入库的新记录
+    new_records = [
+        r for r in records
+        if r["metadata"].get("fault_code", "")
+        and r["metadata"]["fault_code"] not in existing_fault_codes
+    ]
 
-        collection.add(ids=ids, documents=documents, metadatas=metadatas)
-        print(f"  写入 {min(i + BATCH_SIZE, total)}/{total} 条...")
+    if not new_records:
+        logger.info("[3/3] 无新增记录，跳过写入")
+    else:
+        exist_count = len(records) - len(new_records)
+        logger.info(f"[3/3] 写入 {len(new_records)} 条新记录（{exist_count} 条已有已跳过）...")
+
+        BATCH_SIZE = 50
+        total = len(new_records)
+        for i in range(0, total, BATCH_SIZE):
+            batch = new_records[i : i + BATCH_SIZE]
+            ids = [f"row_{r['metadata']['row_num']}" for r in batch]
+            documents = [r["doc_text"] for r in batch]
+            metadatas = [r["metadata"] for r in batch]
+            collection.add(ids=ids, documents=documents, metadatas=metadatas)
+            logger.info(f"  写入 {min(i + BATCH_SIZE, total)}/{total} 条...")
 
     print()
-    print("=" * 50)
-    print("  同步完成!")
-    print("=" * 50)
-    print(f"  [OK] 知识库总计:  {collection.count()} 条")
-    print(f"  [OK] 数据来源:    {SHEET_NAME}")
-    print(f"  [OK] 数据行范围:  第 {START_ROW} ~ {records[-1]['metadata']['row_num']} 行")
-    print(f"  [DIR] Excel 位置: {DATA_DIR}")
-    print(f"  [DIR] 知识库位置: {CHROMA_DIR}")
+    logger.info("=" * 50)
+    logger.info("  同步完成!")
+    logger.info("=" * 50)
+    logger.info(f"  [OK] 知识库总计:  {collection.count()} 条")
+    logger.info(f"  [OK] 本次新增:    {len(new_records)} 条")
+    logger.info(f"  [OK] 数据来源:    {SHEET_NAME}")
+    logger.info(f"  [OK] 数据行范围:  第 {START_ROW} ~ {records[-1]['metadata']['row_num']} 行")
+    logger.info(f"  [DIR] Excel 位置: {DATA_DIR}")
+    logger.info(f"  [DIR] 知识库位置: {CHROMA_DIR}")
     print()
 
 

@@ -3,8 +3,11 @@
 当问题与故障无关时，直接与 DeepSeek 对话
 """
 
+import logging
 import os
 import sys
+
+logger = logging.getLogger("chat")
 
 # 确保 scripts/ 在模块搜索路径中
 _PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -41,7 +44,10 @@ def _handle_impl(query: str) -> dict:
         return {"answer": "请输入你想问的问题", "source": "chat"}
 
     if not DEEPSEEK_API_KEY:
+        logger.warning("DeepSeek API 未配置，聊天不可用")
         return {"answer": "DeepSeek API 未配置，无法回答此问题。请先在 local_config.py 中设置 DEEPSEEK_API_KEY。", "source": "chat"}
+
+    logger.info(f"聊天问题: {q[:60]}")
 
     try:
         r = _HTTP_CLIENT.post(
@@ -63,8 +69,10 @@ def _handle_impl(query: str) -> dict:
                 answer = body["choices"][0]["message"]["content"].strip()
                 return {"answer": answer, "source": "chat"}
         else:
+            logger.warning(f"DeepSeek 聊天返回非 200: {r.status_code}")
             return {"answer": f"抱歉，大模型暂时无响应（状态码：{r.status_code}）", "source": "chat"}
     except Exception as e:
+        logger.error(f"聊天调用 DeepSeek 失败: {e}")
         return {"answer": f"抱歉，连接大模型时出错了：{e}", "source": "chat"}
 
     return {"answer": "抱歉，我暂时无法回答这个问题。", "source": "chat"}

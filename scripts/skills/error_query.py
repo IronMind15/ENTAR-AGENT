@@ -23,10 +23,10 @@ if _PARENT_DIR not in sys.path:
 
 import httpx
 from chromadb import PersistentClient
+from chromadb.utils import embedding_functions
 
 # 共享 HTTP 客户端（复用连接，避免每次建新连接）
 _HTTP_CLIENT = httpx.Client(timeout=15)
-from chromadb.utils import embedding_functions
 
 from config import DEEPSEEK_API_KEY
 from skills import BaseSkill, register
@@ -59,12 +59,28 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(_SCRIPT_DIR))
 CHROMA_PATH = os.path.join(_PROJECT_ROOT, "knowledge_base")
 
-# ===== Chroma 初始化 =====
-client = PersistentClient(path=CHROMA_PATH)
-ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name="BAAI/bge-small-zh-v1.5"
-)
-collection = client.get_collection("error_codes", embedding_function=ef)
+# ===== Chroma 客户端（延迟初始化，首次查询时加载 30MB 模型）=====
+_client = None
+_ef = None
+_collection = None
+
+
+def _get_collection():
+    """懒加载 Chroma collection，首次调用时加载 embedding 模型"""
+    global _client, _ef, _collection
+    if _collection is not None:
+        return _collection
+    if _client is None:
+        _client = PersistentClient(path=CHROMA_PATH)
+        logger.info("Chroma 客户端已连接")
+    if _ef is None:
+        logger.info("加载 embedding 模型（约 30MB）...")
+        _ef = embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name="BAAI/bge-small-zh-v1.5"
+        )
+    _collection = _client.get_collection("error_codes", embedding_function=_ef)
+    logger.info(f"Chroma 就绪，共 {_collection.count()} 条记录")
+    return _collection
 
 
 def call_deepseek(prompt: str, max_tokens: int = 200) -> str:
@@ -136,7 +152,7 @@ def _extract_keywords_with_llm(query: str) -> str:
 
 def _exact_match_by_code(fault_code: str) -> dict | None:
     """精确匹配故障代码（metadata 过滤，不调向量搜索）"""
-    result = collection.get(where={"fault_code": fault_code})
+    result = _get_collection().get(where={"fault_code": fault_code})
     if result and result.get("metadatas") and result["metadatas"]:
         meta = result["metadatas"][0]
         return {"metadata": meta}
@@ -295,7 +311,7 @@ def _handle_impl(query: str) -> dict:
         )
 
     # ===== 第 3 关：语义搜索 =====
-    results = collection.query(
+    results = _get_collection().query(
         query_texts=[search_query],
         n_results=5,
     )

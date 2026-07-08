@@ -24,3 +24,6 @@ knowledge_base/
 docs/*.docx
 # 但保留 Markdown 文档
 !docs/*.md
+
+# ── 部署打包产物 ──
+*.tar.gz
