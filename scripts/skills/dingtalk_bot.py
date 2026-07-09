@@ -124,14 +124,13 @@ def start_bot() -> threading.Thread | None:
     """后台线程启动钉钉机器人，返回线程对象"""
     if not DINGTALK_CLIENT_ID or not DINGTALK_CLIENT_SECRET:
         logger.warning("钉钉凭证未配置，跳过机器人启动")
-        print("  ⚠️  钉钉未配置：请在 local_config.py 中设置 DINGTALK_CLIENT_ID 和 DINGTALK_CLIENT_SECRET")
+        logger.warning("请在 local_config.py 中设置 DINGTALK_CLIENT_ID 和 DINGTALK_CLIENT_SECRET")
         return None
 
     client = create_bot()
 
     def _run():
         logger.info("钉钉机器人已启动（Stream 模式）")
-        print("  ✅ 钉钉机器人已启动（Stream 模式）")
         client.start_forever()
 
     thread = threading.Thread(target=_run, daemon=True, name="dingtalk-bot")

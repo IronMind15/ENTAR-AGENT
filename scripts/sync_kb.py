@@ -137,7 +137,6 @@ def sync():
     logger.info("=" * 50)
     logger.info("  恩特能源 - 知识库同步（增量模式）")
     logger.info("=" * 50)
-    print()
 
     # [1/3] 读取 Excel
     logger.info("[1/3] 读取 Excel 数据...")
@@ -146,7 +145,6 @@ def sync():
         logger.error("未读取到任何数据，终止同步")
         return
     logger.info(f"  [OK] 读取到 {len(records)} 条故障记录")
-    print()
 
     # [2/3] 初始化 Chroma
     logger.info("[2/3] 连接 Chroma 向量库...")
@@ -176,7 +174,6 @@ def sync():
             metadata={"hnsw:space": "cosine"},
         )
         logger.info("  [OK] Chroma 集合不存在，已新建")
-    print()
 
     # [3/3] 增量写入
     # 筛选出 fault_code 尚未入库的新记录
@@ -202,7 +199,6 @@ def sync():
             collection.add(ids=ids, documents=documents, metadatas=metadatas)
             logger.info(f"  写入 {min(i + BATCH_SIZE, total)}/{total} 条...")
 
-    print()
     logger.info("=" * 50)
     logger.info("  同步完成!")
     logger.info("=" * 50)
@@ -212,7 +208,6 @@ def sync():
     logger.info(f"  [OK] 数据行范围:  第 {START_ROW} ~ {records[-1]['metadata']['row_num']} 行")
     logger.info(f"  [DIR] Excel 位置: {DATA_DIR}")
     logger.info(f"  [DIR] 知识库位置: {CHROMA_DIR}")
-    print()
 
 
 if __name__ == "__main__":

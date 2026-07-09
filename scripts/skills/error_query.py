@@ -57,6 +57,17 @@ _SUMMARY_KEYWORDS = [
     "你记得", "还记得",
     "我查过", "我问过", "我刚刚",
 ]
+# ===== 搜索调参常量（调优搜索效果时改这里即可） =====
+# 语义搜索返回的最大结果数
+SEMANTIC_SEARCH_TOP_K = 5
+# 余弦距离阈值（距离越小越相似）：
+#   < 0.6 → 高匹配度（非常相关）
+#   < 0.9 → 中等匹配度（部分相关）
+#   ≥ 0.9 → 低匹配度（弱相关，通常不展示）
+# 注：cosine 距离范围 [0, 2]，经验观察 bge-small-zh 上 <0.6 效果较好
+DISTANCE_THRESHOLD_HIGH = 0.6
+DISTANCE_THRESHOLD_MEDIUM = 0.9
+
 NL_MARKERS = ["的", "了", "吗", "呢", "吧", "是", "怎么回事", "怎么",
               "为什么", "如何", "怎么办", "什么", "哪个", "报错",
               "故障", "查一下", "请问"]
@@ -252,9 +263,9 @@ def _format_semantic_results(results: dict, query: str) -> str | None:
         score_tag = ""
         if dists and len(dists) > i:
             s = dists[i]
-            if s < 0.6:
+            if s < DISTANCE_THRESHOLD_HIGH:
                 score_tag = " [高]"
-            elif s < 0.9:
+            elif s < DISTANCE_THRESHOLD_MEDIUM:
                 score_tag = " [中]"
 
         # ---- 构建单条结果内容（独立编号） ----
@@ -320,7 +331,7 @@ def _handle_impl(query: str) -> dict:
     # ===== 第 3 关：语义搜索 =====
     results = _get_collection().query(
         query_texts=[search_query],
-        n_results=5,
+        n_results=SEMANTIC_SEARCH_TOP_K,
     )
     formatted = _format_semantic_results(results, q)
 
