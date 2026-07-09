@@ -47,7 +47,17 @@
       "Bash(curl -s \"http://localhost:8000/ask?q=%E4%BD%A0%E5%A5%BD\")",
       "Bash(curl -s \"http://localhost:8000/ask?q=%E4%B8%8D%E5%8F%91%E7%94%B5\")",
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('来源:', d.get\\('source',''\\)\\); print\\('前80字:', d.get\\('answer',''\\)[:80]\\)\")",
-      "Bash(tasklist)"
+      "Bash(tasklist)",
+      "Bash(taskkill /F /PID 20348)",
+      "Bash(taskkill /F /PID 36176)",
+      "Bash(netstat -ano)",
+      "Bash(taskkill //F //PID 20348)",
+      "Bash(curl -s http://localhost:8000)",
+      "Bash(curl -s \"http://localhost:8000/ask?q=hello&user=test\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('answer:', d.get\\('answer',''\\)[:80]\\)\")",
+      "Bash(curl -s \"http://localhost:8000/ask?q=d4-1&user=test\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('answer',''\\)[:120]\\)\")",
+      "Bash(taskkill //F //PID 11988)"
     ]
   }
 }
