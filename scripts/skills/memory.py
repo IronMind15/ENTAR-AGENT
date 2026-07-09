@@ -62,6 +62,11 @@ def add(user_id: str, role: str, content: str):
     """
     if user_id not in _memories:
         _memories[user_id] = []
+
+    # 防重复：如果最后一条同 role 的消息内容一样，跳过
+    if _memories[user_id] and _memories[user_id][-1].get("role") == role and _memories[user_id][-1].get("content") == content:
+        return
+
     _memories[user_id].append({"role": role, "content": content})
 
     # 只保留最近 _MAX_ROUNDS 轮（一问一答 = 2 条）
