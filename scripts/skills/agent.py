@@ -238,7 +238,7 @@ def _handle_impl(query: str, user_id: str = "") -> dict:
                     "以下是你与当前用户最近的对话历史，用户的追问通常基于上文，请务必结合历史来理解当前问题：\n"
                     + context
                 )
-                logger.info(f"已注入 {user_id} 的记忆上下文")
+                logger.info(f"已注入 {user_id} 的记忆上下文 ({len(context)}字)")
         except Exception as e:
             logger.warning(f"注入记忆失败: {e}")
 
