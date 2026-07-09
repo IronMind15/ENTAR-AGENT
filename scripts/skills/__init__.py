@@ -35,7 +35,7 @@ class BaseSkill:
         raise NotImplementedError
 
     @classmethod
-    def handle(cls, query: str) -> dict:
+    def handle(cls, query: str, **kwargs) -> dict:
         raise NotImplementedError
 
 
@@ -69,5 +69,6 @@ def get_skill_list() -> list[type[BaseSkill]]:
 
 
 # ===== 自动导入技能模块（确保 @register 装饰器执行） =====
-from . import error_query  # noqa: E402, F811
-from . import chat         # noqa: E402, F811
+from . import error_query  # noqa: E402, F811 — 优先级 100：仅精确故障代码快速通道
+from . import agent        # noqa: E402, F811 — 优先级 50 ：RAG Agent（LLM + 工具调用，统一处理所有问题）
+# chat.py 仍保留为工具模块（agent.py 在 API 失败时兜底调用），不作为独立技能注册

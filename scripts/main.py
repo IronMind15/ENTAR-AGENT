@@ -52,15 +52,14 @@ def ask(q: str = Query("", description="用户问题"), user: str = Query("", de
     skill_cls = get_matched_skill(q)
     if skill_cls:
         logger.info(f"  → {skill_cls.name}")
-        # 如果是聊天技能，传入 user_id 以便注入记忆
-        if skill_cls.name == "通用聊天" and user:
-            result = skill_cls.handle(q, user_id=user_id)
-        else:
-            result = skill_cls.handle(q)
+        kwargs = {}
+        if user:
+            kwargs["user_id"] = user_id
+        result = skill_cls.handle(q, **kwargs)
     else:
-        from skills import chat
-        logger.info(f"  → chat (fallback)")
-        result = chat.handle(q, user_id=user_id) if user else chat.handle(q)
+        # 理论上不会走到这里（Agent 始终匹配），防御性兜底
+        logger.info(f"  → 备用处理")
+        result = {"answer": f"抱歉，我暂时无法处理这个问题。", "source": "fallback"}
 
     # Web 页面用户：记录对话到记忆
     if user:

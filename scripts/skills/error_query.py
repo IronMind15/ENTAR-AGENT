@@ -348,38 +348,75 @@ def _handle_impl(query: str) -> dict:
 
 
 # ===== 注册技能类 =====
+# ===== 公共 API（供 agent.py 等模块调用） =====
+
+
+def search_kb(query: str) -> list[dict]:
+    """搜索知识库，返回结构化故障信息列表（JSON 格式，供 LLM 工具调用使用）
+
+    搜索策略：
+      1. 先尝试精确故障代码匹配
+      2. 未命中则语义搜索
+    """
+    code = _extract_fault_code(query)
+    if code:
+        match = _exact_match_by_code(code)
+        if match:
+            meta = dict(match["metadata"])
+            meta["_match_type"] = "exact"
+            meta["_score"] = 0.0
+            return [meta]
+
+    # 语义搜索
+    try:
+        results = _get_collection().query(
+            query_texts=[query],
+            n_results=SEMANTIC_SEARCH_TOP_K,
+        )
+    except Exception:
+        logger.exception("Chroma 语义搜索失败")
+        return []
+
+    if not results or not results.get("documents") or not results["documents"][0]:
+        return []
+
+    items = []
+    for i in range(len(results["documents"][0])):
+        meta = dict(results["metadatas"][0][i])
+        if results.get("distances"):
+            meta["_score"] = round(float(results["distances"][0][i]), 4)
+        meta["_match_type"] = "semantic"
+        items.append(meta)
+
+    return items
+
+
+def extract_fault_code(query: str) -> str | None:
+    """从查询中提取故障代码（供 agent.py 快速通道使用）"""
+    return _extract_fault_code(query)
+
+
+def format_exact_result(meta: dict) -> str:
+    """格式化精确匹配结果（供 agent.py 快速通道使用）"""
+    return _format_exact_result(meta)
+
+
+# ===== 技能类注册 =====
+
 @register
 class ErrorQuerySkill(BaseSkill):
-    """故障查询技能：精确匹配 + 语义搜索 PCS 故障代码"""
+    """故障查询技能：仅精确匹配故障代码（d4-1 等），毫秒级快速通道"""
     name = "故障查询"
-    description = "精准或语义搜索 PCS 故障代码"
-    priority = 100  # 高优先级：故障相关先查
+    description = "精确匹配 PCS 故障代码，秒回结果"
+    priority = 100
 
     @classmethod
     def match(cls, query: str) -> bool:
-        """判断是否与故障相关（强信号）
-
-        判定条件（任一命中即走故障查询）：
-          1. 查询中包含故障代码（d4-1 等格式）
-          2. 查询中包含强故障关键词（故障/报错/异常/告警/停机/急停等）
-        """
-        q = query.strip().lower()
-        if not q:
-            return False
-
-        # 先检查是否包含总结/回顾类关键词——这类问题不走故障查询
-        if any(kw in q for kw in _SUMMARY_KEYWORDS):
-            return False
-
-        # 精确匹配故障代码（d4-1 等）
-        if FAULT_CODE_PATTERN.search(query):
-            return True
-
-        # 包含强故障关键词
-        return any(kw in q for kw in FAULT_KEYWORDS)
+        """仅匹配精确故障代码（d4-1 等格式），不走 LLM 秒回"""
+        return bool(FAULT_CODE_PATTERN.search(query.strip()))
 
     @classmethod
-    def handle(cls, query: str) -> dict:
+    def handle(cls, query: str, **kwargs) -> dict:
         return _handle_impl(query)
 
 

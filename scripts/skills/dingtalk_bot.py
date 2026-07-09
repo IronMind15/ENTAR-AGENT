@@ -63,21 +63,19 @@ class ErrorQueryHandler(ChatbotHandler):
             return AckMessage.STATUS_OK, "ok"
 
         # ---- 通过技能注册中心路由 ----
-        from skills import get_matched_skill, chat as chat_skill
+        from skills import get_matched_skill
 
         user_id = str(bot_msg.sender_id or sender)
 
         skill_cls = get_matched_skill(text)
         if skill_cls:
             logger.info(f"  → {skill_cls.name}: {text[:40]}")
-            # 如果是聊天技能，传入 user_id 以便注入记忆
-            if skill_cls.name == "通用聊天":
-                result = skill_cls.handle(text, user_id=user_id)
-            else:
-                result = skill_cls.handle(text)
+            # 所有 skill 的 handle() 现在都兼容 user_id 参数
+            result = skill_cls.handle(text, user_id=user_id)
         else:
-            result = chat_skill.handle(text, user_id=user_id)
-            logger.info(f"  → chat (fallback): {text[:40]}")
+            # 理论上不会走到这里（Agent 始终匹配），防御性兜底
+            logger.info(f"  → 备用处理: {text[:40]}")
+            result = {"answer": f"抱歉，我暂时无法处理这个问题。", "source": "fallback"}
 
         answer = result.get("answer", "") or "抱歉，我没有找到相关信息。"
 
