@@ -12,6 +12,11 @@ WORKDIR /app
 
 # 先复制依赖文件 → 安装依赖（利用 Docker 缓存层，代码不变时不重装）
 COPY requirements.txt .
+
+# 先装 CPU 版 PyTorch（~400MB），再装其他依赖
+# sentence-transformers 依赖 torch，若 torch 已存在则不会重新拉 GPU 版
+# 注：用 --index-url 临时切换 PyTorch 官方源，不被清华源覆盖
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 再复制项目文件
