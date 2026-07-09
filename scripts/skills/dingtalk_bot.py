@@ -65,12 +65,18 @@ class ErrorQueryHandler(ChatbotHandler):
         # ---- 通过技能注册中心路由 ----
         from skills import get_matched_skill, chat as chat_skill
 
+        user_id = str(bot_msg.sender_id or sender)
+
         skill_cls = get_matched_skill(text)
         if skill_cls:
             logger.info(f"  → {skill_cls.name}: {text[:40]}")
-            result = skill_cls.handle(text)
+            # 如果是聊天技能，传入 user_id 以便注入记忆
+            if skill_cls.name == "通用聊天":
+                result = skill_cls.handle(text, user_id=user_id)
+            else:
+                result = skill_cls.handle(text)
         else:
-            result = chat_skill.handle(text)
+            result = chat_skill.handle(text, user_id=user_id)
             logger.info(f"  → chat (fallback): {text[:40]}")
 
         answer = result.get("answer", "") or "抱歉，我没有找到相关信息。"
@@ -83,6 +89,16 @@ class ErrorQueryHandler(ChatbotHandler):
                 incoming_message=bot_msg,
             )
             logger.info(f"回复成功: {answer[:50]}...")
+
+            # ---- 自动记录到会话记忆 ----
+            try:
+                from skills import memory
+                user_id = str(bot_msg.sender_id or sender)
+                memory.add(user_id, "user", text[:500])
+                memory.add(user_id, "assistant", answer[:500])
+            except Exception as mem_err:
+                logger.warning(f"记录记忆失败: {mem_err}")
+
         except Exception as e:
             logger.error(f"回复钉钉消息失败: {e}")
 

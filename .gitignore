@@ -25,5 +25,8 @@ docs/*.docx
 # 但保留 Markdown 文档
 !docs/*.md
 
+# ── 会话记忆（自动生成，不退版本） ──
+data/chat_memory.json
+
 # ── 部署打包产物 ──
 *.tar.gz

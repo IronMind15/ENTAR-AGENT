@@ -30,15 +30,25 @@ SYSTEM_PROMPT = (
     "如果同事提到故障代码或相关关键词，系统内部有专门的故障知识库在处理，"
     "你只需要引导他们直接输入故障代码或描述即可。\n\n"
     "对于非故障类的提问（天气、闲聊、常识问答、公司制度、内部流程、日常工作问题等），"
-    "你可以直接回答。你是公司内部工具，说话不用太正式，像同事间交流一样自然就好，"
-    "但回答仍要有内容，把知道的信息尽量分享出来，每条回答至少写三四句话。\n\n"
+    "你可以直接回答。你是公司内部工具，说话不用太正式，像同事间交流一样自然就好。\n\n"
+    "⚠️ 重要约束：不知道的事不要编。"
+    "你没有公司内部人员的信息（员工姓名、岗位、联系方式等），"
+    "没有公司食堂/周边餐饮的信息，"
+    "没有公司非公开资料。"
+    "如果同事问到你不知道的，直接说「这个我不清楚，建议问一下相关负责人」。"
+    "宁可说不知道，也不要编造同事说过的话或虚构公司内部信息。\n\n"
     "如果同事问的是关于公司产品参数、技术规格、型号等专业问题，"
     "你了解多少就说多少，不清楚的不要瞎编，直接说暂时不知道即可。"
 )
 
 
-def _handle_impl(query: str) -> dict:
-    """处理通用聊天，返回 {answer, source}"""
+def _handle_impl(query: str, user_id: str = "") -> dict:
+    """处理通用聊天，返回 {answer, source}
+
+    Args:
+        query: 用户问题
+        user_id: 用户标识（可选，用于注入记忆上下文）
+    """
     q = query.strip()
     if not q:
         return {"answer": "请输入你想问的问题", "source": "chat"}
@@ -49,18 +59,32 @@ def _handle_impl(query: str) -> dict:
 
     logger.info(f"聊天问题: {q[:60]}")
 
+    # 构建消息列表（系统提示词 + 可选的历史记忆）
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+
+    # 如果有用户 ID，注入最近对话记忆
+    if user_id:
+        try:
+            from skills import memory
+            context = memory.format_context(user_id, max_content=300)
+            if context:
+                # 把历史对话加在系统提示词后面
+                messages[0]["content"] += context
+                logger.info(f"已注入 {user_id} 的记忆上下文")
+        except Exception as e:
+            logger.warning(f"注入记忆失败: {e}")
+
+    messages.append({"role": "user", "content": q})
+
     try:
         r = _HTTP_CLIENT.post(
             "https://api.deepseek.com/chat/completions",
             headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
             json={
                 "model": "deepseek-v4-flash",
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": q},
-                ],
+                "messages": messages,
                 "temperature": 0.7,
-                "max_tokens": 4000,  # 约 3000 中文字，足够回答绝大多数问题
+                "max_tokens": 4000,
             },
         )
         if r.status_code == 200:
@@ -92,8 +116,8 @@ class ChatSkill(BaseSkill):
         return True
 
     @classmethod
-    def handle(cls, query: str) -> dict:
-        return _handle_impl(query)
+    def handle(cls, query: str, user_id: str = "") -> dict:
+        return _handle_impl(query, user_id=user_id)
 
 
 # 向后兼容：保留模块级 handle 函数

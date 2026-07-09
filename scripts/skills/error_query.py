@@ -49,7 +49,14 @@ FAULT_KEYWORDS = [
     "不转", "不通", "漏电", "过热",
 ]
 
-# 自然语言特征词 — 用来判断是否为复杂自然语言（需要 LLM 提取关键词）
+# 总结/回顾类关键词——命中时不走故障查询（尽管可能包含故障关键词）
+_SUMMARY_KEYWORDS = [
+    "总结", "回顾", "归纳", "汇总",
+    "刚才问了", "之前问的", "之前聊", "刚才聊",
+    "帮我整理", "帮我列", "帮我写",
+    "你记得", "还记得",
+    "我查过", "我问过", "我刚刚",
+]
 NL_MARKERS = ["的", "了", "吗", "呢", "吧", "是", "怎么回事", "怎么",
               "为什么", "如何", "怎么办", "什么", "哪个", "报错",
               "故障", "查一下", "请问"]
@@ -348,8 +355,16 @@ class ErrorQuerySkill(BaseSkill):
         q = query.strip().lower()
         if not q:
             return False
+
+        # 先检查是否包含总结/回顾类关键词——这类问题不走故障查询
+        if any(kw in q for kw in _SUMMARY_KEYWORDS):
+            return False
+
+        # 精确匹配故障代码（d4-1 等）
         if FAULT_CODE_PATTERN.search(query):
             return True
+
+        # 包含强故障关键词
         return any(kw in q for kw in FAULT_KEYWORDS)
 
     @classmethod
