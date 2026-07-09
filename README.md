@@ -1,6 +1,6 @@
-# 🔧 恩特小助手 — PCS 故障代码智能查询系统
+# 🔧 恩特小助手 — 智能故障查询 + 对话 Agent
 
-> 恩特能源内部工具 — 基于 RAG 架构的故障代码查询机器人
+> 恩特能源内部工具 — 基于 RAG Agent 架构的智能助手，支持故障代码查询、自然语言对话、跨会话记忆
 
 ---
 
@@ -9,9 +9,13 @@
 | 功能 | 状态 | 说明 |
 |------|------|------|
 | Web 页面查询 | ✅ 已上线 | http://localhost:8000 |
-| 钉钉机器人查询 | ✅ 已上线 | 群内 @恩特小助手 |
+| 钉钉机器人查询 | ✅ 已上线 | 搜索「恩特小助手」单聊使用 |
 | 精确故障代码匹配 | ✅ 已完成 | 秒回，不调 LLM |
 | 语义模糊搜索 | ✅ 已完成 | 支持自然语言/名称/原因 |
+| RAG Agent 智能路由 | ✅ v1.1 | LLM Function Calling 自主决策知识库检索 |
+| 跨会话记忆 | ✅ v1.1 | 对话持久化，上下文感知，用户隔离 |
+| 云服务器部署 | ✅ v1.0 | Ubuntu 22.04 + 宝塔面板 7×24 |
+| Docker 部署 | ✅ v1.1 | CPU torch 优化，镜像瘦身 |
 | 局域网共享 | ✅ 已完成 | 同 WiFi 可访问 |
 | PCS 参数表对接 | ✅ 已完成 | 133 条实际工程数据 |
 
@@ -20,43 +24,42 @@
 ## 🏗️ 系统架构
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                   用户入口                            │
-│    Web 页面 (localhost:8000)   钉钉群聊 @机器人      │
-└─────────────────────────┬───────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────┐
-│               FastAPI 服务 (main.py)                  │
-│                                                       │
-│    ┌─────────────────────────────────────────────┐   │
-│    │          error_query.handle(q)               │   │
-│    │                                              │   │
-│    │  提问 ──→ 含故障代码？──→ 精确匹配（秒回）    │   │
-│    │            │                                 │   │
-│    │            └──→ 语义搜索 Chroma → 返回结果   │   │
-│    │            │                                 │   │
-│    │            └──→ 复杂 NL → LLM 提取 → 搜索   │   │
-│    └─────────────────────────────────────────────┘   │
-└──────────────────────┬──────────────────────────────┘
+┌─ 用户入口 ────────────────────────────────────────┐
+│  Web 页面 (localhost:8000)  钉钉单聊 @机器人        │
+└──────────────────────┬────────────────────────────┘
                        │
                        ▼
-┌─────────────────────────────────────────────────────┐
-│              Chroma 向量数据库                        │
-│  模型：BAAI/bge-small-zh-v1.5                       │
-│  数据：133 条故障记录（PCS参数表 遥信DI sheet）      │
-└─────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────┐
+│              RAG Agent (agent.py)                  │
+│    基于 DeepSeek Function Calling，自主决策：      │
+│                                                    │
+│  ┌── 故障代码 (d4-1) ──→ 精确匹配（秒回，不调LLM）│
+│  │                                                 │
+│  ├── 自然语言/名称/原因 ──→ 调 search_kb() 工具   │
+│  │      ↓ Chroma 语义搜索 → 返回格式化结果         │
+│  │                                                 │
+│  └── 纯聊天/无关问题 ──→ 直接 LLM 对话（不查库）  │
+│                                                    │
+│  所有路由前注入用户记忆 → 跨轮对话连贯              │
+└──────────────────────┬────────────────────────────┘
+                       │
+                       ▼
+┌───────────────────────────────────────────────────┐
+│              Chroma 向量数据库                      │
+│  模型：BAAI/bge-small-zh-v1.5                     │
+│  数据：133 条故障记录（PCS参数表 遥信DI sheet）     │
+└───────────────────────────────────────────────────┘
 ```
 
 ### 查询策略
 
 | 输入类型 | 处理方式 | LLM? | 速度 |
 |---------|---------|------|------|
-| `d4-1`、`df-8`（故障代码） | Chroma 元数据精确匹配 | ❌ | ⚡ 毫秒 |
-| `急停告警`（名称） | Chroma 语义搜索 | ❌ | ⚡ 毫秒 |
-| `外部急停信号闭合`（原因） | Chroma 语义搜索 | ❌ | ⚡ 毫秒 |
-| `这个逆变器报错了怎么办`（自然语言） | LLM 提取关键词 → 语义搜索 | ✅ 仅提取 | ⚡ 较快 |
-| `硬件`（关键词） | Chroma 语义搜索 | ❌ | ⚡ 毫秒 |
+| `d4-1`、`df-8`（故障代码） | 精确匹配（快速通道） | ❌ | ⚡ 毫秒 |
+| `急停告警`（名称） | Agent 调 `search_kb()` | ❌ | ⚡ 毫秒 |
+| `外部急停信号闭合`（原因） | Agent 调 `search_kb()` | ❌ | ⚡ 毫秒 |
+| `这个逆变器报错了怎么办`（自然语言） | Agent 判断 → 调 `search_kb()` | ✅ 仅判断+提取 | ⚡ 较快 |
+| `你好，今天天气怎么样`（闲聊） | Agent 直接回复 | ✅ 对话 | ⚡ 正常 |
 
 ---
 
@@ -78,7 +81,7 @@ pip install fastapi uvicorn chromadb sentence-transformers openpyxl httpx dingta
 编辑 `scripts/local_config.py`：
 
 ```python
-# DeepSeek API Key（必填，用于自然语言提取）
+# DeepSeek API Key（必填）
 DEEPSEEK_API_KEY = "sk-xxxxxx"
 
 # 钉钉 Stream 模式机器人凭证（可选）
@@ -97,12 +100,22 @@ python scripts/sync_kb.py
 ```bash
 python scripts/main.py
 # → Web: http://localhost:8000
+# → 钉钉搜索「恩特小助手」单聊使用
+```
+
+### Docker 部署
+
+```bash
+# 构建镜像
+docker compose build
+
+# 启动服务
+docker compose up -d
 ```
 
 ### 局域网共享
 
 ```bash
-# 以管理员身份运行
 netsh advfirewall firewall add rule name="恩特小助手 8000" dir=in action=allow protocol=TCP localport=8000
 ```
 
@@ -116,16 +129,25 @@ netsh advfirewall firewall add rule name="恩特小助手 8000" dir=in action=al
 D:\ENTAR_AGENT\
 ├── CLAUDE.md                          # 项目级指南（给 AI 使用）
 ├── README.md                          # 本文件
+├── CHANGELOG.md                       # 版本更新日志
 ├── data/
 │   └── PCS参数表 V1.6.2.xlsx          # ⚡ 实际工程 PCS 参数表
 ├── knowledge_base/                    # 💾 Chroma 向量库（自动生成）
 ├── scripts/
 │   ├── local_config.py                # 🔑 凭证配置（已 gitignore）
 │   ├── main.py                        # 🚀 FastAPI 服务入口
+│   ├── web_page.py                    # 🖥️ Web 页面独立组件
 │   ├── sync_kb.py                     # 🔄 知识库同步脚本
 │   └── skills/
-│       ├── error_query.py             # 🔧 故障查询核心逻辑
-│       └── dingtalk_bot.py            # 🤖 钉钉机器人
+│       ├── __init__.py                # 技能注册中心
+│       ├── agent.py                   # 🤖 RAG Agent（核心，Function Calling）
+│       ├── error_query.py             # 🔧 故障查询（搜索工具，供 Agent 调用）
+│       ├── memory.py                  # 🧠 会话记忆模块
+│       └── dingtalk_bot.py            # 🤖 钉钉 Stream 模式机器人
+├── deploy/
+│   ├── Dockerfile                     # 🐳 Docker 镜像配置
+│   └── docker-compose.yml             # 🐳 Docker Compose 编排
+├── docs/                              # 📄 项目文档
 └── .claude/                           # Claude Code 配置
 ```
 
@@ -141,11 +163,16 @@ D:\ENTAR_AGENT\
     ↓
 dingtalk_bot.py (ChatbotHandler.process)
     ↓
-error_query.handle() → Chroma / DeepSeek
+agent.py (RAG Agent — Function Calling 路由)
+    ├── 精确故障代码 → error_query.match() 秒回
+    ├── 语义搜索 → error_query.search_kb() → Chroma
+    └── 聊天 → DeepSeek 直接回复
+    ↑
+memory.py（注入用户对话记忆）
     ↓
-reply_markdown() (通过 session_webhook 回复)
+reply_markdown() / reply_text()
     ↓
-钉钉群聊
+钉钉单聊
 ```
 
 ### 部署步骤
@@ -155,7 +182,7 @@ reply_markdown() (通过 session_webhook 回复)
 3. **复制 ClientID + ClientSecret** → 填入 `local_config.py`
 4. **创建版本并发布**（管理员可设免审批）
 5. **安装应用到组织**
-6. **群设置 → 机器人 → 添加机器人** → 找到「恩特小助手」
+6. **员工在钉钉搜索「恩特小助手」** → 进入单聊使用
 
 ---
 
@@ -174,25 +201,40 @@ python scripts/sync_kb.py
 
 ---
 
-## ⚠️ 已知问题
+## 📌 版本历史
 
-1. **息屏断连** — 服务跑在本地电脑，息屏/睡眠会断开钉钉连接，建议部署到云服务器
-2. **短关键词语义搜索** — 极短关键词（2字以下）匹配效果可能不理想
-3. **Windows GBK 编码** — 控制台输出 emoji 可能报错
+| 版本 | 日期 | 亮点 |
+|------|------|------|
+| v1.1 | 2026-07-09 | 记忆系统 + RAG Agent 升级 |
+| v1.0 | 2026-07-09 | 第一版正式上线（故障查询 + 钉钉机器人 + Web） |
+
+详见 [CHANGELOG.md](CHANGELOG.md)
 
 ---
 
-## 📌 路线图
+## ⚠️ 已知问题
+
+1. **短关键词语义搜索** — 极短关键词（2字以下）匹配效果可能不理想
+2. **Windows GBK 编码** — 控制台输出 emoji 可能报错
+3. **`__pycache__` 缓存坑** — 修改代码后旧进程可能不释放端口，需强杀 + 清缓存
+
+---
+
+## 🗺️ 路线图
 
 - [x] 故障代码精确匹配（秒回）
 - [x] 语义模糊搜索
+- [x] RAG Agent 智能路由（v1.1）
+- [x] 会话记忆（v1.1）
 - [x] 钉钉机器人上线
 - [x] PCS 实际工程数据接入
-- [ ] 云服务器部署（7×24 小时在线）
+- [x] Docker 部署
+- [x] 云服务器部署（7×24 小时在线）
 - [ ] 其他 PCS 参数表 sheet 对接
 - [ ] 经验查询功能
 - [ ] 钉钉知识库集成
+- [ ] 自动向量化流水线
 
 ---
 
-*恩特能源 · 内部工具*
+*恩特能源 · 内部工具 · v1.1*
