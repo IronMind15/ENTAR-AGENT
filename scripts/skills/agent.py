@@ -34,13 +34,13 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "search_knowledge_base",
-            "description": "搜索 PCS 故障知识库，每条结果包含：故障代码(d4-1)、名称、原因、地址(0x3004)、位地址(bit0)、数据类型、备注等级(一级/二级/三级)、说明。当用户询问故障代码含义、设备异常告警、故障原因排查时使用此工具。",
+            "description": "搜索知识库。包含 PCS 故障代码（d4-1）、设备异常处理方案、公司制度、流程规范、技术文档等。当用户询问任何可能与工作相关的问题时，先使用此工具搜索。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "搜索关键词，如故障代码（d4-1）、故障名称（急停告警）、现象描述（逆变器不启动）、故障原因等。使用用户提到的原词或精简后的关键词。"
+                        "description": "搜索关键词，使用用户问题中的核心词（故障代码、现象描述、文档标题等）。"
                     }
                 },
                 "required": ["query"]
@@ -54,28 +54,25 @@ TOOLS = [
 SYSTEM_PROMPT = (
     "你是恩特小助手，恩特能源（天津恩特能源科技有限公司，品牌 ENTAR）内部使用的 AI 助手。"
     "使用你的人都是公司内部同事（测试、售后、研发、生产等岗位），不是外部产品用户。\n\n"
-    "你有一个 search_knowledge_base 工具，可以搜索公司内部的 PCS 故障知识库。\n\n"
-    "== 什么时候该搜索，什么时候不搜索 ==\n\n"
+    "你有一个 search_knowledge_base 工具，可以搜索公司内部知识库（包含 PCS 故障代码、技术文档、公司制度等）。\n\n"
+    "== 什么时候该搜索 ==\n\n"
     "以下交互示例可以帮助你判断：\n\n"
-    "示例1 - 需要搜索（用户问故障代码）：\n"
+    "示例1 - 需要搜索（问故障代码）：\n"
     "  用户：d4-1 是什么故障\n"
-    "  你：调用 search_knowledge_base(query=\"d4-1\") → 拿到结果后，用自然语言解释\n\n"
-    "示例2 - 需要搜索（用户描述故障现象）：\n"
-    "  用户：逆变器不启动了，报了个急停告警\n"
-    "  你：调用 search_knowledge_base(query=\"急停告警\") → 拿到结果后解释原因\n\n"
-    "示例3 - 不需要搜索（闲聊）：\n"
+    "  你：调用 search_knowledge_base(query=\"d4-1\") → 拿到结果后用自然语言解释\n\n"
+    "示例2 - 需要搜索（问公司制度/文档）：\n"
+    "  用户：报销流程是什么\n"
+    "  你：调用 search_knowledge_base(query=\"报销流程\") → 用找到的结果回答\n\n"
+    "示例3 - 闲聊天 → 不搜索：\n"
     "  用户：今天天气怎么样\n"
-    "  你：直接回答\"抱歉，我无法查询实时天气，建议看看手机上的天气App\"\n\n"
-    "示例4 - 不需要搜索（公司制度）：\n"
-    "  用户：咱们公司食堂几点开门\n"
-    "  你：直接回答\"抱歉，这个我不清楚，建议问一下行政部门\"\n\n"
+    "  你：直接回答\"抱歉，我无法查询实时天气\"\n\n"
     "== 搜索关键词规则 ==\n"
-    "- 提取用户问题中的核心故障相关词，不要修改用户原词\n"
-    "- 一次只传一个最关键的关键词即可（如故障代码、故障名称）\n"
-    "- 如果用户说法模糊，不确定是否要搜，不如先搜了再说\n\n"
+    "- 提取用户问题中的核心词，不要修改用户原词\n"
+    "- 一次只传一个最关键的关键词即可\n"
+    "- 不确定是否要搜时，最好先搜了再说\n\n"
     "== 回答格式 ==\n"
     "- 先给出结论（1~2句总结）\n"
-    "- 再展开故障代码、原因、地址、处理建议等关键信息\n"
+    "- 再展开关键信息\n"
     "- 用自然语言解释，不要直接丢原始数据\n"
     "- 如果找到多条结果，说明各条的区别\n"
     "- 如果没有找到，直接说没找到，不编造\n"
@@ -252,26 +249,36 @@ def _handle_impl(query: str, user_id: str = "") -> dict:
 
     logger.info(f"Agent 处理: {q[:80]}" + (f" [{user_id}]" if user_id else ""))
 
-    # 第一轮：发送消息 + 工具定义，让 LLM 决定是否调用工具
-    assistant_msg = _call_deepseek(messages, tools=TOOLS)
-
-    if not assistant_msg:
-        return {"answer": "抱歉，大模型暂时无响应，请稍后再试。", "source": "agent"}
-
+    # Agent 循环：允许 LLM 多次调用工具（搜不到自动降级到钉钉知识库）
+    MAX_AGENT_LOOPS = 5  # 安全上限，防止死循环
     final_answer = ""
+    source_tag = "agent"
 
-    # 处理工具调用
-    if assistant_msg.get("tool_calls"):
-        logger.info(f"  LLM 调用了 {len(assistant_msg['tool_calls'])} 个工具")
+    for loop_i in range(MAX_AGENT_LOOPS):
+        assistant_msg = _call_deepseek(messages, tools=TOOLS)
 
-        # 将 assistant 消息加入上下文（含 tool_calls）
+        if not assistant_msg:
+            final_answer = "抱歉，大模型暂时无响应，请稍后再试。"
+            break
+
+        # 没有工具调用 → 这就是最终回答
+        if not assistant_msg.get("tool_calls"):
+            content = assistant_msg.get("content", "").strip()
+            if content:
+                final_answer = content
+                source_tag = "agent(chat)" if loop_i == 0 else "agent(RAG)"
+                logger.info(f"  Agent 第 {loop_i + 1} 轮：无工具调用，直接回答")
+            break
+
+        # 有工具调用 → 执行并追加结果
+        logger.info(f"  Agent 第 {loop_i + 1} 轮：LLM 调用了 {len(assistant_msg['tool_calls'])} 个工具")
+
         messages.append({
             "role": "assistant",
             "content": assistant_msg.get("content") or "",
             "tool_calls": assistant_msg["tool_calls"],
         })
 
-        # 逐个执行工具
         for tc in assistant_msg["tool_calls"]:
             if tc.get("type") == "function":
                 tool_result = _execute_tool(tc)
@@ -281,22 +288,14 @@ def _handle_impl(query: str, user_id: str = "") -> dict:
                     "content": tool_result,
                 })
 
-        logger.info("  工具执行完毕，请求 LLM 生成最终回答...")
-
-        # 第二轮：带工具结果的 LLM 调用
-        final_msg = _call_deepseek(messages, max_tokens=4000)
-        if final_msg and final_msg.get("content"):
-            final_answer = final_msg["content"].strip()
+        logger.info(f"  工具执行完毕，进入第 {loop_i + 2} 轮...")
 
     else:
-        # 没有工具调用：直接返回 LLM 回答（闲聊、非故障问题等）
-        content = assistant_msg.get("content", "").strip()
-        if content:
-            logger.info(f"  无工具调用，直接回答")
-            final_answer = content
+        # 循环正常结束（达到 MAX_AGENT_LOOPS 还没出结果）
+        if not final_answer:
+            final_answer = "抱歉，我没能查到相关信息，建议换个问法试试。"
 
     if final_answer:
-        source_tag = "agent(RAG)" if assistant_msg.get("tool_calls") else "agent(chat)"
         return {"answer": final_answer, "source": source_tag}
 
     return {"answer": "抱歉，我没理解您的问题。", "source": "agent"}
