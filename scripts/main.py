@@ -6,13 +6,27 @@
 import logging
 import os
 import sys
+from logging.handlers import RotatingFileHandler
 sys.path.insert(0, os.path.dirname(__file__))
 
-# 统一日志配置
+# 日志目录
+_LOG_DIR = os.path.join(os.path.dirname(__file__), "..", "logs")
+os.makedirs(_LOG_DIR, exist_ok=True)
+
+# 统一日志配置：同时输出控制台 + 文件
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     datefmt="%H:%M:%S",
+    handlers=[
+        logging.StreamHandler(),                                              # 控制台
+        RotatingFileHandler(
+            os.path.join(_LOG_DIR, "entark.log"),
+            encoding="utf-8",
+            maxBytes=5 * 1024 * 1024,   # 5MB 轮转
+            backupCount=3,
+        ),
+    ],
 )
 logger = logging.getLogger("main")
 
