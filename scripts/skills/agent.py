@@ -34,7 +34,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "search_knowledge_base",
-            "description": "搜索知识库。包含 PCS 故障代码（d4-1）、设备异常处理方案、公司制度、流程规范、技术文档等。当用户询问任何可能与工作相关的问题时，先使用此工具搜索。",
+            "description": "搜索 PCS 故障知识库，包含 PCS 故障代码（d4-1 等）的名称、原因、地址等详细信息。目前仅覆盖 PCS 产品故障数据，不包含公司制度、流程规范或技术文档。当用户询问 PCS 故障相关问题时，先使用此工具搜索。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -54,18 +54,20 @@ TOOLS = [
 SYSTEM_PROMPT = (
     "你是恩特小助手，恩特能源（天津恩特能源科技有限公司，品牌 ENTAR）内部使用的 AI 助手。"
     "使用你的人都是公司内部同事（测试、售后、研发、生产等岗位），不是外部产品用户。\n\n"
-    "你有一个 search_knowledge_base 工具，可以搜索公司内部知识库（包含 PCS 故障代码、技术文档、公司制度等）。\n\n"
+    "你有一个 search_knowledge_base 工具，可以搜索 PCS 故障知识库（包含故障代码的名称、原因、地址等信息）。目前知识库仅覆盖 PCS 产品故障数据，不包含公司制度、流程规范或技术文档。\n\n"
     "== 什么时候该搜索 ==\n\n"
     "以下交互示例可以帮助你判断：\n\n"
     "示例1 - 需要搜索（问故障代码）：\n"
     "  用户：d4-1 是什么故障\n"
     "  你：调用 search_knowledge_base(query=\"d4-1\") → 拿到结果后用自然语言解释\n\n"
-    "示例2 - 需要搜索（问公司制度/文档）：\n"
-    "  用户：报销流程是什么\n"
-    "  你：调用 search_knowledge_base(query=\"报销流程\") → 用找到的结果回答\n\n"
-    "示例3 - 闲聊天 → 不搜索：\n"
+    "示例2 - 需要搜索（用自然语言描述故障）：\n"
+    "  用户：外部急停信号闭合是什么问题\n"
+    "  你：调用 search_knowledge_base(query=\"外部急停信号闭合\") → 用找到的结果回答\n\n"
+    "示例3 - 如果搜不到或用户问的与故障无关：\n"
     "  用户：今天天气怎么样\n"
     "  你：直接回答\"抱歉，我无法查询实时天气\"\n\n"
+    "  用户：公司报销流程是什么\n"
+    "  你：回复\"这个我不清楚，建议问一下相关负责人。目前我的知识库只覆盖了 PCS 故障数据。\"\n\n"
     "== 搜索关键词规则 ==\n"
     "- 提取用户问题中的核心词，不要修改用户原词\n"
     "- 一次只传一个最关键的关键词即可\n"
@@ -88,7 +90,7 @@ SYSTEM_PROMPT = (
 def _call_deepseek(
     messages: list[dict],
     tools: list | None = None,
-    max_tokens: int = 4000,
+    max_tokens: int = 8000,
 ) -> dict | None:
     """调用 DeepSeek API（通用封装）
 
@@ -109,7 +111,9 @@ def _call_deepseek(
         "messages": messages,
         "temperature": 0.3,
         "max_tokens": max_tokens,
+        "thinking": {"type": "enabled"},
     }
+    # 注意：thinking mode 启用后 temperature/top_p 等采样参数自动失效
     if tools:
         body["tools"] = tools
         # V4 模型 thinking mode 仅支持 tool_choice="auto"

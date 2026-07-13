@@ -9,6 +9,12 @@ import sys
 from logging.handlers import RotatingFileHandler
 sys.path.insert(0, os.path.dirname(__file__))
 
+# Windows 终端 UTF-8（必须在日志配置之前，否则 StreamHandler 拿到 GBK 句柄）
+if sys.platform == "win32":
+    sys.stdin.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    os.environ["PYTHONIOENCODING"] = "utf-8"
+
 # 日志目录
 _LOG_DIR = os.path.join(os.path.dirname(__file__), "..", "logs")
 os.makedirs(_LOG_DIR, exist_ok=True)
@@ -29,11 +35,6 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger("main")
-
-# Windows UTF-8
-if sys.platform == "win32":
-    sys.stdin.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
-    sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
 
 from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse, JSONResponse
