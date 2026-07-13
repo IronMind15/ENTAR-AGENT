@@ -1,5 +1,41 @@
 # 恩特小助手 更新日志
 
+## v1.2.1（2026-07-13）
+
+文档管理子系统（doc_mgr）——PDF 转换技术栈升级 + 统一上传→切块→入库：
+
+### 新增
+
+- **文档管理子系统**（`scripts/doc_mgr/`）：独立自洽的文档全生命周期管理模块
+  - 存储抽象层（`VectorStore` ABC → `ChromaStore`，后续一行切 Qdrant）
+  - PyMuPDF 结构分析切块器（替代 Unstructured，零额外依赖，对中文标准更可靠）
+  - 管理 Web UI（`/admin` 路由，三 Tab：文档列表/上传/搜索测试）
+  - 6 个 REST API 端点（列表/上传/搜索/删除/查询 collections/管理页面）
+  - 上传文件自动保存 → 提取 → 切块 → 入库
+  - 文件归属类型选择器（标准文档 / 故障代码，可扩展）
+- **聊天页面新增「📂 文档管理」入口**，聊天 ↔ 管理双向导航
+- **端到端增量写入**：`storage.add()` 自动跳过已存在 ID，分批写入（50/批）
+
+### 优化
+
+- **`sync_kb.py` / `sync_standards.py`** → 薄包装为 `process_file()` 调用层，向后兼容
+- **`main.py` 统一挂载**：`app.include_router(admin_router)` 一行注册
+- **PDF 切块质量**：多信号融合（章节号模式 + 字体名 + 左边界），页眉页脚自动清除
+- **错误处理加固**：`list_docs` API 加 try/except，前端 fetch 加 `r.ok` 检查
+- **前端安全性**：删除按钮改用 `data-*` 属性 + 事件委托，不再用内联 onclick
+
+### 修复
+
+- **`switchTab` 引用未声明 `event` 变量** → 改为传 `this` 参数
+- **上传进度无反馈** → 2 秒后自动切换为「正在处理，请耐心等待...」
+
+### 技术栈
+
+- 切块引擎：PyMuPDF（已安装，零新依赖）
+- 存储：Chroma（通过 `storage.py` 抽象，切换 Qdrant 只需改一处）
+- 管理前端：内嵌 HTML/CSS/JS（同 `web_page.py` 模式，无模板引擎）
+- 向量模型：BAAI/bge-small-zh-v1.5
+
 ## v1.1（2026-07-09）
 
 记忆系统 + RAG Agent 升级：

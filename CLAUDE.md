@@ -48,10 +48,15 @@ D:\ENTAR_AGENT\
 ├── scripts/                                     # 📂 核心 Python 代码
 │   ├── config.py                                #   配置模块
 │   ├── local_config.py                          # 🔑 API Key / 钉钉凭证（已 gitignore）
-│   ├── main.py                                  # 🚀 统一入口（FastAPI + 钉钉机器人）
-│   ├── sync_kb.py                               # 🔄 Excel → Chroma 同步脚本
-│   ├── sync_standards.py                        # 📄 标准 PDF → Chroma 同步脚本
+│   ├── main.py                                  # 🚀 统一入口（FastAPI + 钉钉机器人，挂载 /admin）
+│   ├── sync_kb.py                               # 🔄 Excel → Chroma 同步脚本（薄包装→doc_mgr）
+│   ├── sync_standards.py                        # 📄 标准 PDF → Chroma 同步脚本（薄包装→doc_mgr）
 │   ├── web_page.py                              # 🌐 网页处理脚本
+│   ├── doc_mgr/                                 # 🆕 v1.2.1 文档管理子系统
+│   │   ├── __init__.py, models.py, storage.py   # ⭐ 存储抽象层
+│   │   ├── engine.py, router.py, views.py       #    引擎 + API + 管理界面
+│   │   ├── chunkers/                            #    切块器（PyMuPDF 结构分析）
+│   │   └── extractors/                          #    文本提取（Excel + PyMuPDF）
 │   └── skills/
 │       ├── __init__.py
 │       ├── agent.py                             # 🤖 Agent 循环路由（聊天托底）
@@ -120,6 +125,13 @@ D:\ENTAR_AGENT\
 └───────────────────────────────────────────────────┘
 ```
 
+### 文件类型 → Collection 映射
+
+| 文件类型 | 默认 Collection | 用途 | 处理方式 |
+|---------|----------------|------|---------|
+| .pdf | `standards` | 标准文档查询 | PyMuPDF 提取文字 → 结构分析切块 → 入库 |
+| .xlsx / .xls | `error_codes` | 故障代码查询 | openpyxl 按行解析 → 格式化 → 入库 |
+
 ### 查询策略详解
 
 | 场景 | 匹配方式 | 是否调 LLM | 速度 |
@@ -172,13 +184,14 @@ D:\ENTAR_AGENT\
 | 组件 | 选型 | 说明 |
 |------|------|------|
 | 数据源 | PCS参数表 V1.6.2.xlsx + 标准 PDF | 遥信（DI）sheet 133 条 + 国标/行标/国际标准 |
+| 文档管理 | doc_mgr 子系统 | 统一上传→切块→入库，含 Web 管理页面（/admin） |
+| 存储抽象层 | VectorStore ABC → ChromaStore | 后续切 Qdrant 只需改 storage.py 一处 |
+| PDF 切块引擎 | PyMuPDF 结构分析 | 多信号融合（章节号 + 字体名 + 左边界），零新依赖 |
 | 向量数据库 | Chroma | 本地持久化，支持精确 + 语义搜索 |
 | Embedding | BAAI/bge-small-zh-v1.5 | 国产中文嵌入，30MB，CPU 运行 |
 | LLM | DeepSeek API (deepseek-v4-flash) | 关键词提取 + 聊天托底 |
-| Web 框架 | FastAPI | Web 页面 + HTTP API 入口 |
+| Web 框架 | FastAPI | Web 页面 + HTTP API 入口（/admin 挂载） |
 | 钉钉 SDK | dingtalk-stream | Stream 模式，WebSocket 长连接，无需公网 IP |
-| 故障同步 | sync_kb.py | Excel 故障代码 → Chroma 同步 |
-| 标准同步 | sync_standards.py | 标准 PDF → Chroma 同步 |
 | Agent 路由 | agent.py | 统一 Agent 循环：路由、聊天托底、记忆管理 |
 | 标准查询 | standards_query.py | 标准文档检索工具 |
 | 部署 | Docker + docker-compose | 可选容器化部署 |

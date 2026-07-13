@@ -14,6 +14,9 @@
 | 语义模糊搜索 | ✅ 已完成 | 支持自然语言/名称/原因 |
 | RAG Agent 智能路由 | ✅ v1.1 | LLM Function Calling 自主决策知识库检索 |
 | 跨会话记忆 | ✅ v1.1 | 对话持久化，上下文感知，用户隔离 |
+| **文档管理子系统** | ✅ **v1.2.1** | Web 管理页面上传/搜索/删除文档 |
+| **PDF 智能切块** | ✅ **v1.2.1** | PyMuPDF 结构分析，按章节自动切块入库 |
+| **存储抽象层** | ✅ **v1.2.1** | VectorStore ABC，切换 Qdrant 只需改一处 |
 | 云服务器部署 | ✅ v1.0 | Ubuntu 22.04 + 宝塔面板 7×24 |
 | Docker 部署 | ✅ v1.1 | CPU torch 优化，镜像瘦身 |
 | 局域网共享 | ✅ 已完成 | 同 WiFi 可访问 |
@@ -135,9 +138,24 @@ D:\ENTAR_AGENT\
 ├── knowledge_base/                    # 💾 Chroma 向量库（自动生成）
 ├── scripts/
 │   ├── local_config.py                # 🔑 凭证配置（已 gitignore）
-│   ├── main.py                        # 🚀 FastAPI 服务入口
+│   ├── main.py                        # 🚀 FastAPI 服务入口（挂载 /admin 路由）
 │   ├── web_page.py                    # 🖥️ Web 页面独立组件
-│   ├── sync_kb.py                     # 🔄 知识库同步脚本
+│   ├── sync_kb.py                     # 🔄 知识库同步（薄包装→doc_mgr）
+│   ├── sync_standards.py              # 📄 标准同步脚本（薄包装→doc_mgr）
+│   ├── doc_mgr/                       # 🆕 v2.0 文档管理子系统
+│   │   ├── __init__.py                # 包导出
+│   │   ├── models.py                  # 数据模型
+│   │   ├── storage.py                 # ⭐ 存储抽象层（VectorStore ABC）
+│   │   ├── engine.py                  # 处理引擎（process_file 统一入口）
+│   │   ├── router.py                  # API 路由（/admin 下 6 个端点）
+│   │   ├── views.py                   # 管理页面 HTML（三 Tab 界面）
+│   │   ├── chunkers/                  # 切块器
+│   │   │   ├── pymupdf_chunker.py     # ⭐ PyMuPDF 结构分析切块
+│   │   │   ├── unstructured_chunk.py  # Unstructured 备用
+│   │   │   └── fallback.py            # 滑动窗口回退
+│   │   └── extractors/               # 文本提取
+│   │       ├── excel.py               # Excel → 故障代码
+│   │       └── pdf_mupdf.py           # PyMuPDF → 文本+标准ID
 │   └── skills/
 │       ├── __init__.py                # 技能注册中心
 │       ├── agent.py                   # 🤖 RAG Agent（核心，Function Calling）
@@ -205,6 +223,7 @@ python scripts/sync_kb.py
 
 | 版本 | 日期 | 亮点 |
 |------|------|------|
+| **v1.2.1** | **2026-07-13** | **文档管理子系统 — PDF 转换技术栈升级 + 统一上传/切块/入库** |
 | v1.1 | 2026-07-09 | 记忆系统 + RAG Agent 升级 |
 | v1.0 | 2026-07-09 | 第一版正式上线（故障查询 + 钉钉机器人 + Web） |
 
@@ -230,11 +249,14 @@ python scripts/sync_kb.py
 - [x] PCS 实际工程数据接入
 - [x] Docker 部署
 - [x] 云服务器部署（7×24 小时在线）
-- [ ] 其他 PCS 参数表 sheet 对接
-- [ ] 经验查询功能
-- [ ] 钉钉知识库集成
-- [ ] 自动向量化流水线
+- [x] **文档管理子系统（v1.2.1）**
+- [x] **PDF 智能切块入库（PyMuPDF 替代 Unstructured）**
+- [x] **存储抽象层**
+- [ ] 钉钉小助手文件上传功能（接收文件自动入库）
+- [ ] 扫描 PDF OCR 识别
+- [ ] 综合测试 + 上线服务器
+- [ ] Qdrant 向量库切换
 
 ---
 
-*恩特能源 · 内部工具 · v1.1*
+*恩特能源 · 内部工具 · v1.2.1*
