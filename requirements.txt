@@ -5,3 +5,13 @@ sentence-transformers==5.6.0
 openpyxl==3.1.5
 httpx==0.28.1
 dingtalk-stream==0.24.3
+
+# ===== PDF 处理（doc_mgr 模块） =====
+# PyMuPDF — PDF 文字提取 + 标准编号识别（fitz）
+PyMuPDF==1.25.2
+# Unstructured — PDF 结构解析 + 按 heading 智能切块
+unstructured[pdf]==0.16.0
+
+# ===== OCR 扫描 PDF（可选，PaddlePaddle 需单独安装） =====
+# PaddleOCR==3.7.0
+# paddlepaddle==3.2.2  # CPU 版，GPU 版请安装 paddlepaddle-gpu

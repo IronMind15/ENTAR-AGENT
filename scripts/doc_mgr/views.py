@@ -250,9 +250,9 @@ ADMIN_HTML = r"""<!DOCTYPE html>
 
   <!-- Tabs -->
   <div class="tabs">
-    <button class="active" onclick="switchTab('docs')">📚 文档列表</button>
-    <button onclick="switchTab('upload')">📤 上传文件</button>
-    <button onclick="switchTab('search')">🔍 搜索测试</button>
+    <button class="active" onclick="switchTab('docs', this)">📚 文档列表</button>
+    <button onclick="switchTab('upload', this)">📤 上传文件</button>
+    <button onclick="switchTab('search', this)">🔍 搜索测试</button>
   </div>
 
   <!-- Tab: Document List -->
@@ -333,11 +333,11 @@ function showToast(msg, type) {
 }
 
 // ===== Tabs =====
-function switchTab(name) {
+function switchTab(name, el) {
   document.querySelectorAll('.tabs button').forEach(function(b) {
     b.classList.remove('active');
   });
-  event.target.classList.add('active');
+  (el || event.target).classList.add('active');
   document.querySelectorAll('.tab-content').forEach(function(t) {
     t.classList.remove('active');
   });
@@ -349,9 +349,7 @@ function switchTab(name) {
 // ===== Escape HTML =====
 function esc(s) {
   if (!s) return '';
-  var d = document.createElement('div');
-  d.appendChild(document.createTextNode(s));
-  return d.innerHTML;
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 // ===== Tab 1: Document List =====
@@ -362,7 +360,10 @@ function loadDocs() {
   content.style.display = 'none';
 
   fetch('/admin/docs')
-    .then(function(r) { return r.json(); })
+    .then(function(r) {
+      if (!r.ok) throw new Error('服务端返回 ' + r.status + ' ' + r.statusText);
+      return r.json();
+    })
     .then(function(data) {
       loading.style.display = 'none';
       var html = '';
@@ -393,7 +394,7 @@ function loadDocs() {
             }
             html += '</div></div>';
             html += '<div class="doc-actions">';
-            html += '<button class="del-btn" onclick="deleteDoc(\'' + esc(collection) + '\',\'' + esc(f.file_name) + '\')">删除</button>';
+            html += '<button class="del-btn" data-collection="' + esc(collection) + '" data-file="' + esc(f.file_name) + '">删除</button>';
             html += '</div></div>';
           }
         }
@@ -403,9 +404,19 @@ function loadDocs() {
       content.style.display = '';
     })
     .catch(function(err) {
-      loading.innerHTML = '加载失败: ' + err.message;
+      loading.innerHTML = '加载失败: ' + err.message + '，请检查服务是否运行';
     });
 }
+
+// 事件委托：处理所有删除按钮点击
+document.addEventListener('click', function(e) {
+  var btn = e.target.closest('.del-btn');
+  if (btn) {
+    var collection = btn.getAttribute('data-collection');
+    var fileName = btn.getAttribute('data-file');
+    deleteDoc(collection, fileName);
+  }
+});
 
 function deleteDoc(collection, fileName) {
   if (!confirm('确定删除 "' + fileName + '" 吗？\n其所有切块将被清除。')) return;
@@ -463,16 +474,27 @@ function uploadFile(file) {
   }
 
   progress.classList.add('show');
-  fill.style.width = '30%';
+  fill.style.width = '20%';
   fill.classList.remove('done');
-  text.textContent = '上传中... (' + file.name + ')';
+  text.textContent = '📤 上传中... (' + file.name + ')';
   result.classList.remove('show');
 
   var formData = new FormData();
   formData.append('file', file);
 
+  // 上传完成后切换为"处理中"状态（大文件处理可能需要 30s+）
+  var processingTimer = setTimeout(function() {
+    fill.style.width = '50%';
+    text.textContent = '⚙️ 正在处理，请耐心等待... (嵌入向量计算)';
+  }, 2000);
+
   fetch('/admin/upload', { method: 'POST', body: formData })
-    .then(function(r) { return r.json(); })
+    .then(function(r) {
+      clearTimeout(processingTimer);
+      fill.style.width = '80%';
+      text.textContent = '✅ 处理完成，整理结果...';
+      return r.json();
+    })
     .then(function(data) {
       fill.style.width = '100%';
       fill.classList.add('done');
@@ -483,7 +505,7 @@ function uploadFile(file) {
           + '文件: ' + esc(data.file_name) + '<br>'
           + '入库: ' + data.chunk_count + ' 块 → ' + esc(data.collection)
           + (data.std_id ? '<br>标准: ' + esc(data.std_id) : '');
-        text.textContent = '完成！';
+        text.textContent = '完成！共 ' + data.chunk_count + ' 块';
         showToast('上传成功: ' + data.chunk_count + ' 块', 'success');
         loadDocs();
         loadSearchCollections();
@@ -499,6 +521,7 @@ function uploadFile(file) {
       }
     })
     .catch(function(err) {
+      clearTimeout(processingTimer);
       fill.style.width = '100%';
       result.className = 'upload-result error show';
       result.innerHTML = '❌ 上传异常: ' + esc(err.message);
@@ -522,6 +545,9 @@ function loadSearchCollections() {
         sel.appendChild(opt);
       }
       sel.value = cur;
+    })
+    .catch(function(err) {
+      console.error('加载 collections 失败:', err);
     });
 }
 

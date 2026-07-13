@@ -14,7 +14,7 @@ from typing import Optional
 
 from .models import Chunk, Document
 from .storage import get_store, VectorStore
-from .chunkers import UnstructuredChunker
+from .chunkers import PdfChunker
 from .extractors import extract_excel_rows, format_excel_row
 from .extractors import extract_pdf_text
 
@@ -87,8 +87,8 @@ def _process_pdf(file_path: str, file_name: str, file_size: int,
         "confidence": "text",
     }
 
-    # 3. Unstructured 智能切块
-    chunker = UnstructuredChunker()
+    # 3. PyMuPDF 结构分析切块
+    chunker = PdfChunker()
     chunks = chunker.chunk(full_text, base_meta, filepath=file_path)
 
     # 4. 生成唯一 ID 并入库

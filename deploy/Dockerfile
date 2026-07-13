@@ -16,6 +16,11 @@ COPY requirements.txt .
 # 先装 CPU 版 PyTorch（~400MB），再装其他依赖
 # sentence-transformers 依赖 torch，若 torch 已存在则不会重新拉 GPU 版
 # 注：用 --index-url 临时切换 PyTorch 官方源，不被清华源覆盖
+# 安装系统依赖（unstructured 需要 libmagic、poppler 等）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libmagic1 poppler-utils && \
+    rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
 

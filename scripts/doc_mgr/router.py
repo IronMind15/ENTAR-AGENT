@@ -48,41 +48,48 @@ def list_docs(collection: str = Query("", description="按 collection 过滤")):
 
     从 Chroma 中读取 metadata，按 file_name 字段归组。
     """
-    store = get_store()
-    collections = store.list_collections()
-    result: dict = {}
+    try:
+        store = get_store()
+        collections = store.list_collections()
+        result: dict = {}
 
-    for coll in collections:
-        if collection and coll != collection:
-            continue
+        for coll in collections:
+            if collection and coll != collection:
+                continue
 
-        data = store.get(coll)
-        if not data or not data.get("metadatas"):
-            result[coll] = {"count": 0, "files": []}
-            continue
+            data = store.get(coll)
+            if not data or not data.get("metadatas"):
+                result[coll] = {"count": 0, "files": []}
+                continue
 
-        # 按 file_name 分组
-        files: dict = {}
-        for meta in data["metadatas"]:
-            fn = meta.get("file_name", "unknown")
-            if fn not in files:
-                files[fn] = {
-                    "file_name": fn,
-                    "chunk_count": 0,
-                    "chapters": [],
-                }
-            files[fn]["chunk_count"] += 1
-            if meta.get("chapter"):
-                ch = meta["chapter"]
-                if ch not in files[fn]["chapters"]:
-                    files[fn]["chapters"].append(ch)
+            # 按 file_name 分组
+            files: dict = {}
+            for meta in data["metadatas"]:
+                fn = meta.get("file_name", "unknown")
+                if fn not in files:
+                    files[fn] = {
+                        "file_name": fn,
+                        "chunk_count": 0,
+                        "chapters": [],
+                    }
+                files[fn]["chunk_count"] += 1
+                if meta.get("chapter"):
+                    ch = meta["chapter"]
+                    if ch not in files[fn]["chapters"]:
+                        files[fn]["chapters"].append(ch)
 
-        result[coll] = {
-            "count": store.count(coll),
-            "files": sorted(files.values(), key=lambda x: x["file_name"]),
-        }
+            result[coll] = {
+                "count": store.count(coll),
+                "files": sorted(files.values(), key=lambda x: x["file_name"]),
+            }
 
-    return JSONResponse(result)
+        return JSONResponse(result)
+    except Exception as e:
+        logger.exception(f"获取文档列表失败: {e}")
+        return JSONResponse(
+            {"error": f"获取文档列表失败: {str(e)}"},
+            status_code=500,
+        )
 
 
 @router.post("/upload")
