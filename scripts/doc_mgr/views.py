@@ -267,10 +267,20 @@ ADMIN_HTML = r"""<!DOCTYPE html>
   <div id="tab-upload" class="tab-content">
     <div class="card">
       <h3>📤 上传文档</h3>
+      <div style="margin-bottom:16px">
+        <label style="font-size:13px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:6px">
+          文件归属类型
+        </label>
+        <select id="uploadCollection" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;background:var(--card);color:var(--text);outline:none">
+          <option value="standards" data-exts="pdf">📋 标准文档（PDF → 标准查询用）</option>
+          <option value="error_codes" data-exts="xlsx,xls">🔧 故障代码（Excel → 故障查询用）</option>
+        </select>
+        <p id="uploadTypeHint" style="font-size:12px;color:var(--text-secondary);margin-top:4px">📋 标准文档：上传 PDF 文件，自动切块入库到标准知识库</p>
+      </div>
       <div class="drop-zone" id="dropZone">
         <div class="icon">📄</div>
-        <p><strong>点击选择</strong> 或拖拽 PDF / Excel 文件到此处</p>
-        <p style="font-size:12px;margin-top:4px">支持 .pdf .xlsx .xls</p>
+        <p><strong>点击选择</strong> 或拖拽文件到此处</p>
+        <p style="font-size:12px;margin-top:4px" id="uploadFileTypes">支持 .pdf</p>
         <input type="file" id="fileInput" accept=".pdf,.xlsx,.xls" style="display:none">
       </div>
       <div class="upload-progress" id="uploadProgress">
@@ -438,6 +448,18 @@ function deleteDoc(collection, fileName) {
 (function initUpload() {
   var dz = document.getElementById('dropZone');
   var fi = document.getElementById('fileInput');
+  var sel = document.getElementById('uploadCollection');
+
+  // 切换类型时更新可上传的文件类型提示
+  sel.addEventListener('change', function() {
+    var opt = sel.options[sel.selectedIndex];
+    var exts = opt.getAttribute('data-exts');
+    var hint = document.getElementById('uploadTypeHint');
+    var types = document.getElementById('uploadFileTypes');
+    hint.textContent = opt.text;
+    types.textContent = '支持 .' + exts.replace(/,/g, ' .');
+    fi.accept = '.' + exts.replace(/,/g, ',.');
+  });
 
   dz.addEventListener('click', function() { fi.click(); });
 
@@ -481,6 +503,7 @@ function uploadFile(file) {
 
   var formData = new FormData();
   formData.append('file', file);
+  formData.append('collection', document.getElementById('uploadCollection').value);
 
   // 上传完成后切换为"处理中"状态（大文件处理可能需要 30s+）
   var processingTimer = setTimeout(function() {
@@ -566,7 +589,10 @@ function searchDocs() {
   if (coll) url += '&collection=' + encodeURIComponent(coll);
 
   fetch(url)
-    .then(function(r) { return r.json(); })
+    .then(function(r) {
+      if (!r.ok) throw new Error('搜索接口返回 ' + r.status + ' ' + r.statusText);
+      return r.json();
+    })
     .then(function(data) {
       if (coll) {
         renderSearchResults(data, resultsEl);

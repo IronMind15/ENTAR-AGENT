@@ -21,12 +21,14 @@ from .extractors import extract_pdf_text
 logger = logging.getLogger("doc_mgr.engine")
 
 
-def process_file(file_path: str, file_name: Optional[str] = None) -> Document:
+def process_file(file_path: str, file_name: Optional[str] = None,
+                 target_collection: Optional[str] = None) -> Document:
     """处理单个文件：提取 → 切块 → 入库
 
     Args:
         file_path: 文件绝对路径
         file_name: 文件名（上传时与临时路径不同名时使用）
+        target_collection: 目标 collection 名，不指定则由扩展名自动判断
 
     Returns:
         Document 对象，记录处理结果
@@ -39,9 +41,9 @@ def process_file(file_path: str, file_name: Optional[str] = None) -> Document:
     logger.info(f"开始处理: {name} ({size / 1024:.1f}KB)")
 
     if ext == ".pdf":
-        return _process_pdf(file_path, name, size, store)
+        return _process_pdf(file_path, name, size, store, target_collection)
     elif ext in (".xlsx", ".xls"):
-        return _process_excel(file_path, name, size, store)
+        return _process_excel(file_path, name, size, store, target_collection)
     else:
         logger.warning(f"不支持的文件类型: {ext}")
         return Document(
@@ -59,11 +61,11 @@ def process_files(file_paths: list[str]) -> list[Document]:
 # ==================== PDF 处理 ====================
 
 def _process_pdf(file_path: str, file_name: str, file_size: int,
-                 store: VectorStore) -> Document:
+                 store: VectorStore, target_collection: str = "standards") -> Document:
     """处理 PDF 文件"""
     doc = Document(
         file_name=file_name, file_path=file_path,
-        file_size=file_size, collection="standards",
+        file_size=file_size, collection=target_collection,
     )
 
     # 1. PyMuPDF 提取文字
@@ -105,11 +107,11 @@ def _process_pdf(file_path: str, file_name: str, file_size: int,
 # ==================== Excel 处理 ====================
 
 def _process_excel(file_path: str, file_name: str, file_size: int,
-                   store: VectorStore) -> Document:
+                   store: VectorStore, target_collection: str = "error_codes") -> Document:
     """处理 Excel 文件（故障代码）"""
     doc = Document(
         file_name=file_name, file_path=file_path,
-        file_size=file_size, collection="error_codes",
+        file_size=file_size, collection=target_collection,
     )
 
     # 1. 提取行数据

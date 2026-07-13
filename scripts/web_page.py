@@ -413,6 +413,7 @@ HOME_HTML = r"""<!DOCTYPE html>
   <div class="header">
     <h1>🔧 恩特小助手 <small>v2</small></h1>
     <div class="header-actions">
+      <button onclick="location.href='/admin'" title="文档管理（上传/管理知识库）">📂</button>
       <button id="themeBtn" onclick="toggleTheme()" title="切换暗黑模式">🌙</button>
       <button onclick="exportChat()" title="导出聊天记录">📤</button>
       <button onclick="showClearDialog()" title="清空对话">🗑</button>

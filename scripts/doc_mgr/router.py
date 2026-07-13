@@ -8,7 +8,7 @@
 import os
 import uuid
 import logging
-from fastapi import APIRouter, UploadFile, File, Query, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, Query, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from .engine import process_file
@@ -93,7 +93,10 @@ def list_docs(collection: str = Query("", description="按 collection 过滤")):
 
 
 @router.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(
+    file: UploadFile = File(...),
+    collection: str = Form(""),
+):
     """上传文件，自动处理入库
 
     支持格式: .pdf, .xlsx, .xls
@@ -117,7 +120,7 @@ async def upload_file(file: UploadFile = File(...)):
 
     # 处理
     try:
-        doc = process_file(save_path, file_name=file.filename)
+        doc = process_file(save_path, file_name=file.filename, target_collection=collection or None)
     except Exception as e:
         logger.exception(f"处理失败: {file.filename}")
         return JSONResponse({
