@@ -38,7 +38,7 @@ DATA_DIR = os.path.join(_PROJECT_ROOT, "data")
 CHROMA_DIR = os.path.join(_PROJECT_ROOT, "knowledge_base")
 
 # ===== 常量 =====
-EXCEL_FILE = "PCS参数表 V1.6.2.xlsx"
+EXCEL_FILE = os.path.join("fault_codes", "PCS参数表 V1.6.2.xlsx")
 SHEET_NAME = "遥信（DI）"
 START_ROW = 51  # 数据从第 51 行开始
 COLLECTION_NAME = "error_codes"
