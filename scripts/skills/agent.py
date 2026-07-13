@@ -34,13 +34,30 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "search_knowledge_base",
-            "description": "搜索 PCS 故障知识库，包含 PCS 故障代码（d4-1 等）的名称、原因、地址等详细信息。目前仅覆盖 PCS 产品故障数据，不包含公司制度、流程规范或技术文档。当用户询问 PCS 故障相关问题时，先使用此工具搜索。",
+            "description": "搜索 PCS 故障知识库。当用户问 PCS 故障代码（d4-1 等格式）、告警、停机、不启动等设备异常现象时使用。包含故障代码的名称、原因、地址、位地址等详细信息。只含 PCS 产品故障数据，不含行业标准或技术规范。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
                         "description": "搜索关键词，使用用户问题中的核心词（故障代码、现象描述、文档标题等）。"
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_standards",
+            "description": "搜索储能变流器/光伏行业标准。包含国家标准(GB/T、GB)、行业标准、国际标准(IEC、EN)等，覆盖安全要求、并网要求、检测方法、电气性能、绝缘配合等技术规范内容。当用户询问国家标准、行业规范、技术要求或标准编号时使用。不包含 PCS 故障代码。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "搜索关键词，使用用户问题中的核心词（标准编号、术语、检测项目、技术指标等）。"
                     }
                 },
                 "required": ["query"]
@@ -54,28 +71,26 @@ TOOLS = [
 SYSTEM_PROMPT = (
     "你是恩特小助手，恩特能源（天津恩特能源科技有限公司，品牌 ENTAR）内部使用的 AI 助手。"
     "使用你的人都是公司内部同事（测试、售后、研发、生产等岗位），不是外部产品用户。\n\n"
-    "你有一个 search_knowledge_base 工具，可以搜索 PCS 故障知识库（包含故障代码的名称、原因、地址等信息）。目前知识库仅覆盖 PCS 产品故障数据，不包含公司制度、流程规范或技术文档。\n\n"
-    "== 什么时候该搜索 ==\n\n"
-    "以下交互示例可以帮助你判断：\n\n"
-    "示例1 - 需要搜索（问故障代码）：\n"
-    "  用户：d4-1 是什么故障\n"
-    "  你：调用 search_knowledge_base(query=\"d4-1\") → 拿到结果后用自然语言解释\n\n"
-    "示例2 - 需要搜索（用自然语言描述故障）：\n"
-    "  用户：外部急停信号闭合是什么问题\n"
-    "  你：调用 search_knowledge_base(query=\"外部急停信号闭合\") → 用找到的结果回答\n\n"
-    "示例3 - 如果搜不到或用户问的与故障无关：\n"
-    "  用户：今天天气怎么样\n"
-    "  你：直接回答\"抱歉，我无法查询实时天气\"\n\n"
-    "  用户：公司报销流程是什么\n"
-    "  你：回复\"这个我不清楚，建议问一下相关负责人。目前我的知识库只覆盖了 PCS 故障数据。\"\n\n"
+    "你有两个搜索工具，可以根据用户问题判断使用哪一个：\n\n"
+    "1. search_knowledge_base（搜索 PCS 故障知识库）\n"
+    "   - 用户问：故障代码（d4-1 等）、设备报错、告警、停机、不启动、急停等设备异常现象\n"
+    "   - 示例：\"d4-1 是什么故障\" → search_knowledge_base(query=\"d4-1\")\n"
+    "   - 示例：\"报外部急停信号闭合\" → search_knowledge_base(query=\"外部急停信号闭合\")\n\n"
+    "2. search_standards（搜索行业标准）\n"
+    "   - 用户问：国家标准、行业规范、技术要求、标准编号（如 GB/T 34133、IEC 60664）、检测方法、电气参数要求等\n"
+    "   - 示例：\"并网电压要求是多少\" → search_standards(query=\"并网电压要求\")\n"
+    "   - 示例：\"GB/T 34133 里怎么检测效率\" → search_standards(query=\"GB/T 34133 效率检测\")\n"
+    "   - 示例：\"储能变流器的效率要求\" → search_standards(query=\"储能变流器 效率要求\")\n\n"
     "== 搜索关键词规则 ==\n"
-    "- 提取用户问题中的核心词，不要修改用户原词\n"
-    "- 一次只传一个最关键的关键词即可\n"
-    "- 不确定是否要搜时，最好先搜了再说\n\n"
+    "- 使用用户问题中的核心词，不要修改用户原词\n"
+    "- 一次调用只传一个最关键的关键词\n"
+    "- 不确定调用哪个工具时，根据问题内容选择最接近的那个\n"
+    "- 如果故障和标准都沾边，优先用更匹配的那个工具，不要两个都搜\n\n"
     "== 回答格式 ==\n"
     "- 先给出结论（1~2句总结）\n"
     "- 再展开关键信息\n"
     "- 用自然语言解释，不要直接丢原始数据\n"
+    "- 搜索到标准内容时，标注标准编号和章节，方便用户对照原文\n"
     "- 如果找到多条结果，说明各条的区别\n"
     "- 如果没有找到，直接说没找到，不编造\n"
     "- 回答最后可以问一句是否还需要进一步帮助\n\n"
@@ -183,6 +198,37 @@ def _execute_tool(tool_call: dict) -> str:
         clean_results = []
         for r in results:
             item = {k: v for k, v in r.items() if not k.startswith("_")}
+            clean_results.append(item)
+
+        return json.dumps({"found": True, "results": clean_results}, ensure_ascii=False)
+
+    if fn_name == "search_standards":
+        query = args.get("query", "").strip()
+        if not query:
+            return json.dumps({"error": "搜索关键词为空，请提供要搜索的内容"}, ensure_ascii=False)
+
+        logger.info(f"  工具调用: search_standards(query={query})")
+
+        # 延迟导入 standards_query
+        from skills.standards_query import search_kb as search_standards_kb
+
+        results = search_standards_kb(query)
+        if not results:
+            return json.dumps(
+                {"found": False, "results": [], "message": f"未找到与「{query}」相关的标准信息"},
+                ensure_ascii=False,
+            )
+
+        # 清理内部字段，保留 LLM 所需字段
+        clean_results = []
+        for r in results:
+            item = {
+                k: v for k, v in r.items()
+                if not k.startswith("_") or k == "_content"
+            }
+            # LLM 需要看到摘要内容来判断相关性
+            if "_content" in r:
+                item["content_summary"] = r["_content"]
             clean_results.append(item)
 
         return json.dumps({"found": True, "results": clean_results}, ensure_ascii=False)
