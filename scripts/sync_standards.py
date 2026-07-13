@@ -73,7 +73,7 @@ PAGE_NUM_PATTERN = re.compile(r'^\s*\d+\s*$')
 
 # 页眉页脚清理（常见的）
 FOOTER_PATTERNS = [
-    re.compile(r'^\s*GB/T\s+\d+[—\-]\d+X*\s*$'),   # GB/T 34133-XXXX
+    re.compile(r'^\s*GB/T\s+\d+[—\-–][\dX]+\s*$'),   # GB/T 34133-XXXX (含占位符X)
     re.compile(r'^\s*IEC\s+\d+[—\-].*$'),           # IEC 60664-1 ...
     re.compile(r'^\s*EN\s+\d+.*$'),                  # EN 50178 ...
     re.compile(r'^\s*第\s*\d+\s*页[，,]\s*共\s*\d+\s*页\s*$'),  # 第 X 页，共 X 页
@@ -254,13 +254,22 @@ def _is_valid_chapter_title(num: str, title: str) -> bool:
     # 纯数字/符号 → 不是标题
     if re.match(r'^[\d\s./\-—–()（）、,，;；:：]+$', title):
         return False
+    # 标题以标点/符号开头 → 截断碎片
+    if re.match(r'^[\.\:\;\,\、\。\：\;\，\)\]\)\d\s]', title):
+        return False
     # 含技术单位/符号 → 大概率是表格内容
-    if re.search(r'[μµk]V|mA|kHz|MHz|dB|W/m', title):
+    if re.search(r'[μµk]V|mA|kHz|MHz|dB|W/m|Û|Ü', title):
+        return False
+    # 含方括号引用标记 → 参考文献/脚注，非标题
+    if re.search(r'\[[\d\w., ]+\]', title):
         return False
     # 英文表格描述开头
     if re.match(r'^[12]\s+(For example|The terms|Electronic equipment|This includes)', title):
         return False
     if title.startswith(('<', '>', 'V', 'm', 'k', 'd', 'h', 'H')):
+        return False
+    # 以小写字母开头 → 非章节标题（英文标准）
+    if re.match(r'^[a-z]', title):
         return False
     # 含 "/" 的短文本 → 表格单元格
     if '/' in title and len(title) < 15:
@@ -276,6 +285,34 @@ def _is_valid_chapter_title(num: str, title: str) -> bool:
     # 含"分钟后"、"组A"、"限值/" → 表格内容
     if re.search(r'(分钟后|组[A-D]类|限值[/（]|测量距离)', title):
         return False
+
+    # ———— 英文/双语标准 的额外过滤 ————
+
+    # 正文句特征：含 "shall be"、"according to"、"refers to" 等
+    if re.search(r'(shall be|according to|refers to|based on|as defined|is defined|means the)', title, re.IGNORECASE):
+        return False
+
+    # "For example" / "Note" / "See" / "Refer" 开头 → 注释，非标题
+    if re.match(r'^(For example|Note[s]?\b|See\b|Refer\b|The terms\b|This includes\b|This means\b)', title, re.IGNORECASE):
+        return False
+
+    # 法语文本（IEC 双语标准的法语列）
+    if re.search(r'(Les |Des |Une |de la |dans le|est la|sont |entre |pour les|par les|sur le|aux |ces |leurs |leur )', title):
+        return False
+    if re.search(r'[éèêëàâùûçôöïîÉÈÊË]', title):
+        # 排除 "Insulation coordination" 等带重音的法语词 → 只有标题全是法语才排除
+        french_ratio = len(re.findall(r'[éèêëàâùûçôöïîÉÈÊË]', title)) / max(len(title), 1)
+        if french_ratio > 0.02:  # 超过2%字符是法语字母 → 法语内容
+            return False
+
+    # 句子式正文：以 "Low limits"、"High limits"、"Un," 等开头且带逗号
+    if re.match(r'^[A-Z][a-z]+[\s,]+', title):
+        if ',' in title or title.endswith((':', ';', ',')):
+            return False
+        # "Low limits for..." → 非标题
+        if re.match(r'^(Low|High|The |This |These |Those |Such |Each |Both |Some |Any |No[tn] )', title, re.IGNORECASE):
+            return False
+
     # 中文标准章节标题常见特征：含2个以上中文字符
     cn_chars = len(re.findall(r'[一-鿿]', title))
     if cn_chars >= 2:
@@ -287,6 +324,9 @@ def _is_valid_chapter_title(num: str, title: str) -> bool:
             return False
         # 排除纯技术参数描述
         if re.match(r'^[12]\s+[LU]', title):
+            return False
+        # 标题不应过长（>100字符 → 大概率是段落）
+        if len(title) > 100:
             return False
         return True
     return False

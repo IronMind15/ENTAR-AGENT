@@ -25,6 +25,7 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
 
 import openpyxl
+import chromadb
 from chromadb import PersistentClient
 from chromadb.utils import embedding_functions
 
@@ -167,7 +168,7 @@ def sync():
             if meta and meta.get("fault_code"):
                 existing_fault_codes.add(meta["fault_code"])
         logger.info(f"  [OK] Chroma 已有 {old_count} 条记录，{len(existing_fault_codes)} 个故障代码")
-    except ValueError:
+    except (ValueError, chromadb.errors.NotFoundError):
         collection = client.create_collection(
             name=COLLECTION_NAME,
             embedding_function=ef,

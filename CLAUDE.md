@@ -20,8 +20,8 @@
 - 两级查询策略：
   - 精确匹配故障代码（d4-1 等）→ 直接返回（不调 LLM，秒回）
   - 语义搜索名称/原因/自然语言 → Chroma 检索 → 返回格式化结果
-- 聊天托底：非故障自然语言问题 → DeepSeek 直接回答（chat.py）
-- 路由逻辑：故障代码/关键词 → error_query，否则 → chat（main.py + dingtalk_bot.py 统一）
+- 聊天托底：非故障自然语言问题 → DeepSeek 直接回答（agent.py 统一路由 Agent 循环）
+- 路由逻辑：故障代码/关键词 → error_query，否则 → 走 Agent 循环（main.py + dingtalk_bot.py 统一）
 - ✅ Web 页面可访问（http://localhost:8000）
 - ✅ 钉钉 Stream 模式机器人已上线（搜索「恩特小助手」进入单聊）
 - ✅ 局域网共享（防火墙放行端口 8000）
@@ -32,45 +32,54 @@
 ```
 D:\ENTAR_AGENT\
 ├── CLAUDE.md                                    # ← 项目级指南（本文件）
+├── CHANGELOG.md                                 # 版本变更日志
 ├── README.md                                    # 项目说明
 ├── .gitignore                                   # Git 忽略规则
+├── requirements.txt                             # Python 依赖清单
 │
-├── data/                                        # 📁 Excel 数据源
-│   └── PCS参数表 V1.6.2.xlsx                    # 实际工程 PCS 参数表（133 条故障）
+├── data/                                        # 📁 数据目录
+│   ├── fault_codes/                             #    故障代码 Excel 数据
+│   │   └── PCS参数表 V1.6.2.xlsx                #    实际工程 PCS 参数表（133 条故障）
+│   ├── standards/                               #    标准文档 PDF 文件
+│   └── chat_memory.json                         #    会话记忆（自动生成，已 gitignore）
 │
 ├── knowledge_base/                              # 💾 Chroma 向量数据库（自动管理，不退版本）
 │
 ├── scripts/                                     # 📂 核心 Python 代码
+│   ├── config.py                                #   配置模块
 │   ├── local_config.py                          # 🔑 API Key / 钉钉凭证（已 gitignore）
 │   ├── main.py                                  # 🚀 统一入口（FastAPI + 钉钉机器人）
 │   ├── sync_kb.py                               # 🔄 Excel → Chroma 同步脚本
+│   ├── sync_standards.py                        # 📄 标准 PDF → Chroma 同步脚本
+│   ├── web_page.py                              # 🌐 网页处理脚本
 │   └── skills/
 │       ├── __init__.py
+│       ├── agent.py                             # 🤖 Agent 循环路由（聊天托底）
+│       ├── dingtalk_bot.py                      # 🤖 钉钉 Stream 模式机器人
 │       ├── error_query.py                       # 🔧 故障查询（两级查询策略）
-│       ├── chat.py                              # 💬 通用聊天托底（DeepSeek 直接对话）
-│       └── dingtalk_bot.py                      # 🤖 钉钉 Stream 模式机器人
+│       ├── memory.py                            # 💭 会话记忆管理
+│       └── standards_query.py                   # 📋 标准文档查询
 │
 ├── docs/                                        # 📄 全部文档集中管理
 │   ├── 需求文档-恩特小助手文档制作.md             # 需求文档
 │   ├── 恩特小助手使用说明_20260706_151451.docx   # 使用说明（面向钉钉用户）
 │   ├── 恩特小助手设计说明.docx                   # 设计说明（面向开发者）
 │   ├── 恩特小助手-PCS故障查询系统架构.pptx        # 架构图
+│   ├── 恩特小助手介绍页.html                     # 介绍页 HTML
+│   ├── 恩特小助手架构图.drawio                   # 架构图源文件
+│   ├── 恩特小助手架构图.html                     # 架构图 HTML 导出
+│   ├── 标准查询功能设计文档.md                    # 标准查询功能设计
+│   ├── git-commands.md                           # Git 常用命令备忘
+│   ├── tech-stack-overview.md                    # 技术栈概览
 │   ├── AI_Agent_Workflow_Research_Report.md     # 深度调研报告
 │   └── error_query_README_旧版归档.md           # 旧版 README（历史参考）
 │
-├── .claude\                                     # Claude Code 配置
+├── deploy/                                      # 🐳 Docker 部署配置
+│   ├── Dockerfile
+│   ├── docker-compose.yml
+│   └── pack.sh
 │
-└── D:\ENTAR_工作产出\                           # （外部）工作产出归档
-    ├── 归档PPT素材/                             # PPT 源文件、汇报材料
-    │   ├── Codex_vs_Claude_对比分析.pptx
-    │   ├── ppt-master_Codex_vs_Claude.pptx
-    │   └── ppt-master/
-    ├── 其他项目/                                # 与本项目无关的独立项目
-    │   └── felo-skills/
-    └── 一次性工具脚本/                          # 一次性使用的生成脚本
-        ├── create_ppt.py
-        ├── generate_ppt.py
-        └── generate_docs.py
+└── .claude\                                     # Claude Code 配置
 ```
 
 ## 技术架构
@@ -162,19 +171,26 @@ D:\ENTAR_AGENT\
 
 | 组件 | 选型 | 说明 |
 |------|------|------|
-| 数据源 | PCS参数表 V1.6.2.xlsx | 遥信（DI）sheet，第 51~183 行，133 条 |
+| 数据源 | PCS参数表 V1.6.2.xlsx + 标准 PDF | 遥信（DI）sheet 133 条 + 国标/行标/国际标准 |
 | 向量数据库 | Chroma | 本地持久化，支持精确 + 语义搜索 |
 | Embedding | BAAI/bge-small-zh-v1.5 | 国产中文嵌入，30MB，CPU 运行 |
-| LLM | DeepSeek API (deepseek-v4-flash) | 仅用于自然语言关键词提取 |
+| LLM | DeepSeek API (deepseek-v4-flash) | 关键词提取 + 聊天托底 |
 | Web 框架 | FastAPI | Web 页面 + HTTP API 入口 |
 | 钉钉 SDK | dingtalk-stream | Stream 模式，WebSocket 长连接，无需公网 IP |
-| 同步脚本 | sync_kb.py | Excel → Chroma 重建同步 |
+| 故障同步 | sync_kb.py | Excel 故障代码 → Chroma 同步 |
+| 标准同步 | sync_standards.py | 标准 PDF → Chroma 同步 |
+| Agent 路由 | agent.py | 统一 Agent 循环：路由、聊天托底、记忆管理 |
+| 标准查询 | standards_query.py | 标准文档检索工具 |
+| 部署 | Docker + docker-compose | 可选容器化部署 |
 
 ## 运行方式
 
 ```bash
-# 同步知识库（修改 Excel 后运行）
+# 同步故障代码知识库（修改 Excel 后运行）
 python scripts/sync_kb.py
+
+# 同步标准文档知识库（添加标准 PDF 后运行）
+python scripts/sync_standards.py
 
 # 启动服务（Web + 钉钉机器人同时启动）
 python scripts/main.py
@@ -184,6 +200,9 @@ python scripts/main.py
 
 # 防火墙放行（局域网共享需要）
 netsh advfirewall firewall add rule name="恩特小助手 8000" dir=in action=allow protocol=TCP localport=8000
+
+# Docker 部署（可选）
+docker-compose -f deploy/docker-compose.yml up -d
 ```
 
 ## 钉钉机器人部署流程
@@ -211,8 +230,8 @@ netsh advfirewall firewall add rule name="恩特小助手 8000" dir=in action=al
 - [x] 局域网共享
 - [x] Git 版本管理初始化
 - [x] 项目结构整理
-- [ ] 收集更多故障代码数据（补充其他 sheet）
-- [ ] 云服务器部署（解决 7×24 在线问题）
+- [x] 标准文档查询（第一阶段：文本 PDF 入库）
+- [ ] 扫描 PDF 标准 OCR 识别
 - [ ] 第二、三步规划（参考调研报告）
 - [ ] 技能扩展：经验查询、钉钉知识库对接
 
@@ -223,3 +242,4 @@ netsh advfirewall firewall add rule name="恩特小助手 8000" dir=in action=al
 - 服务跑在本地电脑，息屏/睡眠会断开钉钉连接
 - `dingtalk_stream.ChatbotHandler.process()` 是 async 方法，但 SDK 内的 reply_* 方法是同步的，不要对它们用 `await`
 - 当前使用方式为钉钉单聊（搜索机器人），群聊功能暂未开放
+- `logs/` 目录运行时自动生成，已被 `.gitignore` 忽略不退版本

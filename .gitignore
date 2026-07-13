@@ -15,6 +15,7 @@ knowledge_base/
 
 # ── 运行日志 ──
 *.log
+logs/
 
 # ── IDE ──
 .vscode/
