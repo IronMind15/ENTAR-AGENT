@@ -43,8 +43,10 @@ import uvicorn
 from skills import get_matched_skill, get_skill_list
 from skills.dingtalk_bot import start_bot as start_dingtalk_bot
 from web_page import HOME_HTML
+from doc_mgr.router import router as admin_router
 
 app = FastAPI(title="恩特小助手")
+app.include_router(admin_router)
 
 
 @app.get("/", response_class=HTMLResponse)
