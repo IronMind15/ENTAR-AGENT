@@ -277,6 +277,16 @@ def _handle_impl(query: str, user_id: str = "") -> dict:
             row = match["metadata"].get("row_num", "")
             return {"answer": answer, "source": f"遥信（DI）表 第{row}行"}
 
+    # ===== 第 1.5 关：快速通道（精确标准编号，毫秒级） =====
+    from skills.standards_query import extract_standard_id, exact_match_by_std_id, format_exact_result as format_std_exact_result
+
+    std_id = extract_standard_id(q)
+    if std_id:
+        match = exact_match_by_std_id(std_id)
+        if match:
+            answer = format_std_exact_result(match["metadata"])
+            return {"answer": answer, "source": f"标准编号快速匹配"}
+
     # ===== 第 2 关：Agent 通道（LLM + 工具调用） =====
     if not DEEPSEEK_API_KEY:
         logger.warning("DEEPSEEK_API_KEY 未配置，Agent 不可用")

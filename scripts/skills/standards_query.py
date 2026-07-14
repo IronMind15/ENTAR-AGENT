@@ -23,6 +23,14 @@ logger = logging.getLogger("standards_query")
 
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
+# ===== 标准编号正则表达式 =====
+# 匹配格式：GB/T 34133-2023, EN50178, IEC 60664-1, GB/T 16935.1-2008 等
+STANDARD_ID_PATTERN = re.compile(
+    r'((?:GB|GB/T|EN|IEC|ISO|ANSI|UL|DIN|BS|JIS|NF|UNI|SAA|CSA|KS)'
+    r'[\s/]?[\d]+(?:[.\-]\d+)*(?:[-.]?\d{4})?)',
+    re.IGNORECASE
+)
+
 # ===== 路径 =====
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(_SCRIPT_DIR))
@@ -66,8 +74,55 @@ def _get_collection():
     return _collection
 
 
+def _extract_standard_id(query: str) -> str | None:
+    """从查询中提取标准编号"""
+    m = STANDARD_ID_PATTERN.search(query)
+    if m:
+        return m.group(1).strip()
+    return None
+
+
+def _exact_match_by_std_id(std_id: str) -> dict | None:
+    """精确匹配标准编号（metadata 过滤，不调向量搜索）
+
+    支持模糊匹配：GB/T 34133-2023 可匹配 GB/T 34133-2023
+    """
+    collection = _get_collection()
+    if collection is None:
+        return None
+
+    # 尝试精确匹配
+    try:
+        result = collection.get(where={"std_id": std_id})
+        if result and result.get("metadatas") and result["metadatas"]:
+            meta = result["metadatas"][0]
+            return {"metadata": meta}
+    except Exception:
+        pass
+
+    # 尝试模糊匹配（去除空格和特殊字符）
+    normalized_id = re.sub(r'[\s/\-.]', '', std_id.lower())
+    try:
+        # 获取所有记录进行客户端过滤
+        all_results = collection.get()
+        if all_results and all_results.get("metadatas"):
+            for meta in all_results["metadatas"]:
+                if meta and "std_id" in meta:
+                    db_normalized = re.sub(r'[\s/\-.]', '', meta["std_id"].lower())
+                    if db_normalized == normalized_id:
+                        return {"metadata": meta}
+    except Exception:
+        pass
+
+    return None
+
+
 def search_kb(query: str) -> list[dict]:
     """搜索标准知识库，返回结构化标准信息列表（JSON 格式，供 LLM 工具调用使用）
+
+    查询策略：
+      1. 先尝试精确标准编号匹配
+      2. 未命中则语义搜索
 
     Args:
         query: 搜索关键词
@@ -79,6 +134,17 @@ def search_kb(query: str) -> list[dict]:
     if not full_text:
         return []
 
+    # ===== 快速通道：精确标准编号匹配 =====
+    std_id = _extract_standard_id(full_text)
+    if std_id:
+        match = _exact_match_by_std_id(std_id)
+        if match:
+            meta = dict(match["metadata"])
+            meta["_match_type"] = "exact"
+            meta["_score"] = 0.0
+            return [meta]
+
+    # ===== 语义搜索 =====
     collection = _get_collection()
     if collection is None:
         return []
@@ -183,3 +249,15 @@ def format_standard_results(results: list[dict], query: str) -> str | None:
 def format_exact_result(meta: dict) -> str:
     """格式化精确匹配结果（与 error_query 兼容的接口）"""
     return format_standard_result(meta)
+
+
+# ===== 公共 API（供 agent.py 等模块调用） =====
+
+def extract_standard_id(query: str) -> str | None:
+    """从查询中提取标准编号（供 agent.py 快速通道使用）"""
+    return _extract_standard_id(query)
+
+
+def exact_match_by_std_id(std_id: str) -> dict | None:
+    """精确匹配标准编号（供 agent.py 快速通道使用）"""
+    return _exact_match_by_std_id(std_id)
