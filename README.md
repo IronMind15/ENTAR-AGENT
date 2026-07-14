@@ -17,6 +17,8 @@
 | **文档管理子系统** | ✅ **v1.2.1** | Web 管理页面上传/搜索/删除文档 |
 | **PDF 智能切块** | ✅ **v1.2.1** | PyMuPDF 结构分析，按章节自动切块入库 |
 | **存储抽象层** | ✅ **v1.2.1** | VectorStore ABC，切换 Qdrant 只需改一处 |
+| **扫描 PDF OCR** | ✅ **v1.2.2** | MinerU 大模型视觉识别，扫描 PDF → Markdown → 入库 |
+| **Markdown 切块** | ✅ **v1.2.2** | 按标题层级智能切块，支持中文标准章节号 |
 | 云服务器部署 | ✅ v1.0 | Ubuntu 22.04 + 宝塔面板 7×24 |
 | Docker 部署 | ✅ v1.1 | CPU torch 优化，镜像瘦身 |
 | 局域网共享 | ✅ 已完成 | 同 WiFi 可访问 |
@@ -134,7 +136,8 @@ D:\ENTAR_AGENT\
 ├── README.md                          # 本文件
 ├── CHANGELOG.md                       # 版本更新日志
 ├── data/
-│   └── PCS参数表 V1.6.2.xlsx          # ⚡ 实际工程 PCS 参数表
+│   ├── PCS参数表 V1.6.2.xlsx          # ⚡ 实际工程 PCS 参数表
+│   └── standards/                     # 📄 标准文档（含 MinerU 提取输出）
 ├── knowledge_base/                    # 💾 Chroma 向量库（自动生成）
 ├── scripts/
 │   ├── local_config.py                # 🔑 凭证配置（已 gitignore）
@@ -142,6 +145,8 @@ D:\ENTAR_AGENT\
 │   ├── web_page.py                    # 🖥️ Web 页面独立组件
 │   ├── sync_kb.py                     # 🔄 知识库同步（薄包装→doc_mgr）
 │   ├── sync_standards.py              # 📄 标准同步脚本（薄包装→doc_mgr）
+│   ├── sync_mineru.py                 # 🆕 MinerU 输出批量同步脚本
+│   ├── mineru_extract.py              # 🆕 MinerU 扫描 PDF 提取工具
 │   ├── doc_mgr/                       # 🆕 v2.0 文档管理子系统
 │   │   ├── __init__.py                # 包导出
 │   │   ├── models.py                  # 数据模型
@@ -151,6 +156,7 @@ D:\ENTAR_AGENT\
 │   │   ├── views.py                   # 管理页面 HTML（三 Tab 界面）
 │   │   ├── chunkers/                  # 切块器
 │   │   │   ├── pymupdf_chunker.py     # ⭐ PyMuPDF 结构分析切块
+│   │   │   ├── markdown_chunker.py    # 🆕 Markdown 标题层级切块
 │   │   │   ├── unstructured_chunk.py  # Unstructured 备用
 │   │   │   └── fallback.py            # 滑动窗口回退
 │   │   └── extractors/               # 文本提取
@@ -223,6 +229,7 @@ python scripts/sync_kb.py
 
 | 版本 | 日期 | 亮点 |
 |------|------|------|
+| **v1.2.2** | **2026-07-14** | **扫描 PDF OCR — MinerU 大模型视觉识别 + Markdown 切块入库** |
 | **v1.2.1** | **2026-07-13** | **文档管理子系统 — PDF 转换技术栈升级 + 统一上传/切块/入库** |
 | v1.1 | 2026-07-09 | 记忆系统 + RAG Agent 升级 |
 | v1.0 | 2026-07-09 | 第一版正式上线（故障查询 + 钉钉机器人 + Web） |
@@ -252,11 +259,11 @@ python scripts/sync_kb.py
 - [x] **文档管理子系统（v1.2.1）**
 - [x] **PDF 智能切块入库（PyMuPDF 替代 Unstructured）**
 - [x] **存储抽象层**
+- [x] **扫描 PDF OCR 识别（MinerU 大模型视觉，v1.2.2）**
 - [ ] 钉钉小助手文件上传功能（接收文件自动入库）
-- [ ] 扫描 PDF OCR 识别
 - [ ] 综合测试 + 上线服务器
 - [ ] Qdrant 向量库切换
 
 ---
 
-*恩特能源 · 内部工具 · v1.2.1*
+*恩特能源 · 内部工具 · v1.2.2*
