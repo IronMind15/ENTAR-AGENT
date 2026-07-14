@@ -30,6 +30,35 @@ git commit --amend --no-edit   # 补到上一个提交（不改说明文字）
 git commit --amend -m "新说明"  # 补到上一个提交（顺便改说明）
 ```
 
+## 🛰️ 代理配置（国内环境）
+
+```bash
+# 查看当前代理配置
+git config --global --list | grep proxy
+
+# 设置代理（Clash 默认端口 7890，走 HTTP 不要走 SOCKS5）
+git config --global http.proxy http://127.0.0.1:7890
+git config --global https.proxy http://127.0.0.1:7890
+
+# 清除代理
+git config --global --unset http.proxy
+git config --global --unset https.proxy
+```
+
+> ⚠️ **Windows Git 不支持 socks5:// 协议**（底层用 .NET ServicePointManager），即使代理工具只开了 SOCKS5，也配成 `http://127.0.0.1:端口` 形式 —— 大多数现代代理工具（Clash/Mihomo 等）的端口同时兼容 HTTP CONNECT。
+
+## ⛔ 不要用 ghproxy 做推送
+
+```bash
+# 查看是否有 URL 重写规则（ghproxy 等）
+git config --global --list | grep insteadof
+
+# 如果有的话删掉（不改这个只改 remote URL 没用）
+git config --global --unset url.https://ghproxy.net/https://github.com/.insteadof
+```
+
+`ghproxy.net` 是**下载加速代理**，不适合 `git push` —— 推送 68MB 以上的数据包极易触发代理超时。正确做法是用原生 GitHub 地址 + 本地代理。
+
 ## 📤 推送与同步
 
 ```bash
@@ -84,6 +113,11 @@ git push -u origin master      # 首次推送，建立追踪关系
 ## 实战流程 (恩特小助手发版)
 
 ```
+# 0. 推送前确认代理（国内环境）
+git remote -v                                    # 确认是原生 GitHub 地址
+git config --global http.proxy http://127.0.0.1:7890   # Clash 代理
+git config --global https.proxy http://127.0.0.1:7890
+
 # 1. 看状态
 git status
 git log --oneline v1.0..HEAD     # 确认有哪些新提交
@@ -98,7 +132,8 @@ git commit -m "📝 更新版本日志和说明"
 git tag -a v1.2 -m "版本说明"
 
 # 4. 推送
-git push origin master --tags
+git push origin master
+git push origin --tags
 
 # 5. 如果漏了文件想补
 git add 漏掉的文件
