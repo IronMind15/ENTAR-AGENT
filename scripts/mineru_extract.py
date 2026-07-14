@@ -15,6 +15,7 @@ import io
 import json
 import time
 import argparse
+import logging
 import requests
 from pathlib import Path
 
@@ -23,6 +24,13 @@ if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger("mineru_extract")
 
 # 配置
 MINERU_API_BASE = "https://mineru.net/api/v4"
@@ -78,7 +86,7 @@ def upload_file(upload_url: str, file_path: str) -> None:
     with open(file_path, 'rb') as f:
         resp = requests.put(upload_url, data=f)
     if resp.status_code == 200:
-        print(f"  ✅ 上传成功")
+        logger.info(f"  ✅ 上传成功")
     else:
         raise Exception(f"上传失败: {resp.status_code} - {resp.text[:200]}")
 
@@ -124,30 +132,30 @@ def extract_pdf(file_path: str, output_dir: str, model: str = "vlm") -> str:
     file_path = os.path.abspath(file_path)
     file_name = os.path.basename(file_path)
 
-    print(f"\n📄 正在提取: {file_name}")
+    logger.info(f"\n📄 正在提取: {file_name}")
 
     # 1. 获取上传 URL
-    print("  → 获取上传 URL...")
+    logger.info("  → 获取上传 URL...")
     result = get_upload_urls([file_name], model_version=model)
 
     batch_id = result["batch_id"]
     urls = result["file_urls"]
     headers = result.get("headers", [{}])
-    print(f"  → batch_id: {batch_id}")
+    logger.info(f"  → batch_id: {batch_id}")
 
     # 2. 上传文件（官方示例方式）
-    print("  → 上传文件...")
+    logger.info("  → 上传文件...")
     content_type = headers[0].get("Content-Type", "application/pdf") if headers else "application/pdf"
     for i in range(len(urls)):
         with open(file_path, 'rb') as f:
             res_upload = requests.put(urls[i], data=f, headers={"Content-Type": content_type})
             if res_upload.status_code == 200:
-                print(f"  ✅ 上传成功")
+                logger.info(f"  ✅ 上传成功")
             else:
                 raise Exception(f"上传失败: {res_upload.status_code} - {res_upload.text[:200]}")
 
     # 3. 等待处理完成
-    print("  → 等待处理...")
+    logger.info("  → 等待处理...")
     max_wait = 300  # 最多等待5分钟
     start_time = time.time()
 
@@ -156,7 +164,7 @@ def extract_pdf(file_path: str, output_dir: str, model: str = "vlm") -> str:
         state = status.get("state", "unknown")
         is_done = status.get("is_done", False)
         elapsed = int(time.time() - start_time)
-        print(f"  → 状态: {state} ({elapsed}s)")
+        logger.info(f"  → 状态: {state} ({elapsed}s)")
 
         if is_done or state == "done":
             break
@@ -168,7 +176,7 @@ def extract_pdf(file_path: str, output_dir: str, model: str = "vlm") -> str:
         raise Exception(f"等待超时（{max_wait}s）")
 
     # 4. 获取结果
-    print("  → 获取结果...")
+    logger.info("  → 获取结果...")
     result = get_task_status(batch_id)
 
     # 5. 下载结果（注意：API 返回的是 extract_result，不是 extract_results）
@@ -179,7 +187,7 @@ def extract_pdf(file_path: str, output_dir: str, model: str = "vlm") -> str:
         if zip_url:
             zip_path = os.path.join(output_dir, f"{Path(file_name).stem}.zip")
             download_result(zip_url, zip_path)
-            print(f"  ✅ 已保存: {zip_path}")
+            logger.info(f"  ✅ 已保存: {zip_path}")
             return zip_path
 
         # 或者下载 Markdown
@@ -188,7 +196,7 @@ def extract_pdf(file_path: str, output_dir: str, model: str = "vlm") -> str:
             md_path = os.path.join(output_dir, f"{Path(file_name).stem}.md")
             with open(md_path, "w", encoding="utf-8") as f:
                 f.write(md_content)
-            print(f"  ✅ 已保存: {md_path}")
+            logger.info(f"  ✅ 已保存: {md_path}")
             return md_path
 
     # 兜底：尝试直接从 result 获取
@@ -196,7 +204,7 @@ def extract_pdf(file_path: str, output_dir: str, model: str = "vlm") -> str:
     if zip_url:
         zip_path = os.path.join(output_dir, f"{Path(file_name).stem}.zip")
         download_result(zip_url, zip_path)
-        print(f"  ✅ 已保存: {zip_path}")
+        logger.info(f"  ✅ 已保存: {zip_path}")
         return zip_path
 
     raise Exception(f"未获取到结果")
@@ -218,10 +226,10 @@ def batch_extract(input_dir: str, output_dir: str, model: str = "vlm") -> list:
 
     pdf_files = list(Path(input_dir).glob("*.pdf"))
     if not pdf_files:
-        print("❌ 未找到 PDF 文件")
+        logger.error("❌ 未找到 PDF 文件")
         return []
 
-    print(f"📚 找到 {len(pdf_files)} 个 PDF 文件")
+    logger.info(f"📚 找到 {len(pdf_files)} 个 PDF 文件")
 
     results = []
     for pdf_file in pdf_files:
@@ -229,7 +237,7 @@ def batch_extract(input_dir: str, output_dir: str, model: str = "vlm") -> list:
             result = extract_pdf(str(pdf_file), output_dir, model)
             results.append({"file": str(pdf_file), "status": "success", "output": result})
         except Exception as e:
-            print(f"  ❌ 提取失败: {e}")
+            logger.error(f"  ❌ 提取失败: {e}")
             results.append({"file": str(pdf_file), "status": "failed", "error": str(e)})
 
     return results
@@ -246,10 +254,10 @@ if __name__ == "__main__":
     # 加载 token
     token = load_token()
     if not token:
-        print("❌ 未找到 Token，请先运行: mineru-open-api auth")
+        logger.error("❌ 未找到 Token，请先运行: mineru-open-api auth")
         sys.exit(1)
 
-    print(f"🔑 Token: {token[:10]}...")
+    logger.info(f"🔑 Token: {token[:10]}...")
 
     # 批量模式
     if args.batch:
@@ -258,7 +266,7 @@ if __name__ == "__main__":
         results = batch_extract(input_dir, output_dir)
 
         success = sum(1 for r in results if r["status"] == "success")
-        print(f"\n📊 完成: {success}/{len(results)} 成功")
+        logger.info(f"\n📊 完成: {success}/{len(results)} 成功")
         sys.exit(0)
 
     # 单文件模式
@@ -270,4 +278,4 @@ if __name__ == "__main__":
     os.makedirs(output_dir, exist_ok=True)
 
     result = extract_pdf(args.file, output_dir)
-    print(f"\n✅ 提取完成: {result}")
+    logger.info(f"\n✅ 提取完成: {result}")

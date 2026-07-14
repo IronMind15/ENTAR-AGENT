@@ -42,6 +42,9 @@ SEARCH_TOP_K = 5
 DISTANCE_THRESHOLD_HIGH = 0.6
 DISTANCE_THRESHOLD_MEDIUM = 0.9
 
+# 搜索结果最小数量（低于此数量时提示用户换种问法）
+MIN_RESULTS_THRESHOLD = 1
+
 # ===== Chroma 客户端（延迟初始化）=====
 _client = None
 _ef = None
@@ -154,8 +157,8 @@ def search_kb(query: str) -> list[dict]:
             query_texts=[full_text],
             n_results=SEARCH_TOP_K,
         )
-    except Exception:
-        logger.exception("Chroma 语义搜索失败")
+    except Exception as e:
+        logger.error(f"Chroma 语义搜索失败: {e}")
         return []
 
     if not results or not results.get("documents") or not results["documents"][0]:
@@ -223,6 +226,10 @@ def format_standard_results(results: list[dict], query: str) -> str | None:
         格式化文本，或 None（无结果时）
     """
     if not results:
+        return None
+
+    # 检查结果数量是否达到最小阈值
+    if len(results) < MIN_RESULTS_THRESHOLD:
         return None
 
     header = f"📋 找到 {len(results)} 条相关标准内容："

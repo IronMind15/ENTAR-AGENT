@@ -5,6 +5,7 @@ sentence-transformers==5.6.0
 openpyxl==3.1.5
 httpx==0.28.1
 dingtalk-stream==0.24.3
+requests>=2.28.0  # MinerU API 调用需要
 
 # ===== PDF 处理（doc_mgr 模块） =====
 # PyMuPDF — PDF 文字提取 + 标准编号识别（fitz）
@@ -15,3 +16,7 @@ unstructured[pdf]==0.16.0
 # ===== OCR 扫描 PDF（可选，PaddlePaddle 需单独安装） =====
 # PaddleOCR==3.7.0
 # paddlepaddle==3.2.2  # CPU 版，GPU 版请安装 paddlepaddle-gpu
+
+# ===== MinerU 大模型视觉识别（可选，用于扫描 PDF OCR） =====
+# MinerU 提供 Python API，无需额外依赖，只需配置 token
+# 详细使用方法见 scripts/mineru_extract.py

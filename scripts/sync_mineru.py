@@ -108,9 +108,9 @@ def main():
 
     if args.list:
         for f in files:
-            print(f"  📄 {f['folder_name']}")
-            print(f"     MD: {f['md_path']}")
-            print(f"     图片: {f['images_dir'] or '无'}")
+            logger.info(f"  📄 {f['folder_name']}")
+            logger.info(f"     MD: {f['md_path']}")
+            logger.info(f"     图片: {f['images_dir'] or '无'}")
         return
 
     # 过滤指定文件
@@ -129,25 +129,25 @@ def main():
     for f in files:
         result = process_single(f["md_path"], f["folder_name"], store)
         results.append(result)
-        print()
+        logger.info("")
 
     # 汇总
     success = sum(1 for r in results if r["status"] == "done")
     total_chunks = sum(r["chunk_count"] for r in results)
 
-    print("=" * 60)
-    print(f"📊 处理完成: {success}/{len(results)} 成功")
-    print(f"   总切块数: {total_chunks}")
-    print(f"   standards collection: {store.count('standards')} 条")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info(f"📊 处理完成: {success}/{len(results)} 成功")
+    logger.info(f"   总切块数: {total_chunks}")
+    logger.info(f"   standards collection: {store.count('standards')} 条")
+    logger.info("=" * 60)
 
     # 显示详细结果
     for r in results:
         status_icon = "✅" if r["status"] == "done" else "❌"
-        print(f"  {status_icon} {r['folder']}")
+        logger.info(f"  {status_icon} {r['folder']}")
         if r.get("std_id"):
-            print(f"     标准: {r['std_id']} {r.get('std_title', '')[:30]}")
-        print(f"     切块: {r['chunk_count']} 条 | {r['message']}")
+            logger.info(f"     标准: {r['std_id']} {r.get('std_title', '')[:30]}")
+        logger.info(f"     切块: {r['chunk_count']} 条 | {r['message']}")
 
 
 if __name__ == "__main__":

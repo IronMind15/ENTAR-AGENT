@@ -68,6 +68,9 @@ SEMANTIC_SEARCH_TOP_K = 5
 DISTANCE_THRESHOLD_HIGH = 0.6
 DISTANCE_THRESHOLD_MEDIUM = 0.9
 
+# 搜索结果最小数量（低于此数量时提示用户换种问法）
+MIN_RESULTS_THRESHOLD = 1
+
 NL_MARKERS = ["的", "了", "吗", "呢", "吧", "是", "怎么回事", "怎么",
               "为什么", "如何", "怎么办", "什么", "哪个", "报错",
               "故障", "查一下", "请问"]
@@ -247,6 +250,10 @@ def _format_semantic_results(results: dict, query: str) -> str | None:
     metas = results["metadatas"][0]
     dists = results.get("distances", [None])[0] if results.get("distances") else None
 
+    # 检查结果数量是否达到最小阈值
+    if len(docs) < MIN_RESULTS_THRESHOLD:
+        return None
+
     header = f"🔍 找到 {len(docs)} 条相关信息："
 
     result_blocks = []
@@ -373,8 +380,8 @@ def search_kb(query: str) -> list[dict]:
             query_texts=[query],
             n_results=SEMANTIC_SEARCH_TOP_K,
         )
-    except Exception:
-        logger.exception("Chroma 语义搜索失败")
+    except Exception as e:
+        logger.error(f"Chroma 语义搜索失败: {e}")
         return []
 
     if not results or not results.get("documents") or not results["documents"][0]:
