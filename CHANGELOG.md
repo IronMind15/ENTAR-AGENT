@@ -1,5 +1,28 @@
 # 恩特小助手 更新日志
 
+## v1.2.3（2026-07-14）
+
+钉钉文件接收功能 + 代码结构优化：
+
+### 新增
+
+- **钉钉文件接收功能**（`scripts/file_handler.py`）：支持用户通过钉钉发送文件（PDF、Excel、图片等），自动下载并保存到服务器
+- **文件保存目录**：`data/uploads/用户名_ID/日期/`，按用户和日期分类存储
+- **System Prompt 外置**（`scripts/prompts/system_prompt.txt`）：将 LLM 提示词从代码中分离，便于维护和迭代
+
+### 优化
+
+- **钉钉机器人处理器**（`dingtalk_bot.py`）：支持文本、文件、图片三种消息类型
+- **标准编号快速通道**（`standards_query.py`）：新增标准编号精确匹配，毫秒级响应
+- **日志规范统一**（`mineru_extract.py`、`sync_mineru.py`）：所有 print 语句替换为 logging
+- **搜索参数优化**（`error_query.py`、`standards_query.py`）：新增最小结果数量阈值
+- **依赖说明更新**（`requirements.txt`）：补充 requests 和 MinerU 说明
+
+### 技术栈
+
+- 文件下载：复用 dingtalk_stream SDK 的 `get_image_download_url()` 方法，无需额外依赖
+- 用户识别：通过钉钉 sender_id + sender_nick 区分不同用户
+
 ## v1.2.2（2026-07-14）
 
 扫描 PDF OCR 技术栈升级 — MinerU 大模型视觉识别 + Markdown 切块入库：
