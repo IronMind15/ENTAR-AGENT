@@ -1,0 +1,883 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>恩特小助手 · 交互式开发旅程</title>
+<style>
+  /* ========== Reset & Base ========== */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif;
+    background: #0f0f1a;
+    color: #e0e0f0;
+    line-height: 1.7;
+    overflow-x: hidden;
+  }
+
+  /* ========== Cover ========== */
+  .cover {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    padding: 40px 20px;
+    position: relative;
+    background: radial-gradient(ellipse at 50% 40%, #1a1a3e 0%, #0f0f1a 70%);
+  }
+  .cover h1 {
+    font-size: clamp(2.2em, 6vw, 4em);
+    font-weight: 800;
+    background: linear-gradient(135deg, #4361ee, #f72585);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 16px;
+    animation: fadeUp 1s ease;
+  }
+  .cover .subtitle {
+    font-size: clamp(1em, 2.5vw, 1.4em);
+    color: #9090b0;
+    margin-bottom: 8px;
+    animation: fadeUp 1s ease .1s both;
+  }
+  .cover .date-range {
+    color: #606080;
+    font-size: .95em;
+    margin-bottom: 40px;
+    animation: fadeUp 1s ease .2s both;
+  }
+  .cover .stats-row {
+    display: flex;
+    gap: 32px;
+    margin-bottom: 48px;
+    flex-wrap: wrap;
+    justify-content: center;
+    animation: fadeUp 1s ease .3s both;
+  }
+  .cover .stat-item { text-align: center; }
+  .cover .stat-item .num {
+    font-size: 2em;
+    font-weight: 800;
+    color: #4cc9f0;
+  }
+  .cover .stat-item .lbl {
+    font-size: .8em;
+    color: #606080;
+  }
+  .btn-start {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 16px 40px;
+    border: none;
+    border-radius: 50px;
+    background: linear-gradient(135deg, #4361ee, #7209b7);
+    color: #fff;
+    font-size: 1.15em;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform .2s, box-shadow .2s;
+    animation: fadeUp 1s ease .4s both;
+  }
+  .btn-start:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 12px 32px rgba(67,97,238,.35);
+  }
+  .btn-start .arrow { transition: transform .2s; }
+  .btn-start:hover .arrow { transform: translateX(4px); }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(24px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ========== Progress Bar ========== */
+  .progress-bar {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    height: 4px;
+    background: #1a1a2e;
+    z-index: 1000;
+  }
+  .progress-bar .fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #4361ee, #f72585);
+    transition: width .4s ease;
+  }
+
+  /* ========== Chapter Nav ========== */
+  .chapter-nav {
+    position: fixed;
+    right: 20px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 100;
+  }
+  .chapter-nav a {
+    display: block;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: 2px solid #2a2a4a;
+    background: transparent;
+    transition: all .3s;
+    position: relative;
+  }
+  .chapter-nav a:hover,
+  .chapter-nav a.active {
+    background: #4361ee;
+    border-color: #4361ee;
+  }
+  .chapter-nav a .tip {
+    position: absolute;
+    right: 20px;
+    top: 50%;
+    transform: translateY(-50%);
+    white-space: nowrap;
+    font-size: .75em;
+    color: #9090b0;
+    background: #1a1a2e;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid #2a2a4a;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .2s;
+  }
+  .chapter-nav a:hover .tip { opacity: 1; }
+  .chapter-nav a.active .tip { opacity: 1; color: #e0e0f0; }
+
+  /* ========== Chapter Sections ========== */
+  .chapter {
+    min-height: 100vh;
+    padding: 80px 40px 60px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    max-width: 880px;
+    margin: 0 auto;
+    opacity: 0;
+    transform: translateY(40px);
+    transition: opacity .6s ease, transform .6s ease;
+  }
+  .chapter.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .chapter-number {
+    font-size: .8em;
+    color: #4361ee;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .chapter-date {
+    font-size: .85em;
+    color: #606080;
+    margin-bottom: 4px;
+  }
+  .chapter-title {
+    font-size: clamp(1.6em, 4vw, 2.4em);
+    font-weight: 800;
+    margin-bottom: 20px;
+    line-height: 1.3;
+  }
+  .chapter-title .emoji { margin-right: 8px; }
+
+  .chapter-content {
+    font-size: .95em;
+    color: #b0b0d0;
+  }
+  .chapter-content p { margin-bottom: 12px; }
+
+  /* ========== Cards inside chapters ========== */
+  .insight-card {
+    background: #1a1a2e;
+    border: 1px solid #2a2a4a;
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin: 16px 0;
+  }
+  .insight-card .card-title {
+    font-size: .9em;
+    font-weight: 700;
+    color: #e0e0f0;
+    margin-bottom: 8px;
+  }
+  .insight-card .card-body {
+    font-size: .88em;
+    color: #9090b0;
+  }
+
+  /* ========== Tags ========== */
+  .tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 12px 0;
+  }
+  .tag {
+    font-size: .75em;
+    padding: 3px 12px;
+    border-radius: 20px;
+    font-weight: 600;
+  }
+  .tag.file { background: rgba(67,97,238,.15); color: #7b9cff; }
+  .tag.tech { background: rgba(247,37,133,.15); color: #f75a9f; }
+  .tag.feature { background: rgba(6,214,160,.15); color: #06d6a0; }
+  .tag.learn { background: rgba(255,209,102,.15); color: #ffd166; }
+  .tag.blind { background: rgba(239,71,111,.15); color: #ef476f; }
+
+  /* ========== Code block ========== */
+  .cmd-block {
+    background: #0a0a15;
+    border: 1px solid #2a2a4a;
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin: 8px 0;
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: .85em;
+    color: #4cc9f0;
+    overflow-x: auto;
+  }
+  .cmd-block .prompt { color: #606080; }
+  .cmd-block .comment { color: #606080; font-style: italic; }
+
+  /* ========== File tree ========== */
+  .file-tree {
+    background: #0a0a15;
+    border: 1px solid #2a2a4a;
+    border-radius: 8px;
+    padding: 16px 20px;
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: .82em;
+    line-height: 1.8;
+    margin: 12px 0;
+  }
+  .file-tree .dir { color: #4cc9f0; }
+  .file-tree .file { color: #b0b0d0; }
+  .file-tree .new { color: #06d6a0; }
+  .file-tree .del { color: #ef476f; text-decoration: line-through; }
+  .file-tree .indent { padding-left: 24px; }
+  .file-tree .indent2 { padding-left: 48px; }
+
+  /* ========== Learn / Blind callouts ========== */
+  .callout {
+    padding: 14px 18px;
+    border-radius: 10px;
+    margin: 14px 0;
+    border-left: 4px solid;
+    font-size: .9em;
+  }
+  .callout.learn {
+    background: rgba(255,209,102,.08);
+    border-color: #ffd166;
+  }
+  .callout.learn::before {
+    content: "💡 ";
+    font-weight: 700;
+  }
+  .callout.blind {
+    background: rgba(239,71,111,.08);
+    border-color: #ef476f;
+  }
+  .callout.blind::before {
+    content: "⚠️ 你应该知道：";
+    font-weight: 700;
+  }
+
+  /* ========== Tech chip ========== */
+  .tech-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 10px 0;
+  }
+  .tech-chip {
+    font-size: .78em;
+    padding: 4px 12px;
+    border-radius: 6px;
+    background: #1a1a3e;
+    color: #9090b0;
+    border: 1px solid #2a2a4a;
+  }
+  .tech-chip.new {
+    background: rgba(6,214,160,.1);
+    border-color: rgba(6,214,160,.3);
+    color: #06d6a0;
+  }
+
+  /* ========== Navigation ========== */
+  .chapter-nav-btns {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 32px;
+    padding-top: 20px;
+    border-top: 1px solid #2a2a4a;
+  }
+  .nav-btn {
+    padding: 10px 24px;
+    border: 1px solid #2a2a4a;
+    border-radius: 8px;
+    background: #1a1a2e;
+    color: #b0b0d0;
+    cursor: pointer;
+    font-size: .9em;
+    transition: all .2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .nav-btn:hover {
+    border-color: #4361ee;
+    color: #e0e0f0;
+    background: #1a1a3e;
+  }
+  .nav-btn:disabled {
+    opacity: .3;
+    cursor: not-allowed;
+    border-color: #2a2a4a;
+  }
+  .nav-btn:disabled:hover {
+    border-color: #2a2a4a;
+    color: #b0b0d0;
+    background: #1a1a2e;
+  }
+  .chapter-counter {
+    font-size: .85em;
+    color: #606080;
+  }
+
+  /* ========== Final Summary ========== */
+  .summary-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin: 20px 0;
+  }
+  @media (max-width: 640px) {
+    .summary-grid { grid-template-columns: 1fr; }
+  }
+  .summary-card {
+    background: #1a1a2e;
+    border: 1px solid #2a2a4a;
+    border-radius: 10px;
+    padding: 16px;
+  }
+  .summary-card h4 {
+    font-size: .9em;
+    color: #e0e0f0;
+    margin-bottom: 10px;
+  }
+  .summary-card ul { list-style: none; }
+  .summary-card li {
+    font-size: .84em;
+    color: #9090b0;
+    padding: 3px 0;
+    padding-left: 16px;
+    position: relative;
+  }
+  .summary-card li::before {
+    content: "→";
+    position: absolute;
+    left: 0;
+    color: #4361ee;
+  }
+
+  /* ========== Responsive ========== */
+  @media (max-width: 768px) {
+    .chapter { padding: 60px 20px 40px; }
+    .chapter-nav { display: none; }
+    .cover .stats-row { gap: 16px; }
+    .chapter-nav-btns { flex-wrap: wrap; gap: 10px; }
+    .nav-btn { flex: 1; justify-content: center; }
+  }
+
+  /* ========== Step highlight animation ========== */
+  .highlight-in {
+    animation: highlightIn .8s ease;
+  }
+  @keyframes highlightIn {
+    0% { opacity: 0; transform: translateY(16px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ========== Milestone marker ========== */
+  .milestone {
+    display: inline-block;
+    background: linear-gradient(135deg, #4361ee, #7209b7);
+    color: #fff;
+    font-size: .7em;
+    padding: 3px 12px;
+    border-radius: 20px;
+    font-weight: 700;
+    margin-left: 8px;
+    vertical-align: middle;
+  }
+
+  /* ========== Keyboard hint ========== */
+  .kbd-hint {
+    text-align: center;
+    font-size: .78em;
+    color: #404060;
+    margin-top: 8px;
+  }
+  .kbd-hint kbd {
+    background: #1a1a2e;
+    border: 1px solid #2a2a4a;
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-family: inherit;
+    font-size: .9em;
+  }
+</style>
+</head>
+<body>
+
+<!-- Progress -->
+<div class="progress-bar"><div class="fill" id="progressFill"></div></div>
+
+<!-- Chapter Nav Dots -->
+<nav class="chapter-nav" id="chapterNav"></nav>
+
+<!-- ==================== COVER ==================== -->
+<section class="cover" id="cover">
+  <h1>🗺️ 恩特小助手<br>开发旅程</h1>
+  <p class="subtitle">从零到上线 · 两周全记录</p>
+  <p class="date-range">2026 年 7 月 1 日 → 7 月 14 日</p>
+  <div class="stats-row">
+    <div class="stat-item"><div class="num">14</div><div class="lbl">天</div></div>
+    <div class="stat-item"><div class="num">38</div><div class="lbl">Git 提交</div></div>
+    <div class="stat-item"><div class="num">4</div><div class="lbl">版本发布</div></div>
+    <div class="stat-item"><div class="num">30</div><div class="lbl">Python 文件</div></div>
+    <div class="stat-item"><div class="num">5,811</div><div class="lbl">代码行数</div></div>
+  </div>
+  <button class="btn-start" onclick="startJourney()">
+    开始旅程 <span class="arrow">→</span>
+  </button>
+  <p class="kbd-hint" style="margin-top:20px">按 <kbd>↓</kbd> <kbd>↑</kbd> 或滚轮翻页</p>
+</section>
+
+<!-- ==================== CHAPTERS ==================== -->
+<div id="chaptersContainer"></div>
+
+<!-- ==================== SCRIPTS ==================== -->
+<script>
+// ========== DATA ==========
+const chapters = [
+  {
+    date: "7 月 1 日 · 第 1 天",
+    title: "🚀 项目启动 & 三步走计划",
+    tags: ["file","tech","learn"],
+    content: `
+      <p>这天和<strong>胡总</strong>敲定了恩特能源的 AI 落地路线图——<strong>2 个月三步走</strong>：</p>
+      <div class="insight-card">
+        <div class="card-title">🎯 三步走计划</div>
+        <div class="card-body">
+          <strong>第一步</strong>：故障代码智能查询 + 通用聊天（已完成 MVP → V2 → v1.2.3）<br>
+          <strong>第二步</strong>：Agent 平台扩展（经验查询、钉钉知识库对接）<br>
+          <strong>第三步</strong>：全生命周期 AI Agent 管理平台
+        </div>
+      </div>
+      <p>技术选型确定：<strong>FastAPI</strong> + <strong>Chroma</strong> + <strong>DeepSeek API</strong> + <strong>BAAI/bge-small-zh-v1.5</strong></p>
+      <p>数据源：PCS参数表 V1.6.2.xlsx → 遥信（DI）sheet → 133 条故障记录</p>
+      <div class="tags">
+        <span class="tag file">config.py</span>
+        <span class="tag file">main.py</span>
+        <span class="tag file">error_query.py</span>
+      </div>
+      <div class="tech-chips">
+        <span class="tech-chip new">FastAPI</span>
+        <span class="tech-chip new">Chroma</span>
+        <span class="tech-chip new">DeepSeek API</span>
+        <span class="tech-chip new">dingtalk-stream</span>
+        <span class="tech-chip new">BAAI/bge-small-zh-v1.5</span>
+      </div>
+      <div class="callout learn">Stream Mode = 我们主动连钉钉（WebSocket），不是钉钉连我们。不需要公网 IP、防火墙白名单、SSL 证书。</div>
+    `
+  },
+  {
+    date: "7 月 6 日",
+    title: "🎯 故障查询 V2 · 两级查询策略",
+    tags: ["file","feature","learn","blind"],
+    content: `
+      <p>这是项目的核心能力——故障代码查询。设计了<strong>两级查询策略</strong>：</p>
+      <div class="insight-card">
+        <div class="card-title">🔍 两级查询策略</div>
+        <div class="card-body">
+          <strong>第 1 级 · 精确匹配</strong>：用户说 "d4-1" → 直接通过 Chroma metadata 过滤返回 → <strong>不调 LLM，毫秒级</strong><br><br>
+          <strong>第 2 级 · 语义搜索</strong>：用户说 "急停告警" → Chroma 语义搜索<br><br>
+          <strong>第 2 级扩展 · LLM 提取</strong>：用户说 "逆变器报错了" → DeepSeek 提取关键词 → Chroma 搜索
+        </div>
+      </div>
+      <p>同时做了代码质量清理：统一配置模块 <code>config.py</code>、回复格式改为【】中文括号（钉钉不渲染 Markdown 粗体）、每行编号。</p>
+      <div class="tags">
+        <span class="tag file">config.py</span>
+        <span class="tag file">sync_kb.py</span>
+        <span class="tag feature">两级查询</span>
+      </div>
+      <div class="callout learn">LLM 只用在刀刃上：能本地匹配就不调 API，省时间省钱。回复格式用【】而非 **，因为钉钉不渲染 Markdown 粗体。</div>
+      <div class="callout blind"><code>python scripts/main.py</code> — 启动服务（Web + 钉钉同时启动）<br><code>python scripts/sync_kb.py</code> — 修改 Excel 后同步故障代码</div>
+    `
+  },
+  {
+    date: "7 月 7 日",
+    title: "📐 系统架构图 & 技能注册中心",
+    tags: ["file","feature"],
+    content: `
+      <p>项目结构开始规范化：</p>
+      <ul class="changes" style="list-style:none;margin:12px 0">
+        <li style="padding:4px 0;padding-left:18px;position:relative">📊 系统架构图（Drawio + HTML 导出）</li>
+        <li style="padding:4px 0;padding-left:18px;position:relative">🏗️ 技能注册中心设计——所有技能统一注册、统一路由</li>
+        <li style="padding:4px 0;padding-left:18px;position:relative">📁 <code>docs/</code> 目录集中管理全部文档</li>
+        <li style="padding:4px 0;padding-left:18px;position:relative">🌐 介绍页 HTML 做好</li>
+      </ul>
+      <div class="file-tree">
+        <span class="dir">docs/</span><br>
+        <span class="indent"><span class="new">├── 恩特小助手架构图.drawio</span></span><br>
+        <span class="indent"><span class="new">├── 恩特小助手架构图.html</span></span><br>
+        <span class="indent"><span class="new">├── 恩特小助手介绍页.html</span></span><br>
+        <span class="indent">└── 需求文档-恩特小助手文档制作.md</span>
+      </div>
+    `
+  },
+  {
+    date: "7 月 8 日",
+    title: "🐳 Docker 部署",
+    tags: ["file","tech","blind"],
+    content: `
+      <p>容器化部署方案：</p>
+      <div class="file-tree">
+        <span class="dir">deploy/</span><br>
+        <span class="indent"><span class="new">├── Dockerfile</span></span><br>
+        <span class="indent"><span class="new">├── docker-compose.yml</span></span><br>
+        <span class="indent"><span class="new">└── pack.sh</span></span>
+      </div>
+      <div class="tech-chips">
+        <span class="tech-chip new">Docker</span>
+        <span class="tech-chip new">docker-compose</span>
+      </div>
+      <div class="callout blind">
+        <code>docker-compose -f deploy/docker-compose.yml up -d</code> — 后台启动容器<br>
+        <code>docker-compose -f deploy/docker-compose.yml down</code> — 停容器
+      </div>
+    `
+  },
+  {
+    date: "7 月 9 日 · v1.1",
+    title: "🤖 Agent 循环 + 会话记忆 + Web 页面",
+    tags: ["file","tech","feature","learn","blind"],
+    content: `
+      <p>这是功能最丰富的一天——项目从"工具"进化为"Agent"：</p>
+      <div class="insight-card">
+        <div class="card-title">🔄 Agent 循环模型</div>
+        <div class="card-body">
+          Agent = <strong>LLM</strong> + <strong>工具</strong> + <strong>记忆</strong> + <strong>循环</strong><br>
+          用户提问 → 路由判断 → 故障？→ error_query 处理 / 否则 → DeepSeek 直接回答
+        </div>
+      </div>
+      <div class="file-tree">
+        <span class="dir">scripts/skills/</span><br>
+        <span class="indent"><span class="new">├── agent.py</span> <span style="color:#606080">← 统一 Agent 循环路由</span></span><br>
+        <span class="indent"><span class="new">├── memory.py</span> <span style="color:#606080">← 会话记忆管理</span></span><br>
+        <span class="indent"><span class="new">├── web_page.py</span> <span style="color:#606080">← 聊天风格 Web 页面</span></span><br>
+        <span class="indent"><span class="del">├── chat.py</span> <span style="color:#606080">← 已删除，合并到 agent.py</span></span><br>
+        <span class="indent">├── error_query.py</span><br>
+        <span class="indent">└── dingtalk_bot.py</span>
+      </div>
+      <div class="tech-chips">
+        <span class="tech-chip new">Agent 循环</span>
+        <span class="tech-chip new">会话记忆</span>
+      </div>
+      <div class="callout learn">
+        会话记忆去重：用 {role:content} 做 key 判断重复，避免同样内容反复记录。
+        Agent 路由优先级：error_query(100) > agent(50)，故障优先走专用通道。
+      </div>
+      <div class="callout blind">
+        <code>netsh advfirewall firewall add rule name="恩特小助手 8000" dir=in action=allow protocol=TCP localport=8000</code><br>
+        — 防火墙放行局域网共享<br>
+        <code>curl http://localhost:8000</code> — 检查服务是否活着<br>
+        <code>taskkill /f /im python.exe</code> — 停服务
+      </div>
+    `
+  },
+  {
+    date: "7 月 10 日",
+    title: "📝 日志系统 & 搜索优化",
+    tags: ["file","feature"],
+    content: `
+      <p>可观测性提升：</p>
+      <ul style="list-style:none;margin:12px 0">
+        <li style="padding:4px 0;padding-left:18px;position:relative">📋 日志系统：目录 + 文件输出 + 分级管理</li>
+        <li style="padding:4px 0;padding-left:18px;position:relative">🔧 搜索参数：最小结果数量阈值</li>
+        <li style="padding:4px 0;padding-left:18px;position:relative">📄 <code>search_knowledge_base</code> 工具描述优化</li>
+        <li style="padding:4px 0;padding-left:18px;position:relative">📚 技术栈全景文档补充</li>
+      </ul>
+    `
+  },
+  {
+    date: "7 月 13 日 · v1.2.1",
+    title: "📚 文档管理子系统（doc_mgr）",
+    tags: ["file","tech","feature","learn","blind"],
+    content: `
+      <p>项目架构的重大升级——从手搓脚本升级到统一文档管理管道：</p>
+      <div class="file-tree">
+        <span class="dir">scripts/doc_mgr/</span><br>
+        <span class="indent">├── models.py</span><br>
+        <span class="indent">├── storage.py</span> <span style="color:#606080">← 存储抽象层（ABC）</span><br>
+        <span class="indent">├── engine.py</span><br>
+        <span class="indent">├── router.py</span><br>
+        <span class="indent">├── views.py</span> <span style="color:#606080">← Web 管理界面（/admin）</span><br>
+        <span class="indent">└── chunkers/</span><br>
+        <span class="indent2"><span class="new">├── pymupdf_chunker.py</span></span><br>
+        <span class="indent2">├── unstructured_chunk.py</span><br>
+        <span class="indent2">└── fallback.py</span>
+      </div>
+      <div class="insight-card">
+        <div class="card-title">🏗️ 架构模式：管道 + 抽象层</div>
+        <div class="card-body">
+          <strong>统一管道</strong>：上传 → 提取 → 切块 → 入库<br>
+          <strong>存储抽象</strong>：VectorStore（ABC）→ ChromaStore，切换 Qdrant 只改 storage.py 一处<br>
+          <strong>切块策略</strong>：按文件类型自动选择切块器（PyMuPDF / Unstructured / fallback）<br>
+          <strong>Web 管理</strong>：三 Tab — 文档列表 / 上传 / 搜索测试
+        </div>
+      </div>
+      <div class="tech-chips">
+        <span class="tech-chip new">PyMuPDF</span>
+        <span class="tech-chip new">doc_mgr</span>
+        <span class="tech-chip new">FastAPI Router</span>
+      </div>
+      <div class="callout blind">
+        <code>python scripts/sync_standards.py</code> — 批量同步标准 PDF 入库<br>
+        <code>pip install pymupdf unstructured[pdf]</code> — 安装 PDF 处理依赖
+      </div>
+    `
+  },
+  {
+    date: "7 月 14 日 · v1.2.2",
+    title: "🔍 扫描 PDF OCR（MinerU）",
+    tags: ["file","tech","feature","learn","blind"],
+    content: `
+      <p>OCR 路线的关键转折——从传统 OCR 切换到大模型视觉识别：</p>
+      <div class="insight-card">
+        <div class="card-title">🔄 OCR 路线对比</div>
+        <div class="card-body">
+          <strong>传统 OCR</strong>（PaddleOCR）：逐行识别，表格/公式效果差<br>
+          <strong class="new">→ MinerU VLM</strong>（大模型视觉识别）：扫描 PDF → Markdown，质量大幅提升
+        </div>
+      </div>
+      <div class="file-tree">
+        <span class="dir">scripts/</span><br>
+        <span class="indent"><span class="new">├── mineru_extract.py</span></span><br>
+        <span class="indent"><span class="new">├── sync_mineru.py</span></span><br>
+        <span class="indent">└── doc_mgr/chunkers/</span><br>
+        <span class="indent2"><span class="new">└── markdown_chunker.py</span></span>
+      </div>
+      <div class="tech-chips">
+        <span class="tech-chip new">MinerU VLM</span>
+        <span class="tech-chip new">Markdown 切块</span>
+      </div>
+      <div class="callout learn">
+        切块引擎多态：PyMuPDFChunker（PDF）| MarkdownChunker（.md），按文件类型自动选择。
+        MinerU 中间产物 185MB+，加入 .gitignore 不退版本。
+      </div>
+      <div class="callout blind">
+        <code>python scripts/mineru_extract.py</code> — 运行 MinerU OCR 提取<br>
+        <code>python scripts/sync_mineru.py</code> — MinerU 输出入库<br>
+        MinerU 输出在 <code>data/standards/mineru_output/</code>（不退版本）
+      </div>
+    `
+  },
+  {
+    date: "7 月 14 日 · v1.2.3",
+    title: "📎 钉钉文件接收 & 结构优化",
+    tags: ["file","feature","learn","blind"],
+    content: `
+      <p>最新版本，聚焦用户体验和代码质量：</p>
+      <div class="file-tree">
+        <span class="dir">scripts/</span><br>
+        <span class="indent"><span class="new">├── file_handler.py</span></span><br>
+        <span class="indent"><span class="new">└── prompts/</span></span><br>
+        <span class="indent2"><span class="new">└── system_prompt.txt</span></span>
+      </div>
+      <ul style="list-style:none;margin:12px 0">
+        <li style="padding:4px 0;padding-left:18px;position:relative">📎 <strong>file_handler.py</strong> — 钉钉文件/图片接收，自动下载保存</li>
+        <li style="padding:4px 0;padding-left:18px;position:relative">📄 <strong>System Prompt 外置</strong> → prompts/system_prompt.txt</li>
+        <li style="padding:4px 0;padding-left:18px;position:relative">⚡ <strong>标准编号快速通道</strong>：精确定位 + 语义搜索两条路径并行</li>
+        <li style="padding:4px 0;padding-left:18px;position:relative">🔄 钉钉处理器：支持文本 + 文件 + 图片三种消息类型</li>
+        <li style="padding:4px 0;padding-left:18px;position:relative">🧹 所有 print → logging 统一</li>
+      </ul>
+      <div class="callout learn">
+        标准编号快速通道：精确定位 + 语义搜索两条路径并行，互不干扰。
+        文件通过钉钉 sender_id + sender_nick 区分用户。
+      </div>
+      <div class="callout blind">
+        <code>git tag v1.2.3</code> — 打版本标签<br>
+        <code>git push origin v1.2.3</code> — 推送标签到 GitHub<br>
+        打 tag 前先检查 CHANGELOG.md 是否完整、README.md 是否最新。
+      </div>
+    `
+  },
+  {
+    date: "旅程终点 · 新的起点",
+    title: "🎓 总结 & 下一步",
+    tags: ["learn","blind"],
+    content: `
+      <p>两周时间，我们从零搭建了一个完整的智能助手平台：</p>
+      <div class="summary-grid">
+        <div class="summary-card">
+          <h4>📁 文件演变</h4>
+          <ul>
+            <li>起步：~5 个文件</li>
+            <li>v1.1：~12 个文件</li>
+            <li>v1.2.1：+doc_mgr 子系统</li>
+            <li>最终：30 个文件 / 5,811 行</li>
+          </ul>
+        </div>
+        <div class="summary-card">
+          <h4>⚙️ 技术栈演变</h4>
+          <ul>
+            <li>FastAPI + Chroma + DeepSeek</li>
+            <li>+ dingtalk-stream + PyMuPDF</li>
+            <li>+ MinerU VLM + Docker</li>
+            <li>+ 外置 Prompt + file_handler</li>
+          </ul>
+        </div>
+        <div class="summary-card">
+          <h4>💡 核心学到</h4>
+          <ul>
+            <li>Stream Mode ≠ Webhook</li>
+            <li>RAG 两级策略</li>
+            <li>Agent = LLM+工具+记忆+循环</li>
+            <li>切块器策略模式</li>
+          </ul>
+        </div>
+        <div class="summary-card">
+          <h4>⚠️ 你该知道的命令</h4>
+          <ul>
+            <li><code>python scripts/main.py</code> — 启动</li>
+            <li><code>sync_kb.py / sync_standards.py</code> — 同步</li>
+            <li><code>git tag v1.x</code> — 发版</li>
+            <li><code>docker-compose up</code> — 部署</li>
+          </ul>
+        </div>
+      </div>
+      <p style="text-align:center;margin-top:24px;font-size:1.1em;color:#9090b0">
+        下一步：经验查询 · 钉钉知识库对接 · Agent 平台升级 🚀
+      </p>
+    `
+  }
+];
+
+// ========== STATE ==========
+let currentChapter = -1;
+
+// ========== BUILD DOM ==========
+function buildChapters() {
+  const container = document.getElementById('chaptersContainer');
+  const nav = document.getElementById('chapterNav');
+
+  chapters.forEach((ch, i) => {
+    // Section
+    const sec = document.createElement('section');
+    sec.className = 'chapter';
+    sec.id = `ch-${i}`;
+    sec.innerHTML = `
+      <div class="chapter-number">第 ${i + 1} 章</div>
+      <div class="chapter-date">${ch.date}</div>
+      <div class="chapter-title">${ch.title}</div>
+      <div class="tags">${ch.tags.map(t => `<span class="tag ${t}">${tagLabel(t)}</span>`).join('')}</div>
+      <div class="chapter-content">${ch.content}</div>
+      <div class="chapter-nav-btns">
+        <button class="nav-btn" onclick="goTo(${i - 1})" ${i === 0 ? 'disabled' : ''}>← 上一步</button>
+        <span class="chapter-counter">${i + 1} / ${chapters.length}</span>
+        <button class="nav-btn" onclick="goTo(${i + 1})" ${i === chapters.length - 1 ? 'disabled' : ''}>下一步 →</button>
+      </div>
+    `;
+    container.appendChild(sec);
+
+    // Nav dot
+    const dot = document.createElement('a');
+    dot.href = `#ch-${i}`;
+    dot.id = `dot-${i}`;
+    dot.innerHTML = `<span class="tip">${ch.title.replace(/<[^>]*>/g,'').slice(0,20)}</span>`;
+    dot.onclick = (e) => { e.preventDefault(); goTo(i); };
+    nav.appendChild(dot);
+  });
+}
+
+function tagLabel(t) {
+  const map = { file:'📁 文件', tech:'⚙️ 技术', feature:'🎯 功能', learn:'💡 学到', blind:'⚠️ 盲区' };
+  return map[t] || t;
+}
+
+// ========== NAVIGATION ==========
+function goTo(idx) {
+  if (idx < 0 || idx >= chapters.length) return;
+  currentChapter = idx;
+  document.getElementById(`ch-${idx}`).scrollIntoView({ behavior: 'smooth' });
+  updateUI();
+}
+
+function updateUI() {
+  // Nav dots
+  document.querySelectorAll('.chapter-nav a').forEach((a, i) => {
+    a.classList.toggle('active', i === currentChapter);
+  });
+  // Progress
+  const pct = ((currentChapter + 1) / chapters.length) * 100;
+  document.getElementById('progressFill').style.width = pct + '%';
+}
+
+// ========== SCROLL OBSERVER ==========
+function setupObserver() {
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
+        const idx = parseInt(entry.target.id.split('-')[1]);
+        if (!isNaN(idx)) { currentChapter = idx; updateUI(); }
+      }
+    });
+  }, { threshold: 0.4 });
+
+  document.querySelectorAll('.chapter').forEach(el => observer.observe(el));
+}
+
+// ========== KEYBOARD ==========
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+    e.preventDefault();
+    goTo(currentChapter + 1);
+  } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+    e.preventDefault();
+    goTo(currentChapter - 1);
+  }
+});
+
+// ========== START ==========
+function startJourney() {
+  document.getElementById('cover').style.display = 'none';
+  goTo(0);
+}
+
+// ========== INIT ==========
+buildChapters();
+setupObserver();
+
+// Show first chapter dots as active initially
+updateUI();
+</script>
+</body>
+</html>
