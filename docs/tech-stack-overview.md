@@ -147,27 +147,91 @@ class MyHandler(ChatbotHandler):
 
 **说明：** 纯 Python 读写 Excel `.xlsx` 文件的库，不依赖 Office。
 
-**项目案例：** `sync_kb.py` 中用 `openpyxl.load_workbook()` 读取 PCS 参数表 V1.6.2.xlsx，从「遥信（DI）」sheet 第 51~183 行提取故障数据。
+**项目案例：** `doc_mgr/extractors/excel.py` 中用 `openpyxl.load_workbook()` 读取 PCS 参数表 V1.6.2.xlsx，从「遥信（DI）」sheet 第 51~183 行提取故障数据。
 
 ---
 
-### 12. Docker & Docker Compose — 容器化部署
+### 12. PyMuPDF (fitz) — PDF 文本提取 + 结构分析
 
-**说明：** Docker 把应用和环境打包成"集装箱"，保证在哪都能运行。Docker Compose 一键启动多个容器（如 Web 服务 + 数据库）。
+**说明：** 轻量级 PDF 处理库，可以直接提取文字、分析段落结构（字体、字号、位置）。比 `pdfminer` 快，比 `PDFPlumber` 支持格式多。v1.2.1 引入替代 Unstructured。
 
-**项目案例：** `deploy/Dockerfile` 构建镜像，特意把 PyTorch 从 GPU 版换成 CPU 版，省了约 13GB 空间。`docker-compose.yml` 定义服务编排。
+**项目案例：** `doc_mgr/extractors/pdf_mupdf.py` 提取 PDF 文本；`doc_mgr/chunkers/pymupdf_chunker.py` 做结构分析切块（多信号融合：章节号模式 + 字体名 + 左边界）。
 
 ---
 
-### 13. Git & GitHub — 版本控制
+### 13. ChromaDB — 向量数据库（补充：多集合支持）
+
+**说明：** 轻量级向量数据库，支持**多个 Collection** 隔离不同知识库。与 Pinecone、Milvus、Qdrant 同属向量数据库赛道，Chroma 是其中最小、最易用的。
+
+**项目案例：** 当前有两个 Collection：
+- `error_codes` — 133 条 PCS 故障记录
+- `standards` — 标准文档 PDF（含 MinerU OCR 提取的 Markdown）
+
+---
+
+### 14. VectorStore 存储抽象层 — 可切换的存储架构
+
+**说明：** v1.2.1 引入的存储抽象层，定义 `VectorStore` ABC（抽象基类），当前实现 `ChromaStore`。后续切换到 Qdrant 只需在 `storage.py` 改一行注册。
+
+**项目案例：** `doc_mgr/storage.py` 中的 `VectorStore` 接口，统一了 `add/search/delete/list` 操作，与具体向量库解耦。
+
+```python
+class VectorStore(ABC):
+    @abstractmethod
+    def add(self, documents, ids, metadatas=None): ...
+    @abstractmethod
+    def search(self, query, n_results=5): ...
+    @abstractmethod
+    def delete(self, ids): ...
+```
+
+---
+
+### 15. MinerU（大模型视觉识别）— 扫描 PDF OCR 引擎
+
+**说明：** v1.2.2 引入的 OCR 技术栈升级。MinerU 调用 VLM（视觉大模型）识别扫描 PDF 中的文字、表格、图片，输出结构化 Markdown。替代传统 OCR 路线（PaddleOCR），对复杂排版（多栏、表格、公式）效果更好。
+
+**项目案例：** `scripts/mineru_extract.py` 上传 PDF → MinerU API → VLM 识别 → 下载 ZIP/Markdown；`scripts/sync_mineru.py` 将 Markdown 批量入库。已处理 9 份标准 PDF（GB/T 34133、EN50178、IEC 60664-1 等）。
+
+---
+
+### 16. MarkdownChunker — Markdown 标题层级切块器
+
+**说明：** v1.2.2 新增的切块器，用于处理 MinerU 输出的 Markdown 文件。按 `#` `##` `###` 标题层级智能切块，支持中文标准章节号提取。
+
+**项目案例：** `doc_mgr/chunkers/markdown_chunker.py`，与 PyMuPDFChunker 并列，引擎按文件类型自动选择切块器。
+
+---
+
+### 17. file_handler.py — 钉钉文件接收模块
+
+**说明：** v1.2.3 新增，接收钉钉用户发送的文件（PDF/Excel/图片），自动下载到 `data/uploads/用户名_ID/日期/`。复用 `dingtalk_stream` SDK 的下载方法，无需额外依赖。
+
+**项目案例：** `scripts/file_handler.py`，支持文本/文件/图片三种消息类型，通过 `sender_id + sender_nick` 区分用户。
+
+---
+
+### 18. doc_mgr 文档管理子系统 — 统一文档生命周期管理
+
+**说明：** v1.2.1 引入的独立子系统，将文档的**上传→提取→切块→入库**全流程统一管理。内置 Web 管理页面（`/admin`），支持文件归属类型选择、搜索测试、删除管理。
+
+**项目案例：** `scripts/doc_mgr/` 目录，包含 `engine.py`（处理引擎）、`router.py`（API 路由 6 端点）、`views.py`（管理界面三 Tab）。
+
+```
+上传文件 → 自动识别类型 → 提取文本 → 智能切块 → Chroma 入库
+```
+
+---
+
+### 19. Git & GitHub — 版本控制
 
 **说明：** Git 是本地版本管理（时光机），GitHub 是云端备份（网盘+协作平台）。
 
-**项目案例：** 整个项目在 Git 管理下，打了 v1.0/v1.1 标签，每次提交记录变更，推送到 GitHub 远程仓库。
+**项目案例：** 整个项目在 Git 管理下，打了 v1.0 / v1.1 / v1.2.1 / v1.2.2 / v1.2.3 标签，每次提交记录变更，推送到 GitHub 远程仓库。国内环境通过本地 Clash 代理（127.0.0.1:7890）直连原生 GitHub 地址推送。
 
 ---
 
-### 14. HNSW 索引 — 近似最近邻搜索算法
+### 20. HNSW 索引 — 近似最近邻搜索算法
 
 **说明：** Hierarchical Navigable Small World，向量数据库的核心索引算法。把高维向量组织成多层图结构，搜索时"从粗到细"快速定位最近邻。
 
@@ -175,7 +239,7 @@ class MyHandler(ChatbotHandler):
 
 ---
 
-### 15. 宝塔面板 — 服务器运维面板
+### 21. 宝塔面板 — 服务器运维面板
 
 **说明：** Linux 服务器可视化运维工具，通过网页管理网站、数据库、防火墙等。对不熟悉 Linux 命令行的用户非常友好。
 
@@ -183,15 +247,15 @@ class MyHandler(ChatbotHandler):
 
 ---
 
-### 16. Logging — Python 日志系统
+### 22. Logging — Python 日志系统
 
 **说明：** 替代 `print()` 的正规日志方案，支持分级（DEBUG/INFO/WARNING/ERROR）、输出到文件+控制台、格式化时间戳。
 
-**项目案例：** 所有模块都用 `logging.getLogger()`，`sync_kb.py` 的 `logging.basicConfig()` 统一了日志格式。
+**项目案例：** 所有模块都用 `logging.getLogger()`，`mineru_extract.py` 和 `sync_mineru.py` 在 v1.2.3 统一从 print 迁移到 logging。
 
 ---
 
-### 17. Jinja2 / HTML 模板 — Web 前端渲染
+### 23. Jinja2 / HTML 模板 — Web 前端渲染
 
 **说明：** 服务端渲染 HTML 页面，FastAPI 内嵌 HTML 模板，适合简单的 Web 界面。
 
@@ -227,7 +291,7 @@ conn.execute("INSERT INTO memories VALUES (?, ?, ?)", (user_id, role, content))
 
 **说明：** Chroma 的"大哥"，支持分布式部署、GPU 加速、每秒处理百万级向量搜索。适合数据量超大的场景。
 
-**项目场景：** 知识库扩展到多个 PCS 参数表 + 产品文档 + 经验记录，数据量到十万级以上时考虑迁移。
+**项目场景：** 知识库扩展到多个 PCS 参数表 + 产品文档 + 经验记录，数据量到十万级以上时考虑迁移。**目前存储抽象层（VectorStore ABC → ChromaStore）已就位，切换只需改 `storage.py` 一行注册。**
 
 ---
 
@@ -323,16 +387,20 @@ conn.execute("INSERT INTO memories VALUES (?, ?, ?)", (user_id, role, content))
 ## 三、技术栈演进路线图
 
 ```
-现在 (v1.0 - v1.1)
+现在 (v1.2.3)
 ├── 编程语言：Python
-├── Web框架：FastAPI
-├── 知识库：Chroma + bge-small-zh
+├── Web框架：FastAPI + Uvicorn
+├── 知识库：Chroma + bge-small-zh（多集合：error_codes + standards）
 ├── LLM：DeepSeek API (Function Calling)
-├── Agent：手写 RAG Agent
+├── Agent：手写 RAG Agent（多工具路由）
 ├── 记忆：JSON 文件（临时）
 ├── 部署：Docker / 宝塔面板
-├── 版本：Git + GitHub
-└── 消息：钉钉 Stream
+├── 版本：Git + GitHub（v1.0~v1.2.3）
+├── 消息：钉钉 Stream
+├── PDF提取：PyMuPDF 结构分析切块 / MinerU 大模型视觉OCR
+├── 文档管理：doc_mgr 子系统（存储抽象层，web 管理页面）
+├── 文件接收：钉钉文件/图片自动下载保存
+└── 日志：Logging
 
       ↓
 
@@ -366,10 +434,10 @@ conn.execute("INSERT INTO memories VALUES (?, ?, ?)", (user_id, role, content))
 
 ## 一句话总结
 
-> **学到手的：** Python + FastAPI + Chroma + DeepSeek + RAG + Docker + Git — 已经能独立搭一个 AI 应用从开发到上线。
+> **学到手的：** Python + FastAPI + Chroma + DeepSeek + RAG + Docker + PyMuPDF + MinerU + Git — 已经能独立搭一个包含故障查询、标准文档检索、钉钉交互的 AI 应用从开发到上线。
 >
 > **下一步重点：** SQLite + WebSocket + 前端框架 — 补齐存储、实时、界面三个短板。
 
 ---
 
-*恩特能源 · 恩特小助手 · 2026-07-09*
+*恩特能源 · 恩特小助手 · 2026-07-14 · v1.2.3*
