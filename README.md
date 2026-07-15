@@ -155,7 +155,6 @@ D:\ENTAR_AGENT\
 │   ├── sync_mineru.py                 # 🆕 MinerU 输出批量同步脚本
 │   ├── mineru_extract.py              # 🆕 MinerU 扫描 PDF 提取工具
 │   ├── user_store.py                  # 🆕 v1.2.4 SQLite 用户信息存储（单例）
-│   ├── migrate_json_to_sqlite.py      # 🆕 v1.2.4 JSON → SQLite 迁移工具
 │   ├── doc_mgr/                       # 🆕 v2.0 文档管理子系统
 │   │   ├── __init__.py                # 包导出
 │   │   ├── models.py                  # 数据模型
