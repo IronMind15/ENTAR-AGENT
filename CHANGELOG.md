@@ -1,5 +1,35 @@
 # 恩特小助手 更新日志
 
+## v1.2.4（2026-07-15）
+
+用户存储结构升级 — SQLite 统一存储 + 权限系统 + 钉钉信息同步：
+
+### 新增
+
+- **SQLite 用户信息存储模块**（`scripts/user_store.py`）：统一存储用户信息、对话记忆、权限管理，替代原有 JSON 文件方案
+  - 三张表：`users`（用户信息）、`conversations`（对话记录）、`permissions`（权限配置）
+  - WAL 模式 + 线程独立连接，读写不互斥，并发安全
+  - `get_store()` 单例模式，全局共享一个连接池
+- **数据迁移工具**（`scripts/migrate_json_to_sqlite.py`）：一键将 `chat_memory.json` 数据迁移到 SQLite，支持 `--dry-run` 预览
+- **钉钉用户信息后台同步**（`dingtalk_bot.py`）：用户首次发言或超过 24h 后自动同步钉钉用户信息（姓名、职位、部门、是否为管理者）
+- **统计看板页面**（`/admin/stats`）：累计用户、今日活跃、每日消息趋势、对话量 Top 10、所有用户列表（含部门/职位/身份）
+- **Web 管理页权限保护**：设置 `ADMIN_PASSWORD` 后，管理页面、上传、删除操作需要密码验证
+- **权限系统**：基于 `permissions` 表的细粒度权限控制，支持 upload/delete/manage 三种操作，主管默认有上传权限
+- **配置项**（`config.py`）：`MEMORY_BACKEND`（sqlite/json 后端切换）、`MAX_CONTEXT_ROUNDS`（对话轮数）、`ADMIN_PASSWORD`（管理密码）
+
+### 重构
+
+- **记忆模块代理层**（`memory.py`）：从直接读写 JSON 重构为统一代理层，支持 sqlite/json 双后端，默认 sqlite。JSON 路径作为兼容回退
+  - 接口不变（`add()` / `get_context()` / `format_context()`），外部代码零改动
+  - SQLite 操作异常时自动回退 JSON，不影响服务可用性
+- **router.py 权限拦截**：upload/delete 端点增加统一权限检查，支持 password 验证和 user_id 权限判定双模式
+
+### 技术栈
+
+- 存储：SQLite（内置，零额外依赖）
+- 钉钉 API：旧版 `oapi.dingtalk.com` 接口（`topapi/v2/user/get`），通过 appkey + appsecret 获取 token
+- 线程模型：`threading.local()` 每线程独立连接 + `RLock` 写互斥
+
 ## v1.2.3（2026-07-14）
 
 钉钉文件接收功能 + 代码结构优化：

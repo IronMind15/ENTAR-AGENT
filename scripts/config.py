@@ -48,3 +48,15 @@ DEEPSEEK_API_KEY: str = _get_config("DEEPSEEK_API_KEY")
 # 钉钉 Stream 模式机器人凭证
 DINGTALK_CLIENT_ID: str = _get_config("DINGTALK_CLIENT_ID")
 DINGTALK_CLIENT_SECRET: str = _get_config("DINGTALK_CLIENT_SECRET")
+
+# 钉钉 REST API
+DINGTALK_API_BASE: str = "https://api.dingtalk.com"
+
+# 存储后端：sqlite（推荐）| json（回退）
+MEMORY_BACKEND: str = "sqlite"
+
+# 对话记忆轮数上限（一问一答算 1 轮，即 5 轮 = 10 条消息）
+MAX_CONTEXT_ROUNDS: int = 5
+
+# 管理员密码（空 = 不开启密码保护）
+ADMIN_PASSWORD: str = _get_config("ADMIN_PASSWORD")

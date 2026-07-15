@@ -29,6 +29,9 @@ docs/*.docx
 # ── 会话记忆（自动生成，不退版本） ──
 data/chat_memory.json
 
+# ── 用户信息数据库（SQLite，自动生成，不退版本） ──
+data/user_store.db*
+
 # ── 用户上传文件（自动生成，不退版本） ──
 data/uploads/
 

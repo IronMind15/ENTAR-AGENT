@@ -52,6 +52,14 @@ class ErrorQueryHandler(ChatbotHandler):
         sender = bot_msg.sender_nick or "未知"
         conv_title = bot_msg.conversation_title or "单聊"
         user_id = str(bot_msg.sender_id or sender)
+        staff_id = str(bot_msg.sender_staff_id or "")
+        corp_id = str(bot_msg.sender_corp_id or "")
+
+        # ---- 后台同步用户信息（首次或 24h 过期后自动更新） ----
+        try:
+            self._sync_user_info_async(user_id, staff_id, corp_id)
+        except Exception as sync_err:
+            logger.warning(f"同步用户信息异常（不影响主流程）: {sync_err}")
 
         # ===== 处理文件消息 =====
         if bot_msg.message_type == "file":
@@ -221,6 +229,68 @@ class ErrorQueryHandler(ChatbotHandler):
                 pass
 
         return AckMessage.STATUS_OK, "ok"
+
+    def _sync_user_info_async(self, user_id: str, staff_id: str, corp_id: str):
+        """后台线程同步钉钉用户信息（不阻塞消息处理）
+
+        仅首次或超过 24h 才调用 API，通过 user_store 缓存。
+        """
+        if not user_id:
+            return
+
+        try:
+            from user_store import get_store
+            store = get_store()
+
+            # 检查是否需要同步（无 staff_id / 超过 24h 未更新）
+            user = store.get_user(user_id)
+            need_sync = False
+
+            if not user:
+                need_sync = True  # 新用户
+            elif staff_id and not user.get("staff_id"):
+                need_sync = True  # 有 staff_id 但还没同步过
+            else:
+                # 检查 updated_at 是否超过 24h
+                updated = user.get("updated_at", "")
+                if updated:
+                    try:
+                        from datetime import datetime
+                        updated_time = datetime.strptime(
+                            updated, "%Y-%m-%d %H:%M:%S"
+                        )
+                        age = (datetime.now() - updated_time).total_seconds()
+                        if age > 86400:  # 24h
+                            need_sync = True
+                    except (ValueError, TypeError):
+                        need_sync = True
+                else:
+                    need_sync = True
+
+            if not need_sync:
+                return
+
+            if not staff_id:
+                logger.info(f"用户 {user_id[:20]}... 无 staff_id，跳过钉钉同步")
+                # 至少存一条基本记录
+                store.get_or_create_user(user_id, nick="")
+                return
+
+            # 后台线程执行同步（不阻塞消息回复）
+            def _do_sync():
+                try:
+                    store.sync_user_from_dingtalk(user_id, staff_id, nick=sender)
+                except Exception as e:
+                    logger.warning(f"钉钉同步线程异常: {e}")
+
+            import threading
+            t = threading.Thread(target=_do_sync, daemon=True,
+                                 name=f"sync-user-{user_id[:8]}")
+            t.start()
+            logger.info(f"已启动钉钉同步: user={user_id[:20]}... staff={staff_id}")
+
+        except Exception as e:
+            logger.warning(f"_sync_user_info_async 异常: {e}")
 
 
 def create_bot() -> DingTalkStreamClient:
