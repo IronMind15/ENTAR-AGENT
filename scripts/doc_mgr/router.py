@@ -14,21 +14,30 @@ import json
 import os
 import uuid
 import logging
+from datetime import datetime as dt
 from fastapi import APIRouter, UploadFile, File, Form, Query, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from .engine import process_file
 from .storage import get_store
 from .views import ADMIN_HTML
+from .task_manager import get_manager as get_task_manager
 
 logger = logging.getLogger("doc_mgr.router")
 
 router = APIRouter(prefix="/admin")
 
-# 上传文件临时存储目录
-UPLOAD_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", "uploads"
-)
+# 文件保存目录映射（按 collection 分类存储）
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.normpath(os.path.join(_SCRIPT_DIR, "..", ".."))
+
+FILE_DIRS = {
+    "standards":  os.path.join(_PROJECT_ROOT, "data", "standards"),
+    "error_codes": os.path.join(_PROJECT_ROOT, "data", "fault_codes"),
+}
+
+# 钉钉上传目录（按用户/日期分类）
+UPLOAD_DIR = os.path.join(_PROJECT_ROOT, "data", "uploads")
 
 
 def _get_admin_password() -> str:
@@ -150,10 +159,11 @@ async def upload_file(
     password: str = Form(""),
     user_id: str = Form(""),
 ):
-    """上传文件，自动处理入库
+    """上传文件，保存到 uploads 目录并标记待处理
 
     支持格式: .pdf, .xlsx, .xls
-    上传后自动调用 engine.process_file() 完成提取→切块→入库。
+    仅保存文件 + 记录到 sync_tracker（状态=pending），
+    不自动处理。管理员需到「同步管理」Tab 选库后手动触发入库。
 
     权限：
       - 有 ADMIN_PASSWORD → 需提供正确的 password
@@ -173,42 +183,64 @@ async def upload_file(
         if not _check_user_permission(user_id, "upload"):
             raise HTTPException(403, "该用户无上传权限")
     else:
-        # 既没设密码，也不知道是谁 → 拒绝（安全起见）
         raise HTTPException(403, "未授权，请提供 password 或 user_id")
 
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in (".pdf", ".xlsx", ".xls"):
         raise HTTPException(400, f"不支持的文件类型: {ext}（仅支持 PDF/Excel）")
 
-    # 保存临时文件
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    # 按 collection 保存到对应目录（standards/ 或 fault_codes/）
+    _collection = collection or "standards"
+    target_dir = FILE_DIRS.get(_collection, UPLOAD_DIR)
+    os.makedirs(target_dir, exist_ok=True)
     safe_name = f"{uuid.uuid4().hex}_{file.filename}"
-    save_path = os.path.join(UPLOAD_DIR, safe_name)
+    save_path = os.path.join(target_dir, safe_name)
 
     content = await file.read()
     with open(save_path, "wb") as f:
         f.write(content)
 
-    # 处理
+    # 记录到 sync_tracker（标记 pending，等待管理员手动同步）
+    _filename = file.filename
     try:
-        doc = process_file(save_path, file_name=file.filename, target_collection=collection or None)
-    except Exception as e:
-        logger.exception(f"处理失败: {file.filename}")
-        return JSONResponse({
-            "status": "error",
-            "file_name": file.filename,
-            "message": f"处理异常: {str(e)}",
-        }, status_code=500)
+        from .sync_tracker import SyncTracker
+        tracker = SyncTracker()
+        tracker.upsert_file(
+            file_path=save_path,
+            file_name=_filename,
+            file_size=len(content),
+            file_hash=str(int(os.path.getmtime(save_path))),
+            target_collection=_collection,
+            upload_user_id=user_id or "admin",
+            upload_user_name="管理员",
+        )
+    except Exception as track_err:
+        logger.warning(f"记录同步追踪失败（不影响文件保存）: {track_err}")
+
+    logger.info(f"📤 文件已上传，标记待处理: {_filename} → {_collection}")
 
     return JSONResponse({
-        "status": doc.status,
-        "file_name": doc.file_name,
-        "collection": doc.collection,
-        "chunk_count": doc.chunk_count,
-        "std_id": doc.std_id,
-        "std_title": doc.std_title,
-        "message": doc.message,
+        "file_name": _filename,
+        "collection": _collection,
+        "message": "文件已上传，请到「同步管理」Tab 选库后手动同步",
     })
+
+
+@router.get("/upload-status/{task_id}")
+def upload_status(task_id: str):
+    """查询异步上传任务的处理状态
+
+    前端轮询此接口获取进度，status 取值:
+      - pending:   排队等待处理
+      - processing: 正在处理（提取→切块→入库）
+      - done:       处理完成，result 中包含完整结果
+      - error:      处理失败，error 中为错误信息
+    """
+    manager = get_task_manager()
+    status = manager.get_status(task_id)
+    if not status:
+        raise HTTPException(404, f"任务不存在或已过期: {task_id}")
+    return JSONResponse(status)
 
 
 @router.delete("/docs")
@@ -470,3 +502,305 @@ def _format_results(results: dict) -> list[dict]:
             item["similarity"] = round(max(0, 1 - float(dist)), 4)
         items.append(item)
     return items
+
+
+# ==================== v1.2.5 同步管理 API ====================
+
+
+@router.get("/sync-files")
+def list_sync_files(password: str = Query("", description="管理员密码")):
+    """列出 data/uploads/ 和 data/standards/ 中所有可同步文件及状态"""
+    if not _verify_admin_access(password):
+        raise HTTPException(401, "密码错误")
+
+    from .sync_tracker import SyncTracker
+    tracker = SyncTracker()
+
+    # 获取已追踪文件的状态
+    tracked = {s["file_path"]: s for s in tracker.list_all()}
+
+    # 扫描目录
+    scan_dirs = {
+        "uploads":     ("data/uploads", "standards"),
+        "standards":   ("data/standards", "standards"),
+        "fault_codes": ("data/fault_codes", "error_codes"),
+    }
+    result: dict = {"directories": {}}
+
+    for dir_key, (rel_dir, default_coll) in scan_dirs.items():
+        abs_dir = os.path.normpath(os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "..", rel_dir
+        ))
+        files: list[dict] = []
+        if os.path.isdir(abs_dir):
+            for root, dirs, fnames in os.walk(abs_dir):
+                if "mineru_output" in root:
+                    continue
+                for fn in sorted(fnames):
+                    ext = os.path.splitext(fn)[1].lower()
+                    if ext not in (".pdf", ".xlsx", ".xls", ".md"):
+                        continue
+                    fp = os.path.join(root, fn)
+                    try:
+                        st = os.stat(fp)
+                    except OSError:
+                        continue
+                    status = tracked.get(fp, {})
+                    upload_user_name = status.get("upload_user_name", "")
+                    # 如果目录名包含用户信息（格式: 用户名_ID），提取作为备选
+                    if not upload_user_name:
+                        dir_parts = os.path.basename(os.path.dirname(fp)).split("_", 1)
+                        if len(dir_parts) > 1:
+                            upload_user_name = dir_parts[0]
+                    files.append({
+                        "file_path": fp,
+                        "file_name": fn,
+                        "file_size": st.st_size,
+                        "modified": dt.fromtimestamp(st.st_mtime).isoformat(),
+                        "sync_status": status.get("sync_status", "new"),
+                        "target_collection": status.get("target_collection", default_coll),
+                        "upload_user_id": status.get("upload_user_id", ""),
+                        "upload_user_name": upload_user_name,
+                        "error_message": status.get("error_message", ""),
+                        "last_synced_at": status.get("last_synced_at", ""),
+                    })
+        result["directories"][dir_key] = {
+            "path": rel_dir,
+            "default_collection": default_coll,
+            "files": files,
+        }
+
+    return JSONResponse(result)
+
+
+@router.post("/sync-trigger")
+def trigger_sync(
+    file_path: str = Form(""),
+    collection: str = Form(""),
+    sync_all: bool = Form(False),
+    force: bool = Form(False),
+    password: str = Form(""),
+):
+    """手动触发文件同步
+
+    - file_path 指定单个文件
+    - sync_all=True 同步所有待处理/失败文件
+    - force=True 跳过 Chroma 预检查，强制重新入库
+    """
+    if not _verify_admin_access(password):
+        raise HTTPException(403, "密码错误，无权操作")
+
+    from .engine import process_file
+    from .sync_tracker import SyncTracker
+    tracker = SyncTracker()
+
+    if file_path:
+        # 同步单个文件 — 异步后台处理，不阻塞 HTTP
+        if not os.path.isfile(file_path):
+            raise HTTPException(400, f"文件不存在: {file_path}")
+
+        fname = os.path.basename(file_path)
+        target = collection or "standards"
+
+        # 非强制模式：先快速查 Chroma 是否已有
+        if not force:
+            from .engine import check_chroma_has_file
+            if check_chroma_has_file(target, fname):
+                try:
+                    fsize = os.path.getsize(file_path)
+                    fhash = str(int(os.path.getmtime(file_path)))
+                except OSError:
+                    fsize, fhash = 0, ""
+                tracker.upsert_file(file_path, fname, fsize, fhash, target)
+                tracker.mark_synced(file_path)
+                return JSONResponse({
+                    "status": "skipped",
+                    "file_name": fname,
+                    "collection": target,
+                    "chunk_count": 0,
+                    "message": "Chroma 已有该文件，跳过处理",
+                })
+
+        # 提交后台任务
+        from .task_manager import get_manager as get_task_manager
+        manager = get_task_manager()
+        record = manager.submit(
+            file_name=fname,
+            collection=target,
+            process_fn=lambda: _run_sync_task(
+                file_path, fname, target, force,
+            ),
+        )
+
+        logger.info(f"🔄 同步任务已提交: {fname} → task_id={record.task_id}")
+
+        return JSONResponse({
+            "task_id": record.task_id,
+            "status": "processing",
+            "file_name": fname,
+            "message": "同步任务已提交，后台处理中",
+        })
+
+    if sync_all:
+        try:
+            from .scheduler import trigger_manual_sync
+            stats = trigger_manual_sync(force=force)
+            return JSONResponse({"status": "done", "stats": stats})
+        except Exception as e:
+            raise HTTPException(500, f"批量同步失败: {e}")
+
+    raise HTTPException(400, "需指定 file_path 或 sync_all=True")
+
+
+def _run_sync_task(file_path: str, fname: str,
+                   target: str, force: bool) -> object:
+    """后台执行同步任务（被 task_manager 调用）
+
+    独立的模块级函数，在后台线程中执行，自动关联进度上报。
+    """
+    from .engine import process_file
+    from .sync_tracker import SyncTracker
+    tracker = SyncTracker()
+
+    try:
+        fsize = os.path.getsize(file_path)
+        fhash = str(int(os.path.getmtime(file_path)))
+    except OSError:
+        fsize, fhash = 0, ""
+
+    tracker.upsert_file(file_path, fname, fsize, fhash, target)
+
+    from .task_manager import report_progress as _rp
+    _rp("syncing", 10, "开始同步处理...")
+
+    doc = process_file(file_path, file_name=fname,
+                       target_collection=target)
+
+    if doc.status in ("done", "skipped"):
+        tracker.mark_synced(file_path)
+    else:
+        tracker.mark_error(file_path, doc.message or "未知状态")
+
+    return doc
+
+
+@router.get("/recent-tasks")
+def recent_tasks(password: str = Query("", description="管理员密码")):
+    """获取最近的后台任务列表（用于前端进度追踪面板）"""
+    if not _verify_admin_access(password):
+        raise HTTPException(401, "密码错误")
+
+    from .task_manager import get_manager as get_task_manager
+    manager = get_task_manager()
+    tasks = manager.get_recent_tasks(limit=20)
+
+    # 补充 sync_tracker 中的同步记录
+    from .sync_tracker import SyncTracker
+    tracker = SyncTracker()
+    history = tracker.get_history(limit=10)
+
+    return JSONResponse({
+        "running_tasks": tasks,
+        "sync_history": history,
+    })
+
+
+@router.post("/sync-delete")
+def sync_delete_file(
+    file_path: str = Form(...),
+    password: str = Form(""),
+):
+    """删除同步管理中的源文件（磁盘文件 + sync_tracker 记录）
+
+    注意：只删除磁盘上的源文件，不影响已入库的 Chroma 知识库。
+    如需删除知识库内容，请到「文档列表」Tab 操作。
+    """
+    if not _verify_admin_access(password):
+        raise HTTPException(403, "密码错误，无权操作")
+
+    if not file_path:
+        raise HTTPException(400, "缺少 file_path")
+
+    if not os.path.isfile(file_path):
+        raise HTTPException(404, f"文件不存在: {file_path}")
+
+    fname = os.path.basename(file_path)
+    try:
+        # 1. 删除磁盘文件
+        os.remove(file_path)
+        logger.info(f"已删除源文件: {file_path}")
+
+        # 2. 删除 sync_tracker 记录
+        from .sync_tracker import SyncTracker
+        tracker = SyncTracker()
+        # SQLite 直接 DELETE 该文件记录
+        import sqlite3
+        conn = tracker._get_conn()
+        conn.execute("DELETE FROM sync_status WHERE file_path = ?", (file_path,))
+        conn.commit()
+
+        return JSONResponse({
+            "status": "deleted",
+            "file_name": fname,
+            "message": f"已删除: {fname}",
+        })
+    except Exception as e:
+        logger.exception(f"删除文件失败: {file_path}")
+        raise HTTPException(500, f"删除失败: {e}")
+
+
+@router.get("/sync-status")
+def sync_status(
+    status_filter: str = Query("", alias="status",
+                                description="过滤: pending/synced/error"),
+    collection_filter: str = Query("", alias="collection",
+                                    description="按 collection 过滤"),
+    limit: int = Query(100, ge=1, le=500),
+    password: str = Query("", description="管理员密码"),
+):
+    """查询同步历史记录"""
+    if not _verify_admin_access(password):
+        raise HTTPException(401, "密码错误")
+
+    from .sync_tracker import SyncTracker
+    tracker = SyncTracker()
+    records = tracker.list_all(
+        status_filter=status_filter,
+        collection_filter=collection_filter,
+    )
+    records = sorted(
+        records,
+        key=lambda r: r.get("updated_at", ""),
+        reverse=True,
+    )[:limit]
+    return JSONResponse({"records": records, "total": len(records)})
+
+
+@router.get("/sync-stats")
+def sync_stats(password: str = Query("", description="管理员密码")):
+    """同步统计概览"""
+    if not _verify_admin_access(password):
+        raise HTTPException(401, "密码错误")
+
+    from .sync_tracker import SyncTracker
+    tracker = SyncTracker()
+    stats = tracker.get_stats()
+
+    # 补充目录文件数
+    for dir_key, rel_dir in [("files_in_uploads", "data/uploads"),
+                              ("files_in_standards", "data/standards"),
+                              ("files_in_fault_codes", "data/fault_codes")]:
+        abs_dir = os.path.normpath(os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "..", rel_dir
+        ))
+        count = 0
+        if os.path.isdir(abs_dir):
+            for root, dirs, fnames in os.walk(abs_dir):
+                if "mineru_output" in root:
+                    continue
+                for fn in fnames:
+                    if os.path.splitext(fn)[1].lower() in (".pdf", ".xlsx", ".xls", ".md"):
+                        count += 1
+        stats[dir_key] = count
+
+    return JSONResponse(stats)

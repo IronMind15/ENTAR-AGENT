@@ -232,6 +232,143 @@ ADMIN_HTML = r"""<!DOCTYPE html>
     .doc-item { flex-direction: column; align-items: flex-start; }
     .doc-item .doc-actions { margin-top: 8px; }
   }
+
+  /* ===== Sync Dashboard ===== */
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+  }
+  .stat-item {
+    text-align: center;
+    padding: 16px;
+    background: var(--bg);
+    border-radius: 8px;
+  }
+  .stat-item .stat-num { font-size: 28px; font-weight: 700; display: block; }
+  .stat-item span:last-child { font-size: 12px; color: var(--text-secondary); }
+  .filter-bar {
+    display: flex; gap: 8px; margin-bottom: 16px;
+  }
+  .filter-bar select {
+    padding: 8px 12px; border: 1px solid var(--border);
+    border-radius: 8px; font-size: 13px;
+    background: var(--card); color: var(--text);
+    outline: none;
+  }
+  .filter-bar select:focus { border-color: var(--primary); }
+  .sync-file-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 14px; border-radius: 8px;
+    border: 1px solid var(--border); margin-bottom: 6px;
+    transition: background .15s;
+  }
+  .sync-file-item:hover { background: var(--hover); }
+  .sync-file-item .file-info { flex: 1; min-width: 0; }
+  .sync-file-item .file-name {
+    font-size: 13px; font-weight: 500;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .sync-file-item .file-meta {
+    font-size: 11px; color: var(--text-secondary); margin-top: 2px;
+  }
+  .status-badge {
+    display: inline-block; padding: 2px 10px; border-radius: 10px;
+    font-size: 11px; font-weight: 600;
+  }
+  .status-badge.synced { background: #ecfdf5; color: #065f46; }
+  .status-badge.pending, .status-badge.new { background: #fffbeb; color: #92400e; }
+  .status-badge.error { background: #fef2f2; color: #991b1b; }
+  [data-theme="dark"] .status-badge.synced { background: #064e3b; color: #a7f3d0; }
+  [data-theme="dark"] .status-badge.pending,
+  [data-theme="dark"] .status-badge.new { background: #451a03; color: #fcd34d; }
+  [data-theme="dark"] .status-badge.error { background: #7f1d1d; color: #fecaca; }
+  .sync-file-item .sync-actions button {
+    padding: 6px 14px; border: none; border-radius: 6px;
+    font-size: 12px; cursor: pointer; transition: all .2s;
+    margin-left: 8px;
+  }
+  .sync-actions .sync-btn {
+    background: var(--primary); color: #fff;
+  }
+  .sync-actions .sync-btn:hover { background: var(--primary-dark); }
+  .sync-actions .sync-btn:disabled { opacity: .5; cursor: not-allowed; }
+  .sync-actions .sync-btn-force {
+    background: transparent; color: var(--danger);
+    border: 1px solid var(--danger);
+  }
+  .sync-actions .sync-btn-force:hover { background: #fef2f2; }
+  [data-theme="dark"] .sync-actions .sync-btn-force:hover { background: #450a0a; }
+  .sync-actions .sync-btn-force:disabled { opacity: .5; cursor: not-allowed; }
+  /* ===== Sync Progress ===== */
+  .progress-task-card {
+    padding: 14px; border: 1px solid var(--border);
+    border-radius: 10px; margin-bottom: 10px;
+    background: var(--bg); transition: opacity .3s;
+  }
+  .progress-task-card .pt-header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 8px; font-size: 14px; font-weight: 500;
+  }
+  .progress-task-card .pt-header .pt-status {
+    font-size: 12px; padding: 2px 10px; border-radius: 10px;
+  }
+  .pt-status.running { background: #dbeafe; color: #1e40af; }
+  .pt-status.done { background: #ecfdf5; color: #065f46; }
+  .pt-status.error { background: #fef2f2; color: #991b1b; }
+  [data-theme="dark"] .pt-status.running { background: #1e3a5f; color: #93c5fd; }
+  [data-theme="dark"] .pt-status.done { background: #064e3b; color: #a7f3d0; }
+  [data-theme="dark"] .pt-status.error { background: #7f1d1d; color: #fecaca; }
+  .progress-bar-track {
+    height: 8px; background: var(--border); border-radius: 4px;
+    overflow: hidden; margin-bottom: 6px;
+  }
+  .progress-bar-track .pb-fill {
+    height: 100%; border-radius: 4px;
+    background: linear-gradient(90deg, #3b82f6, #2563eb);
+    transition: width .5s ease;
+  }
+  .pb-fill.done { background: linear-gradient(90deg, #34d399, #10b981); }
+  .pb-fill.error { background: linear-gradient(90deg, #f87171, #ef4444); }
+  .progress-task-card .pt-message {
+    font-size: 12px; color: var(--text-secondary);
+    display: flex; justify-content: space-between;
+  }
+  .sync-delete-btn {
+    padding: 4px 8px; border: none; border-radius: 4px;
+    background: transparent; color: var(--danger);
+    cursor: pointer; font-size: 15px; opacity: 0.5;
+    transition: all .2s; margin-left: 4px;
+  }
+  .sync-delete-btn:hover { opacity: 1; background: #fef2f2; }
+  [data-theme="dark"] .sync-delete-btn:hover { background: #450a0a; }
+  .coll-select {
+    padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px;
+    font-size: 12px; background: var(--bg); color: var(--text); outline: none;
+    cursor: pointer;
+  }
+  .coll-select:hover { border-color: var(--primary); }
+  .coll-select:focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(37,99,235,0.15); }
+  .primary-btn {
+    padding: 8px 20px; border: none; border-radius: 8px;
+    background: var(--primary); color: #fff; font-size: 13px;
+    cursor: pointer; transition: all .2s;
+  }
+  .primary-btn:hover { background: var(--primary-dark); }
+  .primary-btn:disabled { opacity: .5; cursor: not-allowed; }
+  .history-item {
+    padding: 6px 0; border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    display: flex; justify-content: space-between;
+  }
+  .history-item .h-time { color: var(--text-secondary); }
+  .history-item .h-status { font-weight: 500; }
+  @media (max-width: 640px) {
+    .stat-grid { grid-template-columns: repeat(2, 1fr); }
+    .filter-bar { flex-wrap: wrap; }
+    .sync-file-item { flex-direction: column; align-items: flex-start; }
+    .sync-file-item .sync-actions { margin-top: 8px; }
+  }
 </style>
 </head>
 <body>
@@ -253,6 +390,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
     <button class="active" onclick="switchTab('docs', this)">📚 文档列表</button>
     <button onclick="switchTab('upload', this)">📤 上传文件</button>
     <button onclick="switchTab('search', this)">🔍 搜索测试</button>
+    <button onclick="switchTab('sync', this)">🔄 同步管理</button>
   </div>
 
   <!-- Tab: Document List -->
@@ -309,6 +447,72 @@ ADMIN_HTML = r"""<!DOCTYPE html>
       <div id="searchResults"></div>
     </div>
   </div>
+
+  <!-- Tab: Sync Dashboard -->
+  <div id="tab-sync" class="tab-content">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <h3>🔄 文件同步管理</h3>
+        <div style="display:flex;gap:8px">
+          <button onclick="triggerSyncAll()" class="primary-btn" id="syncAllBtn">同步全部待处理</button>
+          <button onclick="triggerForceSyncAll()" class="primary-btn" style="background:var(--danger);color:#fff" title="跳过 Chroma 预检查，全部文件强制重新入库">⚡强制重学全部</button>
+        </div>
+      </div>
+      <p style="font-size:13px;color:var(--text-secondary);margin-bottom:16px">
+        自动同步每 24h 执行一次。可手动选择文件单独同步。
+      </p>
+
+      <!-- 统计概览 -->
+      <div id="syncStats" style="display:none;margin-bottom:16px">
+        <div class="stat-grid">
+          <div class="stat-item"><span class="stat-num" id="statTotal">0</span><span>总计</span></div>
+          <div class="stat-item"><span class="stat-num" id="statSynced" style="color:var(--success)">0</span><span>已同步</span></div>
+          <div class="stat-item"><span class="stat-num" id="statPending" style="color:var(--warning)">0</span><span>待处理</span></div>
+          <div class="stat-item"><span class="stat-num" id="statError" style="color:var(--danger)">0</span><span>失败</span></div>
+        </div>
+      </div>
+
+      <!-- 过滤栏 -->
+      <div class="filter-bar">
+        <select id="syncDirFilter" onchange="loadSyncFiles()">
+          <option value="">所有目录</option>
+          <option value="uploads">📁 data/uploads/（钉钉上传）</option>
+          <option value="standards">📁 data/standards/（标准文档）</option>
+          <option value="fault_codes">📁 data/fault_codes/（故障代码）</option>
+        </select>
+        <select id="syncStatusFilter" onchange="loadSyncFiles()">
+          <option value="">所有状态</option>
+          <option value="new">🆕 新文件</option>
+          <option value="pending">⏳ 待处理</option>
+          <option value="synced">✅ 已同步</option>
+          <option value="error">❌ 失败</option>
+        </select>
+      </div>
+
+      <!-- 文件列表 -->
+      <div id="syncFileList">
+        <div class="loading-spinner">加载中...</div>
+      </div>
+
+      <!-- 同步进度追踪 -->
+      <div class="card" style="margin-top:20px">
+        <h3>⏳ 同步进度</h3>
+        <div id="syncProgressArea">
+          <div class="empty-state">暂无进行中的同步任务</div>
+        </div>
+      </div>
+
+      <!-- 同步历史 -->
+      <details style="margin-top:20px">
+        <summary style="cursor:pointer;font-size:14px;font-weight:500;color:var(--text-secondary)">
+          📜 同步历史记录
+        </summary>
+        <div id="syncHistory" style="margin-top:8px">
+          <div class="loading-spinner">加载中...</div>
+        </div>
+      </details>
+    </div>
+  </div>
 </div>
 
 <!-- Toast -->
@@ -354,6 +558,7 @@ function switchTab(name, el) {
   document.getElementById('tab-' + name).classList.add('active');
   if (name === 'docs') loadDocs();
   if (name === 'search') loadSearchCollections();
+  if (name === 'sync') { loadSyncFiles(); loadSyncHistory(); loadSyncStats(); loadSyncProgress(); }
 }
 
 // ===== Escape HTML =====
@@ -496,60 +701,110 @@ function uploadFile(file) {
   }
 
   progress.classList.add('show');
-  fill.style.width = '20%';
+  fill.style.width = '30%';
   fill.classList.remove('done');
   text.textContent = '📤 上传中... (' + file.name + ')';
   result.classList.remove('show');
+  result.className = 'upload-result';
 
   var formData = new FormData();
   formData.append('file', file);
   formData.append('collection', document.getElementById('uploadCollection').value);
 
-  // 上传完成后切换为"处理中"状态（大文件处理可能需要 30s+）
-  var processingTimer = setTimeout(function() {
-    fill.style.width = '50%';
-    text.textContent = '⚙️ 正在处理，请耐心等待... (嵌入向量计算)';
-  }, 2000);
-
   fetch('/admin/upload', { method: 'POST', body: formData })
     .then(function(r) {
-      clearTimeout(processingTimer);
-      fill.style.width = '80%';
-      text.textContent = '✅ 处理完成，整理结果...';
+      if (!r.ok) throw new Error('上传失败: ' + r.status);
       return r.json();
     })
     .then(function(data) {
       fill.style.width = '100%';
       fill.classList.add('done');
-
-      if (data.status === 'done') {
-        result.className = 'upload-result success show';
-        result.innerHTML = '✅ 处理完成！<br>'
-          + '文件: ' + esc(data.file_name) + '<br>'
-          + '入库: ' + data.chunk_count + ' 块 → ' + esc(data.collection)
-          + (data.std_id ? '<br>标准: ' + esc(data.std_id) : '');
-        text.textContent = '完成！共 ' + data.chunk_count + ' 块';
-        showToast('上传成功: ' + data.chunk_count + ' 块', 'success');
-        loadDocs();
-        loadSearchCollections();
-      } else if (data.status === 'ocr_needed') {
-        result.className = 'upload-result show';
-        result.style.cssText = 'display:block;padding:12px 16px;border-radius:8px;font-size:13px;background:#fffbeb;color:#92400e;';
-        result.innerHTML = '⚠️ 扫描型 PDF，需要 OCR 处理';
-        text.textContent = '需 OCR 处理';
-      } else {
-        result.className = 'upload-result error show';
-        result.innerHTML = '❌ ' + (data.message || '处理失败');
-        text.textContent = '处理失败';
-      }
+      text.textContent = '✅ 上传完成，待同步';
+      result.className = 'upload-result success show';
+      result.innerHTML = '✅ 文件已上传成功！<br>'
+        + '文件: ' + esc(data.file_name) + '<br>'
+        + '预选库: ' + esc(data.collection) + '<br><br>'
+        + '👉 请到「<a href="#" onclick="switchTab(\'sync\', document.querySelector(\'.tabs button:nth-child(4)\'));return false" style="color:var(--primary)">🔄 同步管理</a>」Tab 选库后手动同步入库';
+      showToast('上传完成，请到同步管理处理', 'success');
+      loadDocs();
+      loadSearchCollections();
     })
     .catch(function(err) {
-      clearTimeout(processingTimer);
       fill.style.width = '100%';
       result.className = 'upload-result error show';
-      result.innerHTML = '❌ 上传异常: ' + esc(err.message);
-      text.textContent = '上传异常';
+      result.innerHTML = '❌ ' + esc(err.message);
+      text.textContent = '上传失败';
     });
+}
+
+function pollTaskStatus(taskId, fileName, fill, text, result) {
+  var pollTimer = setInterval(function() {
+    fetch('/admin/upload-status/' + taskId)
+      .then(function(r) {
+        if (!r.ok) throw new Error('查询失败');
+        return r.json();
+      })
+      .then(function(status) {
+        // 更新进度
+        if (status.status === 'pending') {
+          fill.style.width = '25%';
+          text.textContent = '⏳ 排队等待处理...';
+        } else if (status.status === 'processing') {
+          fill.style.width = '50%';
+          text.textContent = '⚙️ 正在处理中... (提取 → 切块 → 入库)';
+        } else if (status.status === 'done') {
+          clearInterval(pollTimer);
+          fill.style.width = '100%';
+          fill.classList.add('done');
+          text.textContent = '✅ 处理完成！共 ' + (status.result.chunk_count || 0) + ' 块';
+          result.className = 'upload-result success show';
+          result.innerHTML = '✅ 处理完成！<br>'
+            + '文件: ' + esc(status.result.file_name || fileName) + '<br>'
+            + '入库: ' + (status.result.chunk_count || 0) + ' 块 → ' + esc(status.result.collection || '')
+            + (status.result.std_id ? '<br>标准: ' + esc(status.result.std_id) : '')
+            + (status.result.source ? '<br>来源: ' + esc(status.result.source) : '');
+          showToast('上传成功: ' + (status.result.chunk_count || 0) + ' 块', 'success');
+          loadDocs();
+          loadSearchCollections();
+          return;
+        } else if (status.status === 'error') {
+          clearInterval(pollTimer);
+          fill.style.width = '100%';
+          text.textContent = '❌ 处理失败';
+
+          // 判断是否是 ocr_needed
+          if (status.result && status.result.status === 'ocr_needed') {
+            result.className = 'upload-result show';
+            result.style.cssText = 'display:block;padding:12px 16px;border-radius:8px;font-size:13px;background:#fffbeb;color:#92400e;';
+            result.innerHTML = '⚠️ ' + (status.result.message || '扫描型 PDF，需要 OCR 处理');
+          } else {
+            result.className = 'upload-result error show';
+            result.innerHTML = '❌ ' + esc(status.error || '处理失败');
+          }
+          return;
+        } else if (status.status === 'timeout') {
+          clearInterval(pollTimer);
+          fill.style.width = '100%';
+          text.textContent = '⏰ 处理超时';
+          result.className = 'upload-result error show';
+          result.innerHTML = '⏰ ' + esc(status.error || '处理超时（超过 30 分钟）');
+          return;
+        }
+
+        // 超过 30 分钟前端也兜底停止轮询
+        if (status.updated_at && Date.now() / 1000 - status.updated_at > 1800) {
+          clearInterval(pollTimer);
+          fill.style.width = '100%';
+          text.textContent = '⏰ 处理超时';
+          result.className = 'upload-result error show';
+          result.innerHTML = '⏰ 后台处理超过 30 分钟未完成，请检查服务端日志';
+        }
+      })
+      .catch(function(err) {
+        // 轮询失败不中断，继续尝试
+        console.error('轮询失败:', err);
+      });
+  }, 2000);  // 每 2 秒轮询一次
 }
 
 // ===== Tab 3: Search =====
@@ -662,6 +917,391 @@ function renderSingleResult(item, idx) {
     + '<div class="result-text">' + esc(text) + '</div>'
     + (metaHtml ? '<div class="result-meta">' + metaHtml + '</div>' : '')
     + '</div>';
+}
+
+// ===== Tab 4: Sync Dashboard =====
+// 获取 URL 中的 password 参数
+function getPw() {
+  var m = location.search.match(/[?&]password=([^&]*)/);
+  return m ? m[1] : '';
+}
+
+function loadSyncStats() {
+  fetch('/admin/sync-stats?password=' + getPw())
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      document.getElementById('syncStats').style.display = '';
+      document.getElementById('statTotal').textContent =
+        (data.files_in_uploads || 0) + (data.files_in_standards || 0);
+      document.getElementById('statSynced').textContent = data.synced || 0;
+      document.getElementById('statPending').textContent = data.pending || 0;
+      document.getElementById('statError').textContent = data.error || 0;
+    })
+    .catch(function() {});
+}
+
+function loadSyncFiles() {
+  var list = document.getElementById('syncFileList');
+  list.innerHTML = '<div class="loading-spinner">加载中...</div>';
+
+  var dirFilter = document.getElementById('syncDirFilter').value;
+  var statusFilter = document.getElementById('syncStatusFilter').value;
+  var pw = getPw();
+
+  fetch('/admin/sync-files?password=' + pw)
+    .then(function(r) {
+      if (!r.ok) throw new Error('请求失败 ' + r.status);
+      return r.json();
+    })
+    .then(function(data) {
+      var html = '';
+      var dirKeys = Object.keys(data.directories);
+      for (var di = 0; di < dirKeys.length; di++) {
+        var dk = dirKeys[di];
+        if (dirFilter && dirFilter !== dk) continue;
+        var dirInfo = data.directories[dk];
+        var files = dirInfo.files || [];
+
+        if (statusFilter) {
+          files = files.filter(function(f) { return f.sync_status === statusFilter; });
+        }
+        if (files.length === 0) { continue; }
+
+        html += '<div class="collection-group">';
+        html += '<div class="collection-header">';
+        html += '<h3>📁 ' + esc(dk) + ' (' + files.length + ')</h3>';
+        html += '</div>';
+
+        for (var fi = 0; fi < files.length; fi++) {
+          var f = files[fi];
+          var statusLabel = {synced: '已同步', pending: '待处理', error: '失败', new: '新文件'};
+          var label = statusLabel[f.sync_status] || f.sync_status;
+          var isPending = (f.sync_status === 'new' || f.sync_status === 'pending' || f.sync_status === 'error');
+
+          // 上传者信息
+          var userHtml = '';
+          if (f.upload_user_name) {
+            userHtml = '👤 ' + esc(f.upload_user_name) + '  ·  ';
+          } else if (f.sync_status === 'new') {
+            userHtml = '👤 未知（钉钉上传自动记录）  ·  ';
+          }
+
+          // 目标库选择（待处理文件可选，已同步只读显示）
+          var collHtml = '';
+          var curColl = f.target_collection || dirInfo.default_collection;
+          if (isPending) {
+            collHtml = '目标库: <select class="coll-select" data-path="' + esc(f.file_path) + '">'
+              + '<option value="standards"' + (curColl === 'standards' ? ' selected' : '') + '>📋 标准文档 (standards)</option>'
+              + '<option value="error_codes"' + (curColl === 'error_codes' ? ' selected' : '') + '>🔧 故障代码 (error_codes)</option>'
+              + '</select>';
+          } else {
+            collHtml = '目标: ' + esc(curColl);
+          }
+
+          html += '<div class="sync-file-item">';
+          html += '<div class="file-info">';
+          html += '<div class="file-name">📄 ' + esc(f.file_name) + '</div>';
+          html += '<div class="file-meta">';
+          html += userHtml;
+          html += '<span class="status-badge ' + f.sync_status + '">' + label + '</span>';
+          html += ' · ' + (f.file_size / 1024).toFixed(1) + 'KB';
+          html += ' · ' + collHtml;
+          if (f.error_message) html += ' · ❌ ' + esc(f.error_message);
+          if (f.last_synced_at) html += ' · ' + esc(f.last_synced_at).slice(0, 16);
+          html += '</div></div>';
+          html += '<div class="sync-actions">';
+          html += '<button class="sync-btn" data-path="' + esc(f.file_path) + '" data-force="false"' + (!isPending ? ' style="opacity:0.4"' : '') + '>' + (isPending ? '同步' : '已同步') + '</button>';
+          html += '<button class="sync-btn-force" data-path="' + esc(f.file_path) + '" data-force="true" title="跳过 Chroma 预检查，强制重新入库">强制重学</button>';
+          html += '<button class="sync-delete-btn" data-path="' + esc(f.file_path) + '" title="删除源文件（不影响已入库的知识库）">🗑️</button>';
+          html += '</div></div>';
+        }
+        html += '</div>';
+      }
+      if (!html) html = '<div class="empty-state">无匹配文件</div>';
+      list.innerHTML = html;
+    })
+    .catch(function(err) {
+      list.innerHTML = '<div class="empty-state" style="color:var(--danger)">加载失败: ' + esc(err.message) + '</div>';
+    });
+}
+
+// 事件委托：同步 + 删除按钮
+document.addEventListener('click', function(e) {
+  var btn = e.target.closest('.sync-btn, .sync-btn-force');
+  if (btn && btn.closest('#tab-sync')) {
+    var path = btn.getAttribute('data-path');
+    var force = btn.getAttribute('data-force') === 'true';
+
+    // 从同文件项的下拉框读取目标库
+    var fileItem = btn.closest('.sync-file-item');
+    var collSelect = fileItem ? fileItem.querySelector('.coll-select') : null;
+    var coll = collSelect ? collSelect.value : '';
+
+    asyncSyncFile(path, coll, force, btn);
+    return;
+  }
+
+  // 删除按钮
+  var delBtn = e.target.closest('.sync-delete-btn');
+  if (delBtn && delBtn.closest('#tab-sync')) {
+    var path = delBtn.getAttribute('data-path');
+    deleteSyncFile(path);
+  }
+});
+
+function deleteSyncFile(filePath) {
+  var fname = filePath.split('/').pop().split('\\').pop();
+  if (!confirm('确定要删除源文件 "' + fname + '" 吗？\n\n注意：此操作只删除磁盘上的源文件，不影响已入库的知识库内容。\n如需删除知识库内容，请到「文档列表」Tab 操作。')) return;
+
+  var formData = new FormData();
+  formData.append('file_path', filePath);
+  formData.append('password', getPw());
+
+  fetch('/admin/sync-delete', { method: 'POST', body: formData })
+    .then(function(r) {
+      if (!r.ok) throw new Error('删除失败: ' + r.status);
+      return r.json();
+    })
+    .then(function(data) {
+      showToast('✅ 已删除: ' + data.file_name, 'success');
+      loadSyncFiles();
+      loadSyncStats();
+      loadSyncHistory();
+    })
+    .catch(function(err) {
+      showToast('❌ ' + err.message, 'error');
+    });
+}
+
+function asyncSyncFile(filePath, collection, force, btn) {
+  btn.disabled = true;
+  btn.textContent = '⏳ 提交中...';
+
+  var formData = new FormData();
+  formData.append('file_path', filePath);
+  formData.append('collection', collection);
+  formData.append('force', force ? 'true' : '');
+  formData.append('password', getPw());
+
+  fetch('/admin/sync-trigger', { method: 'POST', body: formData })
+    .then(function(r) {
+      if (!r.ok) throw new Error('提交失败: ' + r.status);
+      return r.json();
+    })
+    .then(function(data) {
+      if (data.status === 'skipped') {
+        showToast('⏭ Chroma 已有该文件，跳过处理', 'success');
+        btn.disabled = false;
+        btn.textContent = '同步';
+        loadSyncFiles();
+        loadSyncStats();
+        return;
+      }
+
+      var taskId = data.task_id;
+      showToast('⏳ 同步任务已提交', 'success');
+      loadSyncProgress();  // 立即加载进度面板
+      btn.textContent = '⏳ 处理中...';
+
+      // 轮询直到完成
+      pollSyncTask(taskId, btn);
+    })
+    .catch(function(err) {
+      showToast('❌ ' + err.message, 'error');
+      btn.disabled = false;
+      btn.textContent = '重试';
+    });
+}
+
+function pollSyncTask(taskId, btn) {
+  var pollTimer = setInterval(function() {
+    fetch('/admin/upload-status/' + taskId)
+      .then(function(r) { return r.json(); })
+      .then(function(status) {
+        loadSyncProgress();  // 刷新进度面板
+
+        if (status.status === 'done' || status.status === 'error') {
+          clearInterval(pollTimer);
+          loadSyncFiles();
+          loadSyncStats();
+          if (btn) { btn.disabled = false; btn.textContent = '同步'; }
+        }
+      })
+      .catch(function() {
+        // 轮询失败不中断
+      });
+  }, 3000);  // 3 秒轮询一次
+}
+
+function loadSyncProgress() {
+  fetch('/admin/recent-tasks?password=' + getPw())
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var tasks = data.running_tasks || [];
+      var area = document.getElementById('syncProgressArea');
+      if (!area) return;
+
+      var html = '';
+
+      // 活跃任务（正在处理或最近的）
+      var activeTasks = tasks.filter(function(t) {
+        return t.status === 'processing' || t.status === 'pending';
+      });
+
+      if (activeTasks.length === 0) {
+        html += '<div class="empty-state">暂无进行中的同步任务</div>';
+      }
+
+      for (var i = 0; i < activeTasks.length; i++) {
+        html += renderProgressCard(activeTasks[i]);
+      }
+
+      // 最近的已完成/失败任务（最多 5 条）
+      var recentDone = tasks.filter(function(t) {
+        return t.status === 'done' || t.status === 'error';
+      }).slice(0, 5);
+
+      if (recentDone.length > 0) {
+        html += '<div style="margin-top:12px;font-size:13px;color:var(--text-secondary);font-weight:500">最近完成</div>';
+        for (var i = 0; i < recentDone.length; i++) {
+          html += renderProgressCard(recentDone[i]);
+        }
+      }
+
+      area.innerHTML = html;
+    })
+    .catch(function() {});
+}
+
+function renderProgressCard(task) {
+  var stepIcons = {
+    'start': '🚀', 'mineru_upload': '📤', 'mineru_waiting': '⏳',
+    'mineru_download': '📥', 'chunking': '✂️', 'indexing': '💾',
+    'pymupdf_extract': '📖', 'excel_parse': '📊', 'syncing': '🔄',
+    'done': '✅', 'error': '❌', 'timeout': '⏰',
+  };
+  var icon = stepIcons[task.step] || '⏳';
+
+  var statusClass = 'running';
+  var statusLabel = '处理中';
+  if (task.status === 'done') { statusClass = 'done'; statusLabel = '完成'; }
+  if (task.status === 'error') { statusClass = 'error'; statusLabel = '失败'; }
+
+  var barClass = task.status === 'done' ? 'pb-fill done' :
+                 task.status === 'error' ? 'pb-fill error' : 'pb-fill';
+  var progress = task.progress || 0;
+  var elapsed = '';
+  if (task.created_at) {
+    var secs = Math.floor((Date.now() / 1000) - task.created_at);
+    if (secs < 120) elapsed = Math.floor(secs / 60) + '分' + (secs % 60) + '秒前';
+    else elapsed = Math.floor(secs / 60) + '分钟前';
+  }
+
+  return '<div class="progress-task-card">'
+    + '<div class="pt-header">'
+    + '<span>' + icon + ' ' + esc(task.file_name || '') + '</span>'
+    + '<span class="pt-status ' + statusClass + '">' + statusLabel + (elapsed ? ' · ' + elapsed : '') + '</span>'
+    + '</div>'
+    + '<div class="progress-bar-track">'
+    + '<div class="' + barClass + '" style="width:' + progress + '%"></div>'
+    + '</div>'
+    + '<div class="pt-message">'
+    + '<span>' + esc(task.progress_text || '') + '</span>'
+    + '<span style="font-weight:600">' + progress + '%</span>'
+    + '</div>'
+    + '</div>';
+}
+
+// 每 5 秒自动刷新进度面板（不管在哪个 tab）
+setInterval(function() {
+  if (document.getElementById('tab-sync') &&
+      document.getElementById('tab-sync').classList.contains('active')) {
+    loadSyncProgress();
+  }
+}, 5000);
+
+function triggerSyncAll() {
+  var btn = document.getElementById('syncAllBtn');
+  if (!confirm('确认同步所有待处理和失败的文件？')) return;
+  btn.disabled = true;
+  btn.textContent = '同步中...';
+
+  var formData = new FormData();
+  formData.append('sync_all', 'true');
+  formData.append('force', '');
+  formData.append('password', getPw());
+
+  fetch('/admin/sync-trigger', { method: 'POST', body: formData })
+    .then(function(r) { return r.json(); })
+    .then(function() {
+      showToast('全部同步完成', 'success');
+      loadSyncFiles();
+      loadSyncStats();
+      loadSyncHistory();
+      btn.disabled = false;
+      btn.textContent = '同步全部待处理';
+    })
+    .catch(function(err) {
+      showToast('同步失败: ' + err.message, 'error');
+      btn.disabled = false;
+      btn.textContent = '重新尝试';
+    });
+}
+
+// 强制重学全部
+function triggerForceSyncAll() {
+  var btn = document.getElementById('syncAllBtn');
+  if (!confirm('⚠️ 强制重学将重新入库所有文件，确认继续？')) return;
+  btn.disabled = true;
+  btn.textContent = '强制同步中...';
+
+  var formData = new FormData();
+  formData.append('sync_all', 'true');
+  formData.append('force', 'true');
+  formData.append('password', getPw());
+
+  fetch('/admin/sync-trigger', { method: 'POST', body: formData })
+    .then(function(r) { return r.json(); })
+    .then(function() {
+      showToast('强制同步完成', 'success');
+      loadSyncFiles();
+      loadSyncStats();
+      loadSyncHistory();
+      btn.disabled = false;
+      btn.textContent = '同步全部待处理';
+    })
+    .catch(function(err) {
+      showToast('同步失败: ' + err.message, 'error');
+      btn.disabled = false;
+      btn.textContent = '重新尝试';
+    });
+}
+
+function loadSyncHistory() {
+  fetch('/admin/sync-status?limit=30&password=' + getPw())
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var el = document.getElementById('syncHistory');
+      var records = data.records || [];
+      if (!records.length) {
+        el.innerHTML = '<div class="empty-state">暂无同步记录</div>';
+        return;
+      }
+      var html = '';
+      for (var i = 0; i < records.length; i++) {
+        var r = records[i];
+        var icon = r.sync_status === 'synced' ? '✅' : r.sync_status === 'error' ? '❌' : '⏳';
+        html += '<div class="history-item">';
+        html += '<span>' + icon + ' ' + esc(r.file_name) + '</span>';
+        html += '<span class="h-status">' + esc(r.sync_status) + '</span>';
+        html += '<span class="h-time">' + esc((r.updated_at || '').slice(0, 16)) + '</span>';
+        html += '</div>';
+      }
+      el.innerHTML = html;
+    })
+    .catch(function() {
+      document.getElementById('syncHistory').innerHTML = '<div class="empty-state">加载失败</div>';
+    });
 }
 </script>
 </body>

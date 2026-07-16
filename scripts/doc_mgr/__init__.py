@@ -8,3 +8,5 @@ doc_mgr — 文档管理子系统
 from .models import Chunk, Document, ChunkResult
 from .storage import VectorStore, ChromaStore, get_store
 from .engine import process_file, process_files
+from .sync_tracker import SyncTracker
+from .scheduler import start_scheduler, stop_scheduler, trigger_manual_sync

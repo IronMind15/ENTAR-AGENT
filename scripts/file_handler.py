@@ -16,6 +16,7 @@ import logging
 import requests
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 logger = logging.getLogger("file_handler")
 
@@ -69,6 +70,7 @@ def download_and_save_file(
     user_id: str,
     chatbot_handler,
     user_name: str = "",
+    target_collection: str = "",
 ) -> dict:
     """
     下载并保存文件（复用 dingtalk_stream SDK）
@@ -79,6 +81,7 @@ def download_and_save_file(
         user_id: 用户标识
         chatbot_handler: ChatbotHandler 实例（用于获取 access_token 和下载链接）
         user_name: 用户昵称（可选，用于目录命名）
+        target_collection: 目标知识库（空表示待管理员分配）
 
     Returns:
         {"success": bool, "file_path": str|None, "file_name": str, "file_size": int, "message": str}
@@ -137,6 +140,24 @@ def download_and_save_file(
         result["message"] = "文件保存成功"
 
         logger.info(f"文件已保存: {file_path} ({file_size} bytes)")
+
+        # 记录到同步追踪器（标记为待处理，管理员可在后台分配库）
+        try:
+            from doc_mgr.sync_tracker import SyncTracker
+            tracker = SyncTracker()
+            tracker.upsert_file(
+                file_path=str(file_path),
+                file_name=file_path.name,
+                file_size=file_size,
+                file_hash=str(int(os.path.getmtime(str(file_path)))),
+                target_collection=target_collection,
+                upload_user_id=user_id,
+                upload_user_name=user_name or "",
+            )
+            logger.info(f"  → 已记录上传者: {user_name or user_id}")
+        except Exception as track_err:
+            logger.warning(f"记录同步追踪失败（不影响主流程）: {track_err}")
+
         return result
 
     except requests.Timeout:
@@ -177,11 +198,10 @@ def format_file_received_message(result: dict, auto_process: bool = False) -> st
     msg = f"✅ 文件已收到并保存\n\n"
     msg += f"📄 文件名：{result['file_name']}\n"
     msg += f"📏 文件大小：{size_str}\n"
-    msg += f"💾 保存位置：{result['file_path']}\n"
 
     if auto_process:
         ext = get_file_type(result["file_name"])
         if ext in _AUTO_PROCESS_EXTENSIONS:
-            msg += f"\n🔄 正在自动处理文件（{ext}）...\n"
+            msg += f"\n👤 文件已保存到待处理区，请联系管理员登录后台完成入库同步。\n"
 
     return msg

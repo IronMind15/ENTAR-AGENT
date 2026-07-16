@@ -37,6 +37,12 @@ MINERU_API_BASE = "https://mineru.net/api/v4"
 # 默认输出目录：项目 data/standards/mineru_output/
 DEFAULT_OUTPUT_DIR = Path(__file__).parent.parent / "data" / "standards" / "mineru_output"
 
+# 进度上报（导入 task_manager，兼容无任务上下文的情况）
+try:
+    from doc_mgr.task_manager import report_progress as _report_progress
+except ImportError:
+    _report_progress = lambda step, progress, msg: None
+
 
 def load_token() -> str | None:
     """从配置文件或环境变量读取 Token（优先 config.yaml）"""
@@ -82,7 +88,10 @@ def get_upload_urls(files: list, model_version: str = "vlm") -> dict:
 
 
 def upload_file(upload_url: str, file_path: str) -> None:
-    """第二步：上传文件到 OSS（官方示例方式）"""
+    """第二步：上传文件到 OSS（官方示例方式）
+
+    注意：不传 Content-Type，否则 OSS 签名会校验失败。
+    """
     with open(file_path, 'rb') as f:
         resp = requests.put(upload_url, data=f)
     if resp.status_code == 200:
@@ -135,6 +144,7 @@ def extract_pdf(file_path: str, output_dir: str, model: str = "vlm") -> str:
     logger.info(f"\n📄 正在提取: {file_name}")
 
     # 1. 获取上传 URL
+    _report_progress("mineru_upload", 15, f"获取 MinerU 上传地址...")
     logger.info("  → 获取上传 URL...")
     result = get_upload_urls([file_name], model_version=model)
 
@@ -143,37 +153,70 @@ def extract_pdf(file_path: str, output_dir: str, model: str = "vlm") -> str:
     headers = result.get("headers", [{}])
     logger.info(f"  → batch_id: {batch_id}")
 
-    # 2. 上传文件（官方示例方式）
+    # 2. 上传文件到阿里云 OSS（注意：不能传 Content-Type，否则 OSS 签名校验会失败）
+    _report_progress("mineru_upload", 20, f"上传 {file_name} 到 MinerU...")
     logger.info("  → 上传文件...")
-    content_type = headers[0].get("Content-Type", "application/pdf") if headers else "application/pdf"
     for i in range(len(urls)):
         with open(file_path, 'rb') as f:
-            res_upload = requests.put(urls[i], data=f, headers={"Content-Type": content_type})
+            res_upload = requests.put(urls[i], data=f)
             if res_upload.status_code == 200:
                 logger.info(f"  ✅ 上传成功")
             else:
                 raise Exception(f"上传失败: {res_upload.status_code} - {res_upload.text[:200]}")
 
-    # 3. 等待处理完成
-    logger.info("  → 等待处理...")
-    max_wait = 300  # 最多等待5分钟
+    # 3. 等待处理完成（每 60 秒轮询一次，最长等 30 分钟）
+    MAX_WAIT = 1800       # 总超时 30 分钟
+    POLL_INTERVAL = 60    # 轮询间隔 60 秒
+    _report_progress("mineru_waiting", 30, f"已上传到 MinerU，等待转换结果（最长 {MAX_WAIT // 60} 分钟）...")
+    logger.info(f"  → 等待处理...（每 {POLL_INTERVAL}s 轮询，最长 {MAX_WAIT // 60} 分钟）")
     start_time = time.time()
+    first_check = True
 
-    while time.time() - start_time < max_wait:
-        status = get_task_status(batch_id)
-        state = status.get("state", "unknown")
-        is_done = status.get("is_done", False)
+    while True:
+        # 每次轮询前先等待（首次和后续均为 POLL_INTERVAL）
+        if first_check:
+            logger.info(f"  → 等 {POLL_INTERVAL // 60} 分钟后首次检查...")
+            first_check = False
+        else:
+            elapsed_before = int(time.time() - start_time)
+            logger.info(f"  → 再等 {POLL_INTERVAL // 60} 分钟...（已等 {elapsed_before}s / {MAX_WAIT // 60}分钟）")
+
+        time.sleep(POLL_INTERVAL)
+
+        # 检查是否超过总超时
         elapsed = int(time.time() - start_time)
-        logger.info(f"  → 状态: {state} ({elapsed}s)")
+        if elapsed >= MAX_WAIT:
+            msg = (f"MinerU 处理超时：已等待 {elapsed // 60} 分钟"
+                   f"（上限 {MAX_WAIT // 60} 分钟），放弃等待")
+            logger.error(f"  ⏰ {msg}")
+            _report_progress("timeout", 0, msg)
+            raise TimeoutError(msg)
 
-        if is_done or state == "done":
+        # 查询处理状态
+        # 注意：API 返回结构为 data.extract_result[].state，不是 data.state
+        status = get_task_status(batch_id)
+        results_list = status.get("extract_result") or status.get("extract_results") or []
+        if results_list:
+            file_status = results_list[0]
+            state = file_status.get("state", "unknown")
+            err_msg = file_status.get("err_msg", "")
+        else:
+            state = "unknown"
+            err_msg = ""
+        elapsed = int(time.time() - start_time)
+        pct = min(30 + int(elapsed / MAX_WAIT * 30), 55)  # 30%→55%
+        _report_progress("mineru_waiting", pct, f"MinerU 转换中...（已等 {elapsed // 60} 分钟）")
+        logger.info(f"  → 状态: {state}（已等 {elapsed}s）")
+
+        if state == "done":
+            _report_progress("mineru_download", 50, "MinerU 转换完成，下载结果...")
+            logger.info(f"  ✅ MinerU 处理完成（耗时 {elapsed}s）")
             break
         if state == "failed":
-            raise Exception(f"处理失败: {status}")
-
-        time.sleep(5)
-    else:
-        raise Exception(f"等待超时（{max_wait}s）")
+            err_msg = err_msg or status.get("msg", "未知错误")
+            logger.error(f"  ❌ MinerU 处理失败: {err_msg}")
+            _report_progress("error", 0, f"MinerU 处理失败: {err_msg}")
+            raise Exception(f"MinerU 处理失败: {err_msg}")
 
     # 4. 获取结果
     logger.info("  → 获取结果...")

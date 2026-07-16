@@ -5,6 +5,11 @@
 
 所有文档类型都走同一个入口 process_file()，
 新增文件类型只需在 ext/chunker 的注册表中加一笔。
+
+处理策略：
+  - PDF：优先使用 MinerU（VLM 识别 → Markdown），失败时回退到 PyMuPDF
+  - Excel：openpyxl 逐行解析
+  - Markdown：标题层级切块
 """
 
 import os
@@ -17,8 +22,98 @@ from .storage import get_store, VectorStore
 from .chunkers import PdfChunker, MarkdownChunker
 from .extractors import extract_excel_rows, format_excel_row
 from .extractors import extract_pdf_text
+from .sync_tracker import SyncTracker
+from .task_manager import report_progress as _report_progress
 
 logger = logging.getLogger("doc_mgr.engine")
+
+# MinerU 默认输出目录
+_MINERU_OUTPUT_DIR = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..",
+    "data", "standards", "mineru_output"
+))
+
+
+def check_chroma_has_file(collection: str, file_name: str) -> bool:
+    """查询 Chroma 中是否已有某文件的切块
+
+    用于同步前的预检查：如果文件已经在库里，跳过处理直接标记已同步。
+    仅查 metadata 过滤，不需要加载 embedding 模型。
+    """
+    try:
+        store = get_store()
+        data = store.get(collection, where={"file_name": file_name})
+        if data and data.get("ids") and len(data["ids"]) > 0:
+            return True
+    except Exception as e:
+        logger.warning(f"Chroma 预检查失败（不影响主流程）: {e}")
+    return False
+
+
+def _try_mineru(file_path: str, file_name: str) -> Optional[str]:
+    """尝试用 MinerU 处理 PDF，返回生成的 Markdown 路径
+
+    如果 MinerU 不可用、失败或超时，返回 None 让调用方走回退路径。
+    """
+    try:
+        # 动态导入（MinerU 依赖可能未安装）
+        import sys as _sys
+        _script_dir = os.path.dirname(os.path.abspath(__file__))
+        _parent = os.path.normpath(os.path.join(_script_dir, ".."))
+        if _parent not in _sys.path:
+            _sys.path.insert(0, _parent)
+
+        from mineru_extract import load_token, extract_pdf as mineru_extract
+
+        token = load_token()
+        if not token:
+            logger.info("  MinerU 未配置 Token，跳过")
+            return None
+
+        # 检查是否有缓存的 MinerU 输出
+        stem = os.path.splitext(file_name)[0]
+        cache_dir = os.path.join(_MINERU_OUTPUT_DIR, f"{stem}-mineru-cache")
+        cached_md = os.path.join(cache_dir, "full.md")
+
+        if os.path.isfile(cached_md):
+            logger.info(f"  使用缓存的 MinerU 输出: {cached_md}")
+            return cached_md
+
+        # 调用 MinerU API
+        logger.info(f"  调用 MinerU 处理: {file_name}")
+        os.makedirs(cache_dir, exist_ok=True)
+        result_path = mineru_extract(file_path, cache_dir)
+
+        # 处理返回结果（可能是 ZIP 或 MD）
+        if result_path:
+            if result_path.endswith(".zip"):
+                # 解压 ZIP 获取 full.md
+                import zipfile
+                with zipfile.ZipFile(result_path, 'r') as zf:
+                    # 查找 full.md
+                    md_files = [n for n in zf.namelist() if n.endswith("full.md") or n.endswith(".md")]
+                    if md_files:
+                        target = os.path.join(cache_dir, md_files[0])
+                        # 如果 ZIP 内是平铺的，直接解压到 cache_dir
+                        zf.extractall(cache_dir)
+                        # 找到最终的 full.md
+                        extracted_md = os.path.join(cache_dir, md_files[0])
+                        if os.path.isfile(extracted_md):
+                            logger.info(f"  MinerU ZIP 解压完成: {extracted_md}")
+                            return extracted_md
+            elif result_path.endswith(".md"):
+                logger.info(f"  MinerU 直接输出 MD: {result_path}")
+                return result_path
+
+        logger.warning("  MinerU 未产生有效输出")
+        return None
+
+    except TimeoutError as e:
+        logger.warning(f"  ⏰ MinerU 远程转换超时，回退本地 PyMuPDF 处理: {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"  ❌ MinerU 远程转换失败，回退本地 PyMuPDF 处理: {e}")
+        return None
 
 
 def process_file(file_path: str, file_name: Optional[str] = None,
@@ -54,6 +149,37 @@ def process_file(file_path: str, file_name: Optional[str] = None,
             message=f"不支持的文件类型: {ext}",
         )
 
+    # 记录同步状态（所有处理路径共用的出口）
+    _record_sync_status(name, file_path, size, doc, store)
+
+
+def _record_sync_status(file_name: str, file_path: str, file_size: int,
+                         doc: Document, store: object = None) -> None:
+    """记录文件同步状态到 sync_tracker
+
+    放在 process_file 内部以确保所有调用路径（CLI/Admin/DingTalk/调度器）
+    都能自动记录，无需每一处调用点额外调用。
+    """
+    try:
+        tracker = SyncTracker()
+        tracker.upsert_file(
+            file_path=file_path,
+            file_name=file_name,
+            file_size=file_size,
+            file_hash=str(int(os.path.getmtime(file_path))),
+            target_collection=doc.collection or "",
+        )
+        if doc.status == "done":
+            tracker.mark_synced(file_path)
+        elif doc.status == "error":
+            tracker.mark_error(file_path, doc.message or "处理失败")
+        elif doc.status == "skipped":
+            tracker.mark_synced(file_path)  # 已存在也算成功
+        elif doc.status == "ocr_needed":
+            tracker.mark_error(file_path, "需要 OCR 处理")
+    except Exception as e:
+        logger.warning(f"同步追踪记录失败（不影响主流程）: {e}")
+
 
 def process_files(file_paths: list[str]) -> list[Document]:
     """批量处理多个文件"""
@@ -64,26 +190,57 @@ def process_files(file_paths: list[str]) -> list[Document]:
 
 def _process_pdf(file_path: str, file_name: str, file_size: int,
                  store: VectorStore, target_collection: str = "standards") -> Document:
-    """处理 PDF 文件"""
+    """处理 PDF 文件
+
+    策略：
+      1. 尝试 MinerU（VLM → Markdown）→ 走 Markdown 入库
+      2. MinerU 不可用 → PyMuPDF 提取文字 → PdfChunker 切块
+      3. PyMuPDF 也提不出文字 → 标记 ocr_needed
+    """
     doc = Document(
         file_name=file_name, file_path=file_path,
         file_size=file_size, collection=target_collection,
     )
 
-    # 1. PyMuPDF 提取文字
+    # ---- 方案 A：MinerU 优先 ----
+    _report_progress("mineru", 15, "MinerU 远程转换中...")
+    mineru_md = _try_mineru(file_path, file_name)
+    if mineru_md and os.path.isfile(mineru_md):
+        _report_progress("download", 40, "MinerU 转换完成，下载结果...")
+        logger.info(f"  MinerU 成功，走 Markdown 入库路径")
+        # 用 _process_markdown 处理 MinerU 输出的 MD 文件
+        md_doc = _process_markdown(mineru_md, file_name, file_size, store, target_collection)
+        # 继承 MinerU 的处理结果
+        doc.status = md_doc.status
+        doc.chunk_count = md_doc.chunk_count
+        doc.std_id = md_doc.std_id
+        doc.std_title = md_doc.std_title
+        doc.source = "mineru"
+        doc.message = md_doc.message or "MinerU → Markdown 入库"
+        if doc.status != "done":
+            logger.warning(f"  MinerU Markdown 入库异常: {doc.message}")
+        else:
+            logger.info(f"  MinerU 处理完成: {file_name} → {doc.chunk_count} 块")
+        return doc
+
+    # ---- 方案 B：PyMuPDF 本地工具回退 ----
+    _report_progress("pymupdf_extract", 25, "MinerU 不可用，使用本地 PyMuPDF 提取文字...")
+    logger.info(f"  [回退] 使用本地 PyMuPDF 提取文字: {file_name}")
     full_text, std_id, std_title = extract_pdf_text(file_path)
     doc.std_id = std_id
     doc.std_title = std_title
 
     if not full_text:
         doc.status = "ocr_needed"
-        doc.message = "扫描型 PDF，文字提取不足，需要 OCR 处理"
-        logger.warning(f"  {doc.message}")
+        doc.message = "扫描型 PDF，本地 PyMuPDF 无法提取文字（MinerU 远程转换也未成功）"
+        logger.warning(f"  ⚠️ [回退报告] MinerU 远程转换 → 不可用 / 失败")
+        logger.warning(f"  ⚠️ [回退报告] PyMuPDF 本地提取 → 无法提取文字（扫描型 PDF）")
+        logger.warning(f"  ⚠️ {doc.message}，跳过入库")
         return doc
 
     doc.status = "processing"
 
-    # 2. 基础 metadata
+    # PyMuPDF 基础 metadata
     base_meta = {
         "std_id": std_id,
         "std_title": std_title,
@@ -91,18 +248,21 @@ def _process_pdf(file_path: str, file_name: str, file_size: int,
         "confidence": "text",
     }
 
-    # 3. PyMuPDF 结构分析切块
+    # PyMuPDF 结构分析切块
+    _report_progress("chunking", 60, "PyMuPDF 文字提取完成，结构分析切块...")
     chunker = PdfChunker()
     chunks = chunker.chunk(full_text, base_meta, filepath=file_path)
 
-    # 4. 生成唯一 ID 并入库
+    # 入库
+    _report_progress("indexing", 80, f"切块完成（{len(chunks)} 块），入库到知识库...")
     ids, documents, metadatas = _prepare_chunks(chunks, file_name)
     added = store.add("standards", ids, documents, metadatas)
 
     doc.chunk_count = added
+    doc.source = "pymupdf"
     doc.status = "done" if added > 0 else "skipped"
-    doc.message = f"切块入库 {added} 条"
-    logger.info(f"  PDF 处理完成: {file_name} → {added} 块")
+    doc.message = f"PyMuPDF 切块入库 {added} 条"
+    logger.info(f"  PDF 处理完成（PyMuPDF）: {file_name} → {added} 块")
     return doc
 
 
@@ -127,6 +287,7 @@ def _process_excel(file_path: str, file_name: str, file_size: int,
     doc.status = "processing"
 
     # 2. 每行切一块，生成 Chroma-compatible 格式
+    _report_progress("excel_parse", 40, f"解析 Excel 完成（{len(records)} 行），准备入库...")
     ids = []
     documents = []
     metadatas = []
@@ -146,6 +307,7 @@ def _process_excel(file_path: str, file_name: str, file_size: int,
     added = store.add("error_codes", ids, documents, metadatas)
 
     doc.chunk_count = added
+    doc.source = "excel"
     doc.status = "done" if added > 0 else "skipped"
     doc.message = f"入库 {added} 条故障代码"
     logger.info(f"  Excel 处理完成: {file_name} → {added} 条")
@@ -199,6 +361,7 @@ def _process_markdown(file_path: str, file_name: str, file_size: int,
     }
 
     # 4. MarkdownChunker 切块
+    _report_progress("chunking", 60, "Markdown 结构分析切块...")
     chunker = MarkdownChunker()
     chunks = chunker.chunk(full_text, base_meta, filepath=file_path)
 
@@ -217,10 +380,12 @@ def _process_markdown(file_path: str, file_name: str, file_size: int,
                 logger.warning(f"  复制图片失败: {e}")
 
     # 6. 入库
+    _report_progress("indexing", 80, f"切块完成（{len(chunks)} 块），入库到知识库...")
     ids, documents, metadatas = _prepare_chunks(chunks, file_name)
     added = store.add(target_collection, ids, documents, metadatas)
 
     doc.chunk_count = added
+    doc.source = "markdown"
     doc.status = "done" if added > 0 else "skipped"
     doc.message = f"切块入库 {added} 条"
     logger.info(f"  Markdown 处理完成: {file_name} → {added} 块")

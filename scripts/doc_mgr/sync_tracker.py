@@ -1,0 +1,263 @@
+"""
+同步状态追踪模块
+
+记录每个文件同步到 Chroma 知识库的状态（pending/synced/error），
+支持变化检测（通过 mtime 比对）、手动同步触发、历史查询。
+
+v2: 新增 upload_user_id / upload_user_name 字段，记录文件上传者。
+
+与 user_store.py 共用同一个 SQLite 文件（user_store.db），
+不同表，WAL 模式下读写不互斥。
+"""
+
+import logging
+import os
+import sqlite3
+import threading
+from datetime import datetime
+from typing import Optional
+
+logger = logging.getLogger("doc_mgr.sync_tracker")
+
+# ===== 数据库路径（复用 user_store.db） =====
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.join(_SCRIPT_DIR, "..", "..")
+DB_DIR = os.path.join(_PROJECT_ROOT, "data")
+DB_PATH = os.path.join(DB_DIR, "user_store.db")
+
+
+class SyncTracker:
+    """同步状态追踪器
+
+    线程安全（threading.local + RLock），设计同 user_store.py 模式。
+    """
+
+    def __init__(self, db_path: str = DB_PATH):
+        self._db_path = db_path
+        self._local = threading.local()
+        self._lock = threading.RLock()
+        self._init_db()
+
+    def _get_conn(self) -> sqlite3.Connection:
+        """获取当前线程的数据库连接"""
+        if not hasattr(self._local, "conn") or self._local.conn is None:
+            os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
+            conn = sqlite3.connect(self._db_path, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+            self._local.conn = conn
+        return self._local.conn
+
+    def _init_db(self):
+        """幂等建表 + 迁移旧表"""
+        with self._lock:
+            conn = self._get_conn()
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS sync_status (
+                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_path        TEXT NOT NULL,
+                    file_name        TEXT NOT NULL,
+                    file_size        INTEGER DEFAULT 0,
+                    file_hash        TEXT DEFAULT '',
+                    target_collection TEXT NOT NULL DEFAULT '',
+                    upload_user_id   TEXT DEFAULT '',
+                    upload_user_name TEXT DEFAULT '',
+                    sync_status      TEXT NOT NULL DEFAULT 'pending',
+                    error_message    TEXT DEFAULT '',
+                    last_synced_at   TEXT,
+                    created_at       TEXT DEFAULT (datetime('now','localtime')),
+                    updated_at       TEXT DEFAULT (datetime('now','localtime')),
+                    UNIQUE(file_path),
+                    CHECK(sync_status IN ('pending','synced','error'))
+                )
+            """)
+            # 迁移：给旧表加 upload_user_id / upload_user_name 列
+            for col in ("upload_user_id", "upload_user_name"):
+                try:
+                    conn.execute(f"ALTER TABLE sync_status ADD COLUMN {col} TEXT DEFAULT ''")
+                    logger.info(f"[迁移] sync_status 表新增列: {col}")
+                except sqlite3.OperationalError:
+                    pass  # 列已存在
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_sync_status
+                ON sync_status(sync_status)
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_sync_collection
+                ON sync_status(target_collection)
+            """)
+            conn.commit()
+
+    def upsert_file(self, file_path: str, file_name: str, file_size: int,
+                    file_hash: str, target_collection: str = "",
+                    upload_user_id: str = "", upload_user_name: str = "") -> None:
+        """插入或更新文件记录
+
+        Args:
+            file_path: 文件绝对路径
+            file_name: 文件名
+            file_size: 文件字节数
+            file_hash: 文件哈希（mtime）
+            target_collection: 目标知识库
+            upload_user_id: 上传者钉钉 user_id
+            upload_user_name: 上传者昵称
+        """
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock:
+            conn = self._get_conn()
+            conn.execute("""
+                INSERT INTO sync_status
+                    (file_path, file_name, file_size, file_hash,
+                     target_collection, upload_user_id, upload_user_name,
+                     sync_status, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+                ON CONFLICT(file_path) DO UPDATE SET
+                    file_name      = excluded.file_name,
+                    file_size      = excluded.file_size,
+                    file_hash      = excluded.file_hash,
+                    target_collection = excluded.target_collection,
+                    upload_user_id = excluded.upload_user_id,
+                    upload_user_name = excluded.upload_user_name,
+                    updated_at     = excluded.updated_at,
+                    sync_status    = CASE
+                        WHEN sync_status = 'error' THEN 'pending'
+                        ELSE sync_status
+                    END
+            """, (file_path, file_name, file_size, file_hash,
+                  target_collection, upload_user_id, upload_user_name, now))
+            conn.commit()
+
+    def update_collection(self, file_path: str, collection: str) -> None:
+        """更新文件的目标 collection（管理员在后台选择）"""
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock:
+            conn = self._get_conn()
+            conn.execute("""
+                UPDATE sync_status SET
+                    target_collection = ?,
+                    updated_at = ?
+                WHERE file_path = ?
+            """, (collection, now, file_path))
+            conn.commit()
+
+    def mark_synced(self, file_path: str) -> None:
+        """将文件标记为已同步"""
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock:
+            conn = self._get_conn()
+            conn.execute("""
+                UPDATE sync_status SET
+                    sync_status = 'synced',
+                    error_message = '',
+                    last_synced_at = ?,
+                    updated_at = ?
+                WHERE file_path = ?
+            """, (now, now, file_path))
+            conn.commit()
+
+    def mark_error(self, file_path: str, error_message: str) -> None:
+        """将文件标记为失败"""
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock:
+            conn = self._get_conn()
+            conn.execute("""
+                UPDATE sync_status SET
+                    sync_status = 'error',
+                    error_message = ?,
+                    updated_at = ?
+                WHERE file_path = ?
+            """, (error_message[:500], now, file_path))
+            conn.commit()
+
+    def mark_pending(self, file_path: str) -> None:
+        """重置为待处理"""
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock:
+            conn = self._get_conn()
+            conn.execute("""
+                UPDATE sync_status SET
+                    sync_status = 'pending',
+                    error_message = '',
+                    updated_at = ?
+                WHERE file_path = ?
+            """, (now, file_path))
+            conn.commit()
+
+    def get_status(self, file_path: str) -> Optional[dict]:
+        """查询单个文件状态"""
+        with self._lock:
+            conn = self._get_conn()
+            cur = conn.execute(
+                "SELECT * FROM sync_status WHERE file_path = ?",
+                (file_path,)
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def list_all(self, status_filter: str = "",
+                 collection_filter: str = "") -> list[dict]:
+        """列出所有文件及其状态，可选按状态/collection 过滤"""
+        with self._lock:
+            conn = self._get_conn()
+            where = []
+            params = []
+            if status_filter:
+                where.append("sync_status = ?")
+                params.append(status_filter)
+            if collection_filter:
+                where.append("target_collection = ?")
+                params.append(collection_filter)
+            sql = "SELECT * FROM sync_status"
+            if where:
+                sql += " WHERE " + " AND ".join(where)
+            sql += " ORDER BY updated_at DESC"
+            cur = conn.execute(sql, params)
+            return [dict(row) for row in cur.fetchall()]
+
+    def get_pending_files(self) -> list[dict]:
+        """获取所有待处理文件（status='pending' 或 'error'）
+
+        管理员后台用，按文件路径倒序（最新上传的先显示）。
+        """
+        with self._lock:
+            conn = self._get_conn()
+            cur = conn.execute("""
+                SELECT * FROM sync_status
+                WHERE sync_status IN ('pending', 'error')
+                ORDER BY updated_at DESC
+            """)
+            return [dict(row) for row in cur.fetchall()]
+
+    def get_stats(self) -> dict:
+        """获取统计：总数/已同步/待处理/失败"""
+        with self._lock:
+            conn = self._get_conn()
+            total = conn.execute(
+                "SELECT COUNT(*) FROM sync_status"
+            ).fetchone()[0]
+            synced = conn.execute(
+                "SELECT COUNT(*) FROM sync_status WHERE sync_status='synced'"
+            ).fetchone()[0]
+            pending = conn.execute(
+                "SELECT COUNT(*) FROM sync_status WHERE sync_status='pending'"
+            ).fetchone()[0]
+            error = conn.execute(
+                "SELECT COUNT(*) FROM sync_status WHERE sync_status='error'"
+            ).fetchone()[0]
+            return {
+                "total": total,
+                "synced": synced,
+                "pending": pending,
+                "error": error,
+            }
+
+    def get_history(self, limit: int = 50) -> list[dict]:
+        """获取最近同步记录（按 updated_at 倒序）"""
+        with self._lock:
+            conn = self._get_conn()
+            cur = conn.execute(
+                "SELECT * FROM sync_status ORDER BY updated_at DESC LIMIT ?",
+                (limit,)
+            )
+            return [dict(row) for row in cur.fetchall()]

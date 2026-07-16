@@ -133,7 +133,7 @@ class ErrorQueryHandler(ChatbotHandler):
             logger.info(f"  文件: {file_name}, 大小: {file_size} bytes")
 
             # 下载并保存文件
-            from file_handler import download_and_save_file, format_file_received_message, should_auto_process
+            from file_handler import download_and_save_file, format_file_received_message
 
             result = download_and_save_file(
                 download_code=download_code,
@@ -143,12 +143,8 @@ class ErrorQueryHandler(ChatbotHandler):
                 user_name=sender,
             )
 
-            # 构建回复消息
+            # 构建回复消息（已包含待处理提示）
             answer = format_file_received_message(result, auto_process=True)
-
-            # 如果是可处理的文件类型，提示用户
-            if result["success"] and should_auto_process(file_name):
-                answer += f"\n💡 如需将文件入库到知识库，请告诉我。"
 
             # 回复用户
             self.reply_markdown(

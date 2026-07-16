@@ -44,6 +44,7 @@ from skills import get_matched_skill, get_skill_list
 from skills.dingtalk_bot import start_bot as start_dingtalk_bot
 from web_page import HOME_HTML
 from doc_mgr.router import router as admin_router
+from doc_mgr.scheduler import start_scheduler, stop_scheduler
 
 app = FastAPI(title="恩特小助手")
 app.include_router(admin_router)
@@ -93,6 +94,7 @@ def ask(q: str = Query("", description="用户问题"), user: str = Query("", de
 
 
 if __name__ == "__main__":
+    import atexit
     port = int(os.environ.get("PORT", 8000))
 
     skill_names = ", ".join(s.name for s in get_skill_list())
@@ -101,6 +103,12 @@ if __name__ == "__main__":
 
     # 启动钉钉机器人（后台线程）
     start_dingtalk_bot()
+
+    # 启动后台自动同步调度器（当前已禁用，全部走管理员手动入库）
+    # 如需重新启用，取消下面两行注释
+    # start_scheduler()
+    # atexit.register(stop_scheduler)
+    logger.info(f"  自动同步已禁用（手动模式）：管理员在 /admin 后台操作入库")
 
     logger.info(f"  将来扩展: 添加新技能 → 新建 skills/*.py + __init__.py 一行注册")
     uvicorn.run(app, host="0.0.0.0", port=port)

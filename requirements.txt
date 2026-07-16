@@ -13,6 +13,8 @@ PyMuPDF==1.25.2
 # Unstructured — PDF 结构解析 + 按 heading 智能切块
 unstructured[pdf]==0.16.0
 
+apscheduler==3.10.4
+
 # ===== OCR 扫描 PDF（可选，PaddlePaddle 需单独安装） =====
 # PaddleOCR==3.7.0
 # paddlepaddle==3.2.2  # CPU 版，GPU 版请安装 paddlepaddle-gpu

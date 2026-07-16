@@ -34,6 +34,7 @@ class Document:
     status: str = ""           # pending | processing | done | error | ocr_needed
     std_id: str = ""           # 标准编号（PDF 特有）
     std_title: str = ""        # 标准名称（PDF 特有）
+    source: str = ""           # 处理来源: mineru | pymupdf | excel | markdown
     message: str = ""          # 处理信息/错误信息
 
 

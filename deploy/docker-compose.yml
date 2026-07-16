@@ -13,6 +13,8 @@ services:
       - ../scripts/local_config.py:/app/scripts/local_config.py
       # 知识库持久化，更新 Excel 后重新同步
       - ../knowledge_base:/app/knowledge_base
+      # 用户数据持久化（uploads / standards / user_store.db）
+      - ../data:/app/data
     environment:
       - HF_ENDPOINT=https://hf-mirror.com
     restart: unless-stopped
