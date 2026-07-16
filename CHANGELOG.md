@@ -1,6 +1,34 @@
 # 恩特小助手 更新日志
 
-## v1.2.4（2026-07-15）
+## v1.2.5（2026-07-16）
+
+用户文件上传 + Web 同步管理完善，MinerU 稳定性提升：
+
+### 新增
+
+- **Web 同步管理流程完善**：钉钉上传 → Web 后台「同步管理」Tab → 手动触发入库，支持进度条实时追踪
+- **后台任务管理器**（`task_manager.py`）：基于 ThreadPoolExecutor 的异步任务队列，同步不阻塞 HTTP
+- **同步进度追踪器**（`sync_tracker.py`）：SQLite 记录文件同步状态（pending/synced/error），含上传者信息
+- **强制重学按钮**：跳过 Chroma 查重，重新走 MinerU 处理并入库
+- **MinerU Token 统一管理**：`local_config.py` 新增 `MINERU_TOKEN` 配置项，优先级高于 `~/.mineru/config.yaml`
+
+### 优化
+
+- **目录结构重构**：源文件在哪个目录，`mineru_output/` 就建在哪个目录下
+  - `data/standards/` → `standards/mineru_output/`（Web 上传文件的结果）
+  - `data/uploads/` → `uploads/mineru_output/`（钉钉上传文件的结果）
+  - `data/fault_codes/` → `fault_codes/mineru_output/`（预留）
+- **OSS 上传自动重试**：遇到网络超时自动重试 3 次（5s → 10s → 报错），偶发抖动自动恢复
+- **同步去重优化**：不再在同步前做 Chroma 预检查，每次都走 MinerU 下载最新 ZIP，入库时通过 chunk_id 自动去重
+- **清理旧格式**：删除了 14 个旧格式目录 + 散落 ZIP 文件，去除 8 套标准的重复数据
+- **修复 `dingtalk_bot.py` 变量 bug**：`_sync_user_info_async` 中 `sender` 未定义问题
+
+### 技术栈
+
+- 异步任务：`ThreadPoolExecutor`（2 个 worker），线程本地存储 + 锁保护
+- 同步状态：SQLite `sync_status` 表
+- OSS 上传：`requests.put()` + 自动重试，超时 180s
+- 目录策略：`_get_mineru_output_dir()` 动态路径函数
 
 用户存储结构升级 — SQLite 统一存储 + 权限系统 + 钉钉信息同步：
 
