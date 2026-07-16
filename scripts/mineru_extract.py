@@ -45,8 +45,22 @@ except ImportError:
 
 
 def load_token() -> str | None:
-    """从配置文件或环境变量读取 Token（优先 config.yaml）"""
-    # 优先读 config.yaml（mineru-open-api auth 生成的）
+    """读取 MinerU Token（优先级：local_config > config.yaml > 环境变量）"""
+    # 1. 优先从 local_config.py 读取（统一凭证管理入口）
+    try:
+        _local_path = Path(__file__).parent / "local_config.py"
+        if _local_path.exists():
+            with open(_local_path, "r", encoding="utf-8") as _f:
+                for _line in _f:
+                    _line = _line.strip()
+                    if _line.startswith("MINERU_TOKEN") and "=" in _line:
+                        _val = _line.split("=", 1)[1].strip().strip('"').strip("'")
+                        if _val:
+                            return _val
+    except Exception:
+        pass
+
+    # 2. 读 ~/.mineru/config.yaml（mineru-open-api auth 生成的）
     config_path = Path.home() / ".mineru" / "config.yaml"
     if config_path.exists():
         with open(config_path, "r") as f:
@@ -54,7 +68,7 @@ def load_token() -> str | None:
                 if line.startswith("token:"):
                     return line.split(":", 1)[1].strip()
 
-    # 其次看环境变量
+    # 3. 看环境变量
     env_token = os.environ.get("MINERU_TOKEN", "")
     if env_token:
         return env_token
@@ -157,12 +171,24 @@ def extract_pdf(file_path: str, output_dir: str, model: str = "vlm") -> str:
     _report_progress("mineru_upload", 20, f"上传 {file_name} 到 MinerU...")
     logger.info("  → 上传文件...")
     for i in range(len(urls)):
-        with open(file_path, 'rb') as f:
-            res_upload = requests.put(urls[i], data=f)
-            if res_upload.status_code == 200:
-                logger.info(f"  ✅ 上传成功")
-            else:
-                raise Exception(f"上传失败: {res_upload.status_code} - {res_upload.text[:200]}")
+        # 自动重试：OSS 偶发超时/断连时自动恢复
+        MAX_RETRIES = 3
+        for attempt in range(MAX_RETRIES):
+            try:
+                with open(file_path, 'rb') as f:
+                    res_upload = requests.put(urls[i], data=f, timeout=180)
+                if res_upload.status_code == 200:
+                    logger.info(f"  ✅ 上传成功")
+                    break  # 成功，跳出重试循环
+                else:
+                    raise Exception(f"HTTP {res_upload.status_code}: {res_upload.text[:200]}")
+            except (requests.Timeout, requests.ConnectionError) as e:
+                if attempt < MAX_RETRIES - 1:
+                    wait = (attempt + 1) * 5
+                    logger.warning(f"  ⚠️ OSS 上传异常（第{attempt+1}次），{wait}s 后重试: {e}")
+                    time.sleep(wait)
+                else:
+                    raise Exception(f"上传失败（重试{MAX_RETRIES}次均失败）: {e}")
 
     # 3. 等待处理完成（每 60 秒轮询一次，最长等 30 分钟）
     MAX_WAIT = 1800       # 总超时 30 分钟

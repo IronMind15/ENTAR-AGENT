@@ -27,11 +27,29 @@ from .task_manager import report_progress as _report_progress
 
 logger = logging.getLogger("doc_mgr.engine")
 
-# MinerU 默认输出目录
-_MINERU_OUTPUT_DIR = os.path.normpath(os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "..",
-    "data", "standards", "mineru_output"
-))
+def _get_mineru_output_dir(file_path: str) -> str:
+    """根据源文件路径自动确定 MinerU 输出目录
+
+    规则：源文件在哪个目录，mineru_output 就建在哪个目录下。
+      data/standards/xxx.pdf  → data/standards/mineru_output/
+      data/uploads/xxx.pdf    → data/uploads/mineru_output/
+      data/fault_codes/xxx.xlsx → data/fault_codes/mineru_output/
+    """
+    abs_path = os.path.abspath(file_path)
+    sep = os.sep
+    # 找到路径中的 /data/ 段
+    idx = abs_path.find(f"{sep}data{sep}")
+    if idx >= 0:
+        after_data = abs_path[idx + 6:]  # 去掉 /data/
+        top_dir = after_data.split(sep)[0]  # standards / uploads / fault_codes
+        project_root = abs_path[:idx]
+        if top_dir in ("standards", "uploads", "fault_codes"):
+            return os.path.join(project_root, "data", top_dir, "mineru_output")
+    # 回退
+    return os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "..",
+        "data", "standards", "mineru_output"
+    )
 
 
 def check_chroma_has_file(collection: str, file_name: str) -> bool:
@@ -72,7 +90,8 @@ def _try_mineru(file_path: str, file_name: str) -> Optional[str]:
 
         # 检查是否有缓存的 MinerU 输出
         stem = os.path.splitext(file_name)[0]
-        cache_dir = os.path.join(_MINERU_OUTPUT_DIR, f"{stem}-mineru-cache")
+        mineru_dir = _get_mineru_output_dir(file_path)
+        cache_dir = os.path.join(mineru_dir, f"{stem}-mineru-cache")
         cached_md = os.path.join(cache_dir, "full.md")
 
         if os.path.isfile(cached_md):
@@ -379,15 +398,19 @@ def _process_markdown(file_path: str, file_name: str, file_size: int,
             except Exception as e:
                 logger.warning(f"  复制图片失败: {e}")
 
-    # 6. 入库
+    # 6. 入库（自带 ID 去重，已存在的 chunk 自动跳过）
     _report_progress("indexing", 80, f"切块完成（{len(chunks)} 块），入库到知识库...")
     ids, documents, metadatas = _prepare_chunks(chunks, file_name)
     added = store.add(target_collection, ids, documents, metadatas)
 
     doc.chunk_count = added
     doc.source = "markdown"
-    doc.status = "done" if added > 0 else "skipped"
-    doc.message = f"切块入库 {added} 条"
+    if added > 0:
+        doc.status = "done"
+        doc.message = f"入库 {added} 条新切块"
+    else:
+        doc.status = "done"
+        doc.message = "Chroma 已有该文件，跳过入库（MinerU 结果已保存到本地）"
     logger.info(f"  Markdown 处理完成: {file_name} → {added} 块")
     return doc
 

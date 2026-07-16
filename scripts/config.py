@@ -60,3 +60,6 @@ MAX_CONTEXT_ROUNDS: int = 5
 
 # 管理员密码（空 = 不开启密码保护）
 ADMIN_PASSWORD: str = _get_config("ADMIN_PASSWORD")
+
+# MinerU API Token（精准解析）
+MINERU_TOKEN: str = _get_config("MINERU_TOKEN")

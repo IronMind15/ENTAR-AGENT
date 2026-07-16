@@ -57,7 +57,7 @@ class ErrorQueryHandler(ChatbotHandler):
 
         # ---- 后台同步用户信息（首次或 24h 过期后自动更新） ----
         try:
-            self._sync_user_info_async(user_id, staff_id, corp_id)
+            self._sync_user_info_async(user_id, staff_id, corp_id, sender)
         except Exception as sync_err:
             logger.warning(f"同步用户信息异常（不影响主流程）: {sync_err}")
 
@@ -226,7 +226,7 @@ class ErrorQueryHandler(ChatbotHandler):
 
         return AckMessage.STATUS_OK, "ok"
 
-    def _sync_user_info_async(self, user_id: str, staff_id: str, corp_id: str):
+    def _sync_user_info_async(self, user_id: str, staff_id: str, corp_id: str, nick: str = ""):
         """后台线程同步钉钉用户信息（不阻塞消息处理）
 
         仅首次或超过 24h 才调用 API，通过 user_store 缓存。
@@ -275,7 +275,7 @@ class ErrorQueryHandler(ChatbotHandler):
             # 后台线程执行同步（不阻塞消息回复）
             def _do_sync():
                 try:
-                    store.sync_user_from_dingtalk(user_id, staff_id, nick=sender)
+                    store.sync_user_from_dingtalk(user_id, staff_id, nick=nick)
                 except Exception as e:
                     logger.warning(f"钉钉同步线程异常: {e}")
 

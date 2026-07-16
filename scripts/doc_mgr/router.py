@@ -602,26 +602,8 @@ def trigger_sync(
         fname = os.path.basename(file_path)
         target = collection or "standards"
 
-        # 非强制模式：先快速查 Chroma 是否已有
-        if not force:
-            from .engine import check_chroma_has_file
-            if check_chroma_has_file(target, fname):
-                try:
-                    fsize = os.path.getsize(file_path)
-                    fhash = str(int(os.path.getmtime(file_path)))
-                except OSError:
-                    fsize, fhash = 0, ""
-                tracker.upsert_file(file_path, fname, fsize, fhash, target)
-                tracker.mark_synced(file_path)
-                return JSONResponse({
-                    "status": "skipped",
-                    "file_name": fname,
-                    "collection": target,
-                    "chunk_count": 0,
-                    "message": "Chroma 已有该文件，跳过处理",
-                })
-
-        # 提交后台任务
+        # 提交后台任务（不做 Chroma 预检查，即使已入库也走 MinerU 获取最新 ZIP）
+        # Chroma 入库时自带 ID 去重，不会重复写入
         from .task_manager import get_manager as get_task_manager
         manager = get_task_manager()
         record = manager.submit(
