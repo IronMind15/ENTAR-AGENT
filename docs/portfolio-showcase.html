@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>恩特小助手 — 企业级 RAG Agent 内部智能助手 | 作品展示</title>
+<style>
+  /* ===== Reset & Base ===== */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; font-size: 16px; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    line-height: 1.7;
+    transition: background .3s, color .3s;
+  }
+
+  /* ===== Theme Light ===== */
+  [data-theme="light"] {
+    --bg: #f8fafc; --bg-alt: #f1f5f9;
+    --surface: #ffffff; --surface-hover: #f8fafc;
+    --text: #0f172a; --text-secondary: #475569; --text-muted: #94a3b8;
+    --border: #e2e8f0; --shadow: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+    --shadow-lg: 0 10px 40px rgba(0,0,0,.08), 0 2px 8px rgba(0,0,0,.04);
+    --primary: #2563eb; --primary-light: #dbeafe; --primary-text: #1e40af;
+    --accent: #7c3aed; --accent-light: #ede9fe;
+    --success: #059669; --success-bg: #d1fae5;
+    --code-bg: #f1f5f9;
+  }
+  /* ===== Theme Dark ===== */
+  [data-theme="dark"] {
+    --bg: #0b1120; --bg-alt: #111827;
+    --surface: #1a2332; --surface-hover: #1e293b;
+    --text: #e2e8f0; --text-secondary: #94a3b8; --text-muted: #64748b;
+    --border: #1e293b; --shadow: 0 1px 3px rgba(0,0,0,.2);
+    --shadow-lg: 0 10px 40px rgba(0,0,0,.4);
+    --primary: #3b82f6; --primary-light: #1e3a5f; --primary-text: #60a5fa;
+    --accent: #a78bfa; --accent-light: #2e1065;
+    --success: #34d399; --success-bg: #064e3b;
+    --code-bg: #1e293b;
+  }
+
+  body { background: var(--bg); color: var(--text); }
+
+  /* ===== Layout ===== */
+  .container { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+  section { padding: 80px 0; }
+  section:first-of-type { padding-top: 0; }
+
+  /* ===== Theme Toggle ===== */
+  .theme-toggle {
+    position: fixed; top: 20px; right: 24px; z-index: 100;
+    width: 44px; height: 44px; border-radius: 12px;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text-secondary); font-size: 20px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: all .2s; box-shadow: var(--shadow);
+  }
+  .theme-toggle:hover { border-color: var(--primary); color: var(--primary); }
+
+  /* ===== Hero ===== */
+  .hero {
+    min-height: 100vh; display: flex; flex-direction: column;
+    justify-content: center; position: relative; overflow: hidden;
+    padding: 120px 0 80px;
+  }
+  .hero::before {
+    content: ''; position: absolute; top: -50%; right: -20%;
+    width: 700px; height: 700px; border-radius: 50%;
+    background: radial-gradient(circle, var(--primary-light) 0%, transparent 70%);
+    pointer-events: none; opacity: .5;
+  }
+  .hero::after {
+    content: ''; position: absolute; bottom: -30%; left: -10%;
+    width: 500px; height: 500px; border-radius: 50%;
+    background: radial-gradient(circle, var(--accent-light) 0%, transparent 70%);
+    pointer-events: none; opacity: .4;
+  }
+  .hero-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--primary-light); color: var(--primary-text);
+    padding: 6px 16px; border-radius: 20px; font-size: .85rem;
+    font-weight: 500; margin-bottom: 24px; width: fit-content;
+  }
+  .hero h1 {
+    font-size: clamp(2.4rem, 5vw, 3.8rem); font-weight: 800;
+    line-height: 1.15; letter-spacing: -.02em; margin-bottom: 16px;
+    position: relative; z-index: 1;
+  }
+  .hero h1 .gradient {
+    background: linear-gradient(135deg, var(--primary), var(--accent));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .hero-sub {
+    font-size: clamp(1.05rem, 2vw, 1.25rem); color: var(--text-secondary);
+    max-width: 680px; margin-bottom: 40px; position: relative; z-index: 1;
+    line-height: 1.8;
+  }
+  .hero-tags {
+    display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 48px;
+    position: relative; z-index: 1;
+  }
+  .hero-tags span {
+    background: var(--surface); border: 1px solid var(--border);
+    padding: 6px 16px; border-radius: 20px; font-size: .85rem;
+    color: var(--text-secondary); font-weight: 500;
+  }
+
+  /* ===== Stats Strip ===== */
+  .stats-strip {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px;
+    background: var(--border); border-radius: 16px; overflow: hidden;
+    box-shadow: var(--shadow-lg); position: relative; z-index: 1;
+  }
+  .stat-card {
+    background: var(--surface); padding: 32px 20px; text-align: center;
+  }
+  .stat-number {
+    font-size: 2.2rem; font-weight: 800;
+    background: linear-gradient(135deg, var(--primary), var(--accent));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .stat-label { font-size: .9rem; color: var(--text-secondary); margin-top: 4px; }
+  .stat-suffix { font-size: 1rem; }
+
+  /* ===== Section Header ===== */
+  .section-header {
+    text-align: center; margin-bottom: 56px;
+  }
+  .section-header h2 {
+    font-size: 2rem; font-weight: 700; margin-bottom: 12px;
+  }
+  .section-header p {
+    color: var(--text-secondary); font-size: 1.05rem; max-width: 600px;
+    margin: 0 auto;
+  }
+
+  /* ===== Architecture ===== */
+  .arch-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 24px;
+    margin-bottom: 24px;
+  }
+  .arch-grid .arch-card:last-child:nth-child(odd) { grid-column: 1 / -1; }
+  .arch-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 16px; padding: 28px; box-shadow: var(--shadow);
+    transition: box-shadow .2s;
+  }
+  .arch-card:hover { box-shadow: var(--shadow-lg); }
+  .arch-card h3 {
+    font-size: .85rem; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .06em; color: var(--primary); margin-bottom: 16px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .arch-card h3 .icon { font-size: 1.1rem; }
+
+  /* ===== Flow Diagram ===== */
+  .flow-diagram {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 16px; padding: 36px 28px; box-shadow: var(--shadow);
+    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+    font-size: .82rem; line-height: 2; overflow-x: auto;
+  }
+  .flow-diagram .comment { color: var(--text-muted); font-style: italic; }
+  .flow-diagram .keyword { color: var(--primary); font-weight: 600; }
+  .flow-diagram .string { color: var(--accent); }
+  .flow-diagram .arrow { color: var(--text-muted); }
+  .flow-diagram .node { color: var(--text); font-weight: 500; }
+  .flow-diagram .branch { color: var(--success); }
+  .flow-diagram .line { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+
+  /* ===== Tech Stack ===== */
+  .tech-grid {
+    display: flex; flex-wrap: wrap; gap: 12px; justify-content: center;
+  }
+  .tech-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 10px 20px; border-radius: 12px;
+    border: 1px solid var(--border); background: var(--surface);
+    font-size: .9rem; font-weight: 500; transition: all .2s;
+    box-shadow: var(--shadow);
+  }
+  .tech-badge:hover {
+    border-color: var(--primary); transform: translateY(-2px);
+    box-shadow: var(--shadow-lg);
+  }
+  .tech-badge .dot {
+    width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+  }
+  .tech-badge .sub { font-weight: 400; color: var(--text-muted); font-size: .8rem; }
+
+  /* ===== Timeline ===== */
+  .timeline { position: relative; padding-left: 40px; }
+  .timeline::before {
+    content: ''; position: absolute; left: 10px; top: 8px; bottom: 8px;
+    width: 2px; background: var(--border);
+  }
+  .tl-item { position: relative; margin-bottom: 32px; }
+  .tl-item:last-child { margin-bottom: 0; }
+  .tl-dot {
+    position: absolute; left: -34px; top: 6px;
+    width: 14px; height: 14px; border-radius: 50%;
+    border: 3px solid var(--primary); background: var(--bg);
+  }
+  .tl-dot.highlight { border-color: var(--accent); background: var(--accent-light); }
+  .tl-version {
+    display: inline-block; font-size: .8rem; font-weight: 700;
+    color: var(--primary-text); background: var(--primary-light);
+    padding: 2px 12px; border-radius: 10px; margin-bottom: 4px;
+  }
+  .tl-version.highlight { background: var(--accent-light); color: var(--accent); }
+  .tl-date {
+    font-size: .85rem; color: var(--text-muted); margin-left: 8px;
+  }
+  .tl-title {
+    font-size: 1.05rem; font-weight: 600; margin: 4px 0 6px;
+  }
+  .tl-desc {
+    color: var(--text-secondary); font-size: .9rem; line-height: 1.6;
+  }
+  .tl-desc ul { list-style: none; margin-top: 6px; }
+  .tl-desc li {
+    position: relative; padding-left: 16px; margin-bottom: 2px;
+  }
+  .tl-desc li::before {
+    content: '·'; position: absolute; left: 4px; color: var(--primary);
+    font-weight: 700;
+  }
+
+  /* ===== Highlights ===== */
+  .hl-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; }
+  .hl-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 16px; padding: 32px 28px; box-shadow: var(--shadow);
+    transition: all .2s;
+  }
+  .hl-card:hover { box-shadow: var(--shadow-lg); transform: translateY(-2px); }
+  .hl-card .icon {
+    font-size: 2rem; margin-bottom: 12px;
+  }
+  .hl-card h3 { font-size: 1.1rem; font-weight: 600; margin-bottom: 8px; }
+  .hl-card p {
+    font-size: .9rem; color: var(--text-secondary); line-height: 1.7;
+  }
+  .hl-card .tag {
+    display: inline-block; margin-top: 12px;
+    font-size: .75rem; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .04em; color: var(--primary);
+  }
+
+  /* ===== Query Strategy Table ===== */
+  .table-wrap {
+    overflow-x: auto; border-radius: 12px;
+    border: 1px solid var(--border); box-shadow: var(--shadow);
+  }
+  table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  thead { background: var(--bg-alt); }
+  th {
+    padding: 12px 16px; text-align: left; font-weight: 600;
+    font-size: .82rem; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--text-secondary); border-bottom: 2px solid var(--border);
+  }
+  td {
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+    color: var(--text-secondary);
+  }
+  tr:hover td { background: var(--surface-hover); }
+  td:first-child { font-weight: 500; color: var(--text); }
+  .badge-yes { color: var(--success); font-weight: 600; }
+  .badge-no { color: var(--text-muted); }
+  .badge-speed { font-size: .78rem; padding: 2px 10px; border-radius: 8px; }
+  .badge-speed.fast { background: #d1fae5; color: #065f46; }
+  .badge-speed.normal { background: var(--primary-light); color: var(--primary-text); }
+  [data-theme="dark"] .badge-speed.fast { background: #064e3b; color: #6ee7b7; }
+  [data-theme="dark"] .badge-speed.normal { background: var(--primary-light); color: var(--primary-text); }
+
+  /* ===== Screenshot Placeholders ===== */
+  .screenshot-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;
+  }
+  .screenshot-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 16px; overflow: hidden; box-shadow: var(--shadow);
+    transition: all .2s; cursor: pointer;
+  }
+  .screenshot-card:hover { box-shadow: var(--shadow-lg); transform: translateY(-2px); }
+  .screenshot-placeholder {
+    aspect-ratio: 16/10; background: var(--bg-alt);
+    display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 8px;
+    color: var(--text-muted); font-size: .85rem;
+    border-bottom: 1px solid var(--border);
+    position: relative; overflow: hidden;
+  }
+  .screenshot-placeholder .ph-icon { font-size: 2.5rem; opacity: .5; }
+  .screenshot-placeholder .ph-text { font-size: .8rem; }
+  .screenshot-card .caption {
+    padding: 14px 16px; font-size: .85rem; font-weight: 500;
+  }
+
+  /* ===== Footer ===== */
+  footer {
+    text-align: center; padding: 48px 0; color: var(--text-muted);
+    font-size: .85rem; border-top: 1px solid var(--border); margin-top: 20px;
+  }
+  footer a { color: var(--primary); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+
+  /* ===== Responsive ===== */
+  @media (max-width: 768px) {
+    .stats-strip { grid-template-columns: repeat(2, 1fr); }
+    .arch-grid { grid-template-columns: 1fr; }
+    .hl-grid { grid-template-columns: 1fr; }
+    .screenshot-grid { grid-template-columns: 1fr; }
+    section { padding: 56px 0; }
+    .hero { min-height: auto; padding: 100px 0 60px; }
+    .flow-diagram { font-size: .7rem; padding: 20px 16px; }
+    .timeline { padding-left: 32px; }
+  }
+
+  /* ===== Animations ===== */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .animate { animation: fadeUp .6s ease-out both; }
+  .delay-1 { animation-delay: .1s; }
+  .delay-2 { animation-delay: .2s; }
+  .delay-3 { animation-delay: .3s; }
+  .delay-4 { animation-delay: .4s; }
+</style>
+</head>
+<body>
+
+<!-- Theme Toggle -->
+<button class="theme-toggle" id="themeToggle" title="切换主题" aria-label="切换深色/浅色模式">🌓</button>
+
+<!-- ===== Hero ===== -->
+<section class="hero">
+  <div class="container">
+    <div class="hero-badge animate delay-1">⚡ 企业级 AI Agent · 生产环境已上线</div>
+    <h1 class="animate delay-1">
+      <span class="gradient">恩特小助手</span>
+    </h1>
+    <p class="hero-sub animate delay-2">
+      基于 <strong>RAG Agent</strong> 架构的企业内部智能助手，集成
+      <strong>PCS 故障代码查询</strong>、<strong>行业标准文档检索</strong>、
+      <strong>多模态文件处理</strong> 与 <strong>自然语言对话</strong>。
+      面向 天津恩特能源科技有限公司 内部同事，通过 Web 页面和钉钉机器人双渠道提供服务。
+    </p>
+    <div class="hero-tags animate delay-3">
+      <span>Python</span><span>FastAPI</span><span>Chroma</span>
+      <span>DeepSeek</span><span>RAG</span><span>Docker</span>
+      <span>MinerU OCR</span><span>SQLite</span>
+      <span>钉钉 Stream Mode</span><span>PyMuPDF</span>
+    </div>
+    <!-- Stats -->
+    <div class="stats-strip animate delay-4">
+      <div class="stat-card">
+        <div class="stat-number">8,844<span class="stat-suffix"></span></div>
+        <div class="stat-label">行 Python 代码</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">34</div>
+        <div class="stat-label">功能模块</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">7</div>
+        <div class="stat-label">版本迭代 <span style="font-size:.78rem;color:var(--text-muted)">10 天</span></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">14</div>
+        <div class="stat-label">天 · 从 0 到线上运行</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== Architecture ===== -->
+<section>
+  <div class="container">
+    <div class="section-header">
+      <h2>🏗️ 系统架构</h2>
+      <p>RAG Agent 循环 + 两级快速通道 + 多端入口，实现高性价比的企业级智能问答</p>
+    </div>
+
+    <div class="arch-grid">
+      <div class="arch-card">
+        <h3><span class="icon">📡</span> 用户入口</h3>
+        <p style="font-size:.9rem;color:var(--text-secondary);">
+          同事通过 <strong>Web 浏览器</strong>（http://localhost:8000）或
+          <strong>钉钉单聊</strong>（搜索「恩特小助手」）发送问题。
+          钉钉采用 Stream Mode ★ WebSocket 长连接，无需公网 IP。
+        </p>
+      </div>
+      <div class="arch-card">
+        <h3><span class="icon">🧠</span> Agent 循环路由</h3>
+        <p style="font-size:.9rem;color:var(--text-secondary);">
+          DeepSeek Function Calling 自主决策：调用故障查询工具、标准检索工具，
+          或直接聊天。最多 5 轮循环，支持多工具协作。注入跨会话记忆实现上下文感知。
+        </p>
+      </div>
+    </div>
+
+    <!-- Flow Diagram -->
+    <div class="flow-diagram">
+      <div class="line"><span class="comment">┌─ 用户入口 ──────────────────────────────────────────┐</span></div>
+      <div class="line"><span class="comment">│</span>  <span class="keyword">Web 页面</span> <span class="arrow">(localhost:8000)</span>    <span class="keyword">钉钉单聊</span> <span class="arrow">(搜索「恩特小助手」)</span>  <span class="comment">│</span></div>
+      <div class="line"><span class="comment">└───────────────────────┬─────────────────────────────┘</span></div>
+      <div class="line"><span class="arrow">                        │</span></div>
+      <div class="line"><span class="comment">┌──────────────────────▼──────────────────────────────┐</span></div>
+      <div class="line"><span class="comment">│</span>  <span class="keyword">FastAPI 服务</span> <span class="arrow">(main.py)</span>  <span class="arrow">+</span> <span class="keyword">钉钉 Stream 机器人</span>  <span class="comment">│</span></div>
+      <div class="line"><span class="comment">│</span>  <span class="string">技能注册中心</span> <span class="arrow">→</span> <span class="node">get_matched_skill(q)</span>          <span class="comment">│</span></div>
+      <div class="line"><span class="comment">└──────────────────────┬──────────────────────────────┘</span></div>
+      <div class="line"><span class="arrow">                        │</span></div>
+      <div class="line"><span class="comment">┌──────────────────────▼──────────────────────────────┐</span></div>
+      <div class="line"><span class="comment">│</span>  <span class="keyword">🧠 Agent 循环</span> <span class="arrow">(agent.py)</span>                       <span class="comment">│</span></div>
+      <div class="line"><span class="comment">│</span>  DeepSeek Function Calling  <span class="arrow">+</span>  跨会话记忆注入    <span class="comment">│</span></div>
+      <div class="line"><span class="comment">│</span>  <span class="branch">├─ 快速通道①</span> 精确故障代码 <span class="arrow">→</span> 毫秒级  <span class="comment">(不调 LLM)</span>    <span class="comment">│</span></div>
+      <div class="line"><span class="comment">│</span>  <span class="branch">├─ 快速通道②</span> 精确标准编号 <span class="arrow">→</span> 毫秒级  <span class="comment">(不调 LLM)</span>    <span class="comment">│</span></div>
+      <div class="line"><span class="comment">│</span>  <span class="branch">└─ Agent 通道</span> LLM 自主路由 <span class="arrow">(查故障 / 查标准 / 聊天)</span>  <span class="comment">│</span></div>
+      <div class="line"><span class="comment">└──────────────────────┬──────────────────────────────┘</span></div>
+      <div class="line"><span class="arrow">                        │</span></div>
+      <div class="line"><span class="comment">┌──────────────────────▼──────────────────────────────┐</span></div>
+      <div class="line"><span class="comment">│</span>  <span class="keyword">Chroma 向量数据库</span>                               <span class="comment">│</span></div>
+      <div class="line"><span class="comment">│</span>  Collection: <span class="string">error_codes</span> <span class="arrow">(133条故障)</span>          <span class="comment">│</span></div>
+      <div class="line"><span class="comment">│</span>  Collection: <span class="string">standards</span>  <span class="arrow">(9份标准文档)</span>          <span class="comment">│</span></div>
+      <div class="line"><span class="comment">│</span>  Embedding: <span class="keyword">BAAI/bge-small-zh-v1.5</span>             <span class="comment">│</span></div>
+      <div class="line"><span class="comment">└─────────────────────────────────────────────────────┘</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== Tech Stack ===== -->
+<section style="background: var(--bg-alt);">
+  <div class="container">
+    <div class="section-header">
+      <h2>🛠️ 技术栈</h2>
+      <p>从后端到 AI，从文档处理到部署，全链路自研</p>
+    </div>
+    <div class="tech-grid">
+      <span class="tech-badge"><span class="dot" style="background:#059669"></span>FastAPI <span class="sub">Web 框架</span></span>
+      <span class="tech-badge"><span class="dot" style="background:#2563eb"></span>Chroma <span class="sub">向量数据库</span></span>
+      <span class="tech-badge"><span class="dot" style="background:#7c3aed"></span>DeepSeek <span class="sub">LLM</span></span>
+      <span class="tech-badge"><span class="dot" style="background:#d97706"></span>BAAI/bge-small-zh <span class="sub">Embedding</span></span>
+      <span class="tech-badge"><span class="dot" style="background:#dc2626"></span>dingtalk-stream <span class="sub">钉钉 SDK</span></span>
+      <span class="tech-badge"><span class="dot" style="background:#0891b2"></span>MinerU <span class="sub">OCR VLM</span></span>
+      <span class="tech-badge"><span class="dot" style="background:#4f46e5"></span>PyMuPDF <span class="sub">PDF 引擎</span></span>
+      <span class="tech-badge"><span class="dot" style="background:#ea580c"></span>SQLite <span class="sub">用户存储</span></span>
+      <span class="tech-badge"><span class="dot" style="background:#16a34a"></span>Docker <span class="sub">容器化</span></span>
+      <span class="tech-badge"><span class="dot" style="background:#9333ea"></span>httpx <span class="sub">HTTP 客户端</span></span>
+      <span class="tech-badge"><span class="dot" style="background:#0284c7"></span>ThreadPoolExecutor <span class="sub">异步任务</span></span>
+      <span class="tech-badge"><span class="dot" style="background:#65a30d"></span>openpyxl <span class="sub">Excel 解析</span></span>
+      <span class="tech-badge"><span class="dot" style="background:#0d9488"></span>uvicorn <span class="sub">ASGI 服务器</span></span>
+      <span class="tech-badge"><span class="dot" style="background:#b91c1c"></span>Unstructured <span class="sub">PDF 切块</span></span>
+    </div>
+  </div>
+</section>
+
+<!-- ===== Key Highlights ===== -->
+<section>
+  <div class="container">
+    <div class="section-header">
+      <h2>💡 核心技术亮点</h2>
+      <p>每个亮点背后都是具体的技术决策和工程落地</p>
+    </div>
+    <div class="hl-grid">
+      <div class="hl-card">
+        <div class="icon">🧠</div>
+        <h3>RAG Agent 循环</h3>
+        <p>基于 DeepSeek Function Calling 的智能路由。系统自动判断用户意图——是查故障代码、搜标准文档，还是普通聊天——调用对应工具，无需人工干预。</p>
+        <span class="tag">LLM + 工具 + 记忆 + 循环</span>
+      </div>
+      <div class="hl-card">
+        <div class="icon">⚡</div>
+        <h3>两级快速通道</h3>
+        <p>故障代码 / 标准编号精确匹配走 metadata 过滤，<strong>毫秒级响应，零 LLM 调用</strong>。约 70%+ 的查询不经过大模型，API 成本降至纯 LLM 方案的 30%。</p>
+        <span class="tag">成本优化 · 极致性能</span>
+      </div>
+      <div class="hl-card">
+        <div class="icon">🔌</div>
+        <h3>钉钉 Stream Mode</h3>
+        <p>WebSocket 长连接主动连钉钉，<strong>不需要公网 IP、域名、SSL 证书</strong>。零网络配置即可上线，降低 80% 运维部署成本，适合无公网环境的中小企业。</p>
+        <span class="tag">内网友好 · 开箱即用</span>
+      </div>
+      <div class="hl-card">
+        <div class="icon">📄</div>
+        <h3>文档全生命周期管理</h3>
+        <p>上传 → 提取 → 智能切块 → 向量入库 → Web 管理 → 进度追踪。存储抽象层设计，<strong>Chroma ↔ Qdrant 一行切换</strong>。支持 PDF / Excel / Markdown 多格式。</p>
+        <span class="tag">可扩展架构 · 抽象工厂</span>
+      </div>
+      <div class="hl-card">
+        <div class="icon">👁️</div>
+        <h3>大模型视觉 OCR</h3>
+        <p>扫描 PDF 不走传统 OCR，用 <strong>MinerU VLM 大模型视觉识别</strong>直接输出 Markdown。复杂表格 / 公式 / 图表识别准确率 95%+，技术文档场景效果显著。</p>
+        <span class="tag">VLM 替代传统 OCR</span>
+      </div>
+      <div class="hl-card">
+        <div class="icon">🏢</div>
+        <h3>企业级基础设施</h3>
+        <p>SQLite 三表设计（用户 / 对话 / 权限）、钉钉用户信息自动同步、密码+细粒度权限双模式保护、统计看板、后台异步任务管理器。</p>
+        <span class="tag">权限 · 统计 · 可观测</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== Query Strategy ===== -->
+<section style="background: var(--bg-alt);">
+  <div class="container">
+    <div class="section-header">
+      <h2>🗺️ 查询策略</h2>
+      <p>一条消息走什么路径？不同场景，不同策略，最优性价比</p>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>场景</th>
+            <th>用户输入示例</th>
+            <th>处理路径</th>
+            <th style="text-align:center">调 LLM?</th>
+            <th style="text-align:center">速度</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>精确故障代码</td>
+            <td><code>d4-1</code>、<code>df-8</code></td>
+            <td>Chroma metadata 直接过滤</td>
+            <td style="text-align:center"><span class="badge-no">❌</span></td>
+            <td style="text-align:center"><span class="badge-speed fast">⚡ 毫秒</span></td>
+          </tr>
+          <tr>
+            <td>故障名称 / 原因</td>
+            <td><code>急停告警</code></td>
+            <td>Chroma 语义搜索</td>
+            <td style="text-align:center"><span class="badge-no">❌</span></td>
+            <td style="text-align:center"><span class="badge-speed fast">⚡ 毫秒</span></td>
+          </tr>
+          <tr>
+            <td>自然语言查故障</td>
+            <td><code>逆变器报错了怎么办</code></td>
+            <td>Agent 判断 → 提取关键词 → 搜索</td>
+            <td style="text-align:center"><span class="badge-yes">✅</span></td>
+            <td style="text-align:center"><span class="badge-speed normal">⏳ 较快</span></td>
+          </tr>
+          <tr>
+            <td>标准编号</td>
+            <td><code>GB/T 34133</code></td>
+            <td>精确匹配 standards 库</td>
+            <td style="text-align:center"><span class="badge-no">❌</span></td>
+            <td style="text-align:center"><span class="badge-speed fast">⚡ 毫秒</span></td>
+          </tr>
+          <tr>
+            <td>标准内容检索</td>
+            <td><code>光伏并网逆变器试验方法</code></td>
+            <td>Chroma 语义搜索</td>
+            <td style="text-align:center"><span class="badge-no">❌</span></td>
+            <td style="text-align:center"><span class="badge-speed fast">⚡ 毫秒</span></td>
+          </tr>
+          <tr>
+            <td>通用对话 / 闲聊</td>
+            <td><code>你好</code>、<code>今天天气</code></td>
+            <td>Agent 直接回复（DeepSeek 对话）</td>
+            <td style="text-align:center"><span class="badge-yes">✅</span></td>
+            <td style="text-align:center"><span class="badge-speed normal">⚡ 正常</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div style="text-align:center;margin-top:24px;font-size:.9rem;color:var(--text-secondary);">
+      <strong>70%+ 的查询不经过 LLM</strong> · 单次查询平均成本为纯 LLM 方案的 <strong>~30%</strong>
+    </div>
+  </div>
+</section>
+
+<!-- ===== Version Timeline ===== -->
+<section>
+  <div class="container">
+    <div class="section-header">
+      <h2>📅 版本演进</h2>
+      <p>2026.07.09 → 07.16 · 10 天迭代 7 个版本，每版都有明确增量价值</p>
+    </div>
+    <div class="timeline" style="max-width:700px;margin:0 auto;">
+      <div class="tl-item">
+        <div class="tl-dot highlight"></div>
+        <div><span class="tl-version highlight">v1.2.5</span><span class="tl-date">2026-07-16</span></div>
+        <div class="tl-title">Web 同步管理 + MinerU 稳定性提升</div>
+        <div class="tl-desc">
+          <ul>
+            <li>后台手动触发入库，进度条实时追踪</li>
+            <li>强制重学：跳过查重，重新 MinerU 处理</li>
+            <li>OSS 上传自动重试 3 次，目录结构重构</li>
+          </ul>
+        </div>
+      </div>
+      <div class="tl-item">
+        <div class="tl-dot highlight"></div>
+        <div><span class="tl-version highlight">v1.2.4</span><span class="tl-date">2026-07-15</span></div>
+        <div class="tl-title">SQLite 用户存储 + 权限系统 + 统计看板</div>
+        <div class="tl-desc">
+          <ul>
+            <li>SQLite 统一存储（用户/对话/权限三表）</li>
+            <li>钉钉用户信息自动后台同步</li>
+            <li>管理页密码保护 + 统计看板</li>
+          </ul>
+        </div>
+      </div>
+      <div class="tl-item">
+        <div class="tl-dot highlight"></div>
+        <div><span class="tl-version highlight">v1.2.3</span><span class="tl-date">2026-07-14</span></div>
+        <div class="tl-title">钉钉文件接收 + 标准编号快速通道</div>
+        <div class="tl-desc">
+          <ul>
+            <li>钉钉发送文件/图片自动下载保存</li>
+            <li>标准编号精确匹配毫秒级响应</li>
+            <li>System Prompt 外置到独立文件</li>
+          </ul>
+        </div>
+      </div>
+      <div class="tl-item">
+        <div class="tl-dot highlight"></div>
+        <div><span class="tl-version highlight">v1.2.2</span><span class="tl-date">2026-07-14</span></div>
+        <div class="tl-title">扫描 PDF OCR — MinerU 大模型视觉识别</div>
+        <div class="tl-desc">
+          <ul>
+            <li>MinerU VLM 替代传统 OCR 路线</li>
+            <li>Markdown 标题层级智能切块器</li>
+            <li>9 份标准扫描 PDF 完成 OCR 提取入库</li>
+          </ul>
+        </div>
+      </div>
+      <div class="tl-item">
+        <div class="tl-dot highlight"></div>
+        <div><span class="tl-version highlight">v1.2.1</span><span class="tl-date">2026-07-13</span></div>
+        <div class="tl-title">文档管理子系统（doc_mgr）</div>
+        <div class="tl-desc">
+          <ul>
+            <li>独立自洽的文档全生命周期管理</li>
+            <li>存储抽象层：VectorStore ABC → ChromaStore</li>
+            <li>PyMuPDF 结构分析切块 + Web 管理页面</li>
+          </ul>
+        </div>
+      </div>
+      <div class="tl-item">
+        <div class="tl-dot"></div>
+        <div><span class="tl-version">v1.1</span><span class="tl-date">2026-07-09</span></div>
+        <div class="tl-title">RAG Agent + 记忆系统</div>
+        <div class="tl-desc">
+          <ul>
+            <li>DeepSeek Function Calling 自主路由</li>
+            <li>跨会话记忆持久化</li>
+            <li>Docker CPU torch 瘦身 ~13GB</li>
+          </ul>
+        </div>
+      </div>
+      <div class="tl-item">
+        <div class="tl-dot"></div>
+        <div><span class="tl-version">v1.0</span><span class="tl-date">2026-07-09</span></div>
+        <div class="tl-title">MVP 上线</div>
+        <div class="tl-desc">
+          <ul>
+            <li>PCS 故障代码精确匹配 + 语义搜索</li>
+            <li>钉钉 Stream 模式机器人上线</li>
+            <li>Web 页面 + 云服务器部署</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== Screenshots ===== -->
+<section style="background: var(--bg-alt);">
+  <div class="container">
+    <div class="section-header">
+      <h2>📸 界面预览</h2>
+      <p>Web 页面 · 钉钉对话 · 管理后台 · 统计看板</p>
+    </div>
+    <div class="screenshot-grid">
+      <div class="screenshot-card">
+        <div class="screenshot-placeholder">
+          <span class="ph-icon">💬</span>
+          <span class="ph-text">Web 聊天页面截图</span>
+        </div>
+        <div class="caption">Web 页面 · 用户对话界面</div>
+      </div>
+      <div class="screenshot-card">
+        <div class="screenshot-placeholder">
+          <span class="ph-icon">🤖</span>
+          <span class="ph-text">钉钉对话截图</span>
+        </div>
+        <div class="caption">钉钉单聊 · 搜索「恩特小助手」</div>
+      </div>
+      <div class="screenshot-card">
+        <div class="screenshot-placeholder">
+          <span class="ph-icon">📂</span>
+          <span class="ph-text">文档管理后台截图</span>
+        </div>
+        <div class="caption">管理后台 · 文档列表 / 上传 / 搜索</div>
+      </div>
+      <div class="screenshot-card">
+        <div class="screenshot-placeholder">
+          <span class="ph-icon">📊</span>
+          <span class="ph-text">统计看板截图</span>
+        </div>
+        <div class="caption">统计看板 · 活跃用户 / 消息趋势</div>
+      </div>
+      <div class="screenshot-card">
+        <div class="screenshot-placeholder">
+          <span class="ph-icon">🔄</span>
+          <span class="ph-text">同步管理截图</span>
+        </div>
+        <div class="caption">同步管理 · 进度条追踪</div>
+      </div>
+      <div class="screenshot-card">
+        <div class="screenshot-placeholder">
+          <span class="ph-icon">🔧</span>
+          <span class="ph-text">故障查询结果截图</span>
+        </div>
+        <div class="caption">精确匹配结果 · 格式化输出</div>
+      </div>
+    </div>
+    <p style="text-align:center;margin-top:16px;font-size:.85rem;color:var(--text-muted);">
+      💡 提示：将实际截图替换到对应占位区域，或直接 F12 截取页面效果
+    </p>
+  </div>
+</section>
+
+<!-- ===== Footer ===== -->
+<footer>
+  <div class="container">
+    <p>
+      <strong>恩特小助手</strong> ·
+      天津恩特能源科技有限公司（ENTAR）内部 AI Agent 项目
+    </p>
+    <p style="margin-top:4px;">
+      源码架构设计 · 独立开发 · v1.2.5
+    </p>
+  </div>
+</footer>
+
+<script>
+  // ===== Theme Toggle =====
+  const toggle = document.getElementById('themeToggle');
+  const html = document.documentElement;
+  const stored = localStorage.getItem('theme');
+  if (stored) html.setAttribute('data-theme', stored);
+
+  toggle.addEventListener('click', () => {
+    const cur = html.getAttribute('data-theme');
+    const next = cur === 'dark' ? 'light' : 'dark';
+    html.setAttribute('data-theme', next);
+    localStorage.setItem('theme', next);
+  });
+</script>
+
+</body>
+</html>

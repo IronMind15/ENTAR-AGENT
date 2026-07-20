@@ -24,10 +24,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 再复制项目文件
+# 复制项目文件（data/ 和 knowledge_base/ 由 docker-compose volumes 挂载，不打进镜像）
 COPY scripts/ ./scripts/
-COPY data/ ./data/
-COPY knowledge_base/ ./knowledge_base/
 
 # 暴露端口
 EXPOSE 8000

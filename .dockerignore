@@ -1,0 +1,15 @@
+# 排除不必要的文件，加速 Docker 构建
+.git
+.gitignore
+.claude
+__pycache__
+*.pyc
+*.pyo
+*.md
+docs/
+venv/
+.venv/
+*.tar.gz
+*.zip
+data/
+knowledge_base/

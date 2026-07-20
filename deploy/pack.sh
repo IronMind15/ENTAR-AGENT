@@ -22,7 +22,8 @@ tar -czf "$TAR_FILE" \
     data/ \
     knowledge_base/ \
     requirements.txt \
-    deploy/
+    deploy/ \
+    .dockerignore
 
 echo "✅ 打包完成：$TAR_FILE"
 echo "   大小：$(du -h $TAR_FILE | cut -f1)"
