@@ -22,14 +22,13 @@ if _PARENT_DIR not in sys.path:
     sys.path.insert(0, _PARENT_DIR)
 
 import httpx
-from chromadb import PersistentClient
-from chromadb.utils import embedding_functions
 
 # 共享 HTTP 客户端（复用连接，避免每次建新连接）
 _HTTP_CLIENT = httpx.Client(timeout=15)
 
 from config import DEEPSEEK_API_KEY
 from skills import BaseSkill, register
+from doc_mgr.storage import get_store
 
 logger = logging.getLogger("error_query")
 
@@ -75,33 +74,7 @@ NL_MARKERS = ["的", "了", "吗", "呢", "吧", "是", "怎么回事", "怎么"
               "为什么", "如何", "怎么办", "什么", "哪个", "报错",
               "故障", "查一下", "请问"]
 
-# ===== 路径 =====
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(_SCRIPT_DIR))
-CHROMA_PATH = os.path.join(_PROJECT_ROOT, "knowledge_base")
-
-# ===== Chroma 客户端（延迟初始化，首次查询时加载 30MB 模型）=====
-_client = None
-_ef = None
-_collection = None
-
-
-def _get_collection():
-    """懒加载 Chroma collection，首次调用时加载 embedding 模型"""
-    global _client, _ef, _collection
-    if _collection is not None:
-        return _collection
-    if _client is None:
-        _client = PersistentClient(path=CHROMA_PATH)
-        logger.info("Chroma 客户端已连接")
-    if _ef is None:
-        logger.info("加载 embedding 模型（约 30MB）...")
-        _ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name="BAAI/bge-small-zh-v1.5"
-        )
-    _collection = _client.get_collection("error_codes", embedding_function=_ef)
-    logger.info(f"Chroma 就绪，共 {_collection.count()} 条记录")
-    return _collection
+COLLECTION_NAME = "error_codes"
 
 
 def call_deepseek(prompt: str, max_tokens: int = 200) -> str:
@@ -173,7 +146,9 @@ def _extract_keywords_with_llm(query: str) -> str:
 
 def _exact_match_by_code(fault_code: str) -> dict | None:
     """精确匹配故障代码（metadata 过滤，不调向量搜索）"""
-    result = _get_collection().get(where={"fault_code": fault_code})
+    result = get_store().get(
+        COLLECTION_NAME, where={"fault_code": fault_code},
+    )
     if result and result.get("metadatas") and result["metadatas"]:
         meta = result["metadatas"][0]
         return {"metadata": meta}
@@ -336,8 +311,9 @@ def _handle_impl(query: str) -> dict:
         )
 
     # ===== 第 3 关：语义搜索 =====
-    results = _get_collection().query(
-        query_texts=[search_query],
+    results = get_store().query(
+        COLLECTION_NAME,
+        query_text=search_query,
         n_results=SEMANTIC_SEARCH_TOP_K,
     )
     formatted = _format_semantic_results(results, q)
@@ -376,8 +352,9 @@ def search_kb(query: str) -> list[dict]:
 
     # 语义搜索
     try:
-        results = _get_collection().query(
-            query_texts=[query],
+        results = get_store().query(
+            COLLECTION_NAME,
+            query_text=query,
             n_results=SEMANTIC_SEARCH_TOP_K,
         )
     except Exception as e:

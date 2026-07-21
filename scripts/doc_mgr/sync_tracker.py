@@ -2,7 +2,7 @@
 同步状态追踪模块
 
 记录每个文件同步到 Chroma 知识库的状态（pending/synced/error），
-支持变化检测（通过 mtime 比对）、手动同步触发、历史查询。
+支持变化检测（通过 SHA-256 比对）、手动同步触发、历史查询。
 
 v2: 新增 upload_user_id / upload_user_name 字段，记录文件上传者。
 
@@ -48,6 +48,13 @@ class SyncTracker:
             conn.execute("PRAGMA busy_timeout=5000")
             self._local.conn = conn
         return self._local.conn
+
+    def close(self) -> None:
+        """关闭当前线程的 SQLite 连接，便于测试、维护任务和优雅退出。"""
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            conn.close()
+            self._local.conn = None
 
     def _init_db(self):
         """幂等建表 + 迁移旧表"""
@@ -98,7 +105,7 @@ class SyncTracker:
             file_path: 文件绝对路径
             file_name: 文件名
             file_size: 文件字节数
-            file_hash: 文件哈希（mtime）
+            file_hash: 文件内容 SHA-256
             target_collection: 目标知识库
             upload_user_id: 上传者钉钉 user_id
             upload_user_name: 上传者昵称
@@ -121,7 +128,10 @@ class SyncTracker:
                     upload_user_name = excluded.upload_user_name,
                     updated_at     = excluded.updated_at,
                     sync_status    = CASE
-                        WHEN sync_status = 'error' THEN 'pending'
+                        WHEN sync_status = 'error'
+                          OR file_hash <> excluded.file_hash
+                          OR target_collection <> excluded.target_collection
+                        THEN 'pending'
                         ELSE sync_status
                     END
             """, (file_path, file_name, file_size, file_hash,

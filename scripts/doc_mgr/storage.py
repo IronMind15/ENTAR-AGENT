@@ -12,10 +12,22 @@
 import os
 import re
 import logging
+import threading
+import uuid
 from abc import ABC, abstractmethod
 from typing import Optional, Any
 
 logger = logging.getLogger("doc_mgr.storage")
+
+_HIDDEN_VERSION_STATES = ["staging", "retired"]
+
+
+def _visible_where(where: Optional[dict] = None) -> dict:
+    """组合查询条件，兼容无版本字段的旧数据并隐藏暂存/退休版本。"""
+    visible = {"version_state": {"$nin": _HIDDEN_VERSION_STATES}}
+    if not where:
+        return visible
+    return {"$and": [visible, where]}
 
 # ===== Chroma 路径（从本文件定位到 project root） =====
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -32,6 +44,14 @@ class VectorStore(ABC):
     def add(self, collection: str, ids: list[str],
             documents: list[str], metadatas: list[dict]) -> int:
         """添加文档到指定 collection，返回本次新增条数"""
+        ...
+
+    @abstractmethod
+    def replace_document(self, collection: str, doc_id: str, file_name: str,
+                         ids: list[str], documents: list[str],
+                         metadatas: list[dict],
+                         legacy_ids: Optional[list[str]] = None) -> int:
+        """完整写入新版本后替换指定文档，失败时保留旧版本。"""
         ...
 
     @abstractmethod
@@ -77,6 +97,8 @@ class ChromaStore(VectorStore):
         self._client = PersistentClient(path=persist_dir)
         self._ef: Any = None  # 懒加载
         self._collection_cache: dict[str, Any] = {}
+        self._visibility_lock = threading.RLock()
+        self._replace_lock = threading.RLock()
 
         os.makedirs(persist_dir, exist_ok=True)
         logger.info(f"ChromaStore 初始化 (持久化目录: {persist_dir})")
@@ -135,25 +157,171 @@ class ChromaStore(VectorStore):
         # 分批写入（每批 50 条，避免 Chroma 大量写入卡住）
         BATCH_SIZE = 50
         total = len(new_ids)
-        for i in range(0, total, BATCH_SIZE):
-            end = min(i + BATCH_SIZE, total)
-            coll.add(
-                ids=new_ids[i:end],
-                documents=new_docs[i:end],
-                metadatas=new_metas[i:end],
-            )
+        with self._replace_lock, self._visibility_lock:
+            for i in range(0, total, BATCH_SIZE):
+                end = min(i + BATCH_SIZE, total)
+                coll.add(
+                    ids=new_ids[i:end],
+                    documents=new_docs[i:end],
+                    metadatas=new_metas[i:end],
+                )
 
         logger.info(f"  [增量] 写入 {total} 条（{len(ids) - total} 条已存在跳过）")
         return total
+
+    def replace_document(self, collection: str, doc_id: str, file_name: str,
+                         ids: list[str], documents: list[str],
+                         metadatas: list[dict],
+                         legacy_ids: Optional[list[str]] = None) -> int:
+        """串行执行文档换版，避免并发任务留下多个 active 版本。"""
+        replace_lock = getattr(self, "_replace_lock", self._visibility_lock)
+        with replace_lock:
+            return self._replace_document_locked(
+                collection, doc_id, file_name, ids, documents, metadatas,
+                legacy_ids=legacy_ids,
+            )
+
+    def _replace_document_locked(
+        self, collection: str, doc_id: str, file_name: str,
+        ids: list[str], documents: list[str], metadatas: list[dict],
+        legacy_ids: Optional[list[str]] = None,
+    ) -> int:
+        """以两阶段方式替换一份文档。
+
+        新版本先作为 staging 写入并校验；切换阶段由进程内锁保护，
+        先激活新版本，再将旧版本标记 retired 并删除。任何写入或切换
+        异常都会尽量清理新版本并恢复旧版本可见性。
+        """
+        if not doc_id:
+            raise ValueError("replace_document 缺少 doc_id")
+        if not ids or not (len(ids) == len(documents) == len(metadatas)):
+            raise ValueError("replace_document 的切块数据为空或长度不一致")
+        if len(set(ids)) != len(ids):
+            raise ValueError("replace_document 收到重复切块 ID")
+
+        coll = self._get_collection(collection)
+        attempt = uuid.uuid4().hex[:12]
+        version_id = str(metadatas[0].get("version_id", ""))
+        stage_ids = [
+            f"{doc_id}:{version_id[:16]}:{attempt}:{index:06d}"
+            for index in range(len(ids))
+        ]
+        stage_metas = []
+        for meta in metadatas:
+            staged = dict(meta)
+            staged.update({
+                "doc_id": doc_id,
+                "file_name": file_name,
+                "version_id": version_id,
+                "version_state": "staging",
+            })
+            stage_metas.append(staged)
+
+        old_ids: list[str] = []
+        old_meta_by_id: dict[str, dict] = {}
+
+        def collect_old(result: dict) -> None:
+            result_ids = result.get("ids", []) if result else []
+            result_metas = result.get("metadatas", []) if result else []
+            for index, existing_id in enumerate(result_ids):
+                if existing_id in stage_ids or existing_id in old_meta_by_id:
+                    continue
+                meta = result_metas[index] if index < len(result_metas) else {}
+                meta = dict(meta or {})
+                existing_doc_id = meta.get("doc_id", "")
+                if existing_doc_id and existing_doc_id != doc_id:
+                    continue
+                old_ids.append(existing_id)
+                old_meta_by_id[existing_id] = meta
+
+        collect_old(coll.get(where={"doc_id": doc_id}))
+        collect_old(coll.get(where={"file_name": file_name}))
+        if legacy_ids:
+            collect_old(coll.get(ids=list(dict.fromkeys(legacy_ids))))
+
+        batch_size = 50
+        written_stage_ids: list[str] = []
+        try:
+            for start in range(0, len(stage_ids), batch_size):
+                end = min(start + batch_size, len(stage_ids))
+                coll.add(
+                    ids=stage_ids[start:end],
+                    documents=documents[start:end],
+                    metadatas=stage_metas[start:end],
+                )
+                written_stage_ids.extend(stage_ids[start:end])
+
+            verified = coll.get(ids=stage_ids)
+            if len(verified.get("ids", [])) != len(stage_ids):
+                raise RuntimeError(
+                    f"新版本写入校验失败: {len(verified.get('ids', []))}/{len(stage_ids)}"
+                )
+        except Exception:
+            if written_stage_ids:
+                try:
+                    coll.delete(ids=written_stage_ids)
+                except Exception:
+                    logger.exception("清理失败的新版本暂存块时发生异常")
+            raise
+
+        active_metas = []
+        for meta in stage_metas:
+            active = dict(meta)
+            active["version_state"] = "active"
+            active_metas.append(active)
+
+        retired_ids: list[str] = []
+        try:
+            with self._visibility_lock:
+                for start in range(0, len(stage_ids), batch_size):
+                    end = min(start + batch_size, len(stage_ids))
+                    coll.update(
+                        ids=stage_ids[start:end],
+                        metadatas=active_metas[start:end],
+                    )
+
+                for start in range(0, len(old_ids), batch_size):
+                    batch_ids = old_ids[start:start + batch_size]
+                    retired_metas = []
+                    for existing_id in batch_ids:
+                        retired = dict(old_meta_by_id[existing_id])
+                        retired["version_state"] = "retired"
+                        retired_metas.append(retired)
+                    coll.update(ids=batch_ids, metadatas=retired_metas)
+                    retired_ids.extend(batch_ids)
+
+                if old_ids:
+                    try:
+                        coll.delete(ids=old_ids)
+                    except Exception:
+                        logger.exception("旧版本已隐藏，但物理删除失败，需后续清理")
+        except Exception:
+            with self._visibility_lock:
+                if retired_ids:
+                    try:
+                        original_metas = [old_meta_by_id[item] for item in retired_ids]
+                        coll.update(ids=retired_ids, metadatas=original_metas)
+                    except Exception:
+                        logger.exception("恢复旧版本 metadata 失败")
+                try:
+                    coll.delete(ids=stage_ids)
+                except Exception:
+                    logger.exception("回滚新版本失败")
+            raise
+
+        logger.info(
+            f"  [换版] {file_name}: 新版本 {len(stage_ids)} 块，旧版本 {len(old_ids)} 块"
+        )
+        return len(stage_ids)
 
     def query(self, collection: str, query_text: str,
               n_results: int = 5, where: Optional[dict] = None) -> dict:
         coll = self._get_collection(collection)
         kwargs = {"query_texts": [query_text], "n_results": n_results}
-        if where:
-            kwargs["where"] = where
+        kwargs["where"] = _visible_where(where)
         try:
-            return coll.query(**kwargs)
+            with self._visibility_lock:
+                return coll.query(**kwargs)
         except Exception as e:
             logger.exception(f"Chroma 语义搜索失败: {e}")
             return {"documents": [[]], "metadatas": [[]], "distances": [[]]}
@@ -164,10 +332,10 @@ class ChromaStore(VectorStore):
         kwargs: dict = {}
         if ids:
             kwargs["ids"] = ids
-        if where:
-            kwargs["where"] = where
+        kwargs["where"] = _visible_where(where)
         try:
-            return coll.get(**kwargs)
+            with self._visibility_lock:
+                return coll.get(**kwargs)
         except Exception as e:
             logger.exception(f"Chroma get 失败: {e}")
             return {"ids": [], "documents": [], "metadatas": []}
@@ -179,12 +347,13 @@ class ChromaStore(VectorStore):
         if ids:
             kwargs["ids"] = ids
         if where:
-            kwargs["where"] = where
+            kwargs["where"] = _visible_where(where)
         if not kwargs:
             logger.warning("delete 调用缺少 ids 或 where 参数，跳过")
             return 0
         try:
-            coll.delete(**kwargs)
+            with self._replace_lock, self._visibility_lock:
+                coll.delete(**kwargs)
             return len(kwargs.get("ids", []))
         except Exception as e:
             logger.exception(f"Chroma delete 失败: {e}")
@@ -192,7 +361,8 @@ class ChromaStore(VectorStore):
 
     def count(self, collection: str) -> int:
         coll = self._get_collection(collection)
-        return coll.count()
+        with self._visibility_lock:
+            return len(coll.get(where=_visible_where()).get("ids", []))
 
     def list_collections(self) -> list[str]:
         return [c.name for c in self._client.list_collections()]

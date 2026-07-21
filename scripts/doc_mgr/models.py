@@ -36,6 +36,9 @@ class Document:
     std_title: str = ""        # 标准名称（PDF 特有）
     source: str = ""           # 处理来源: mineru | pymupdf | excel | markdown
     message: str = ""          # 处理信息/错误信息
+    doc_id: str = ""           # 稳定文档 ID（当前按规范化源路径生成）
+    content_hash: str = ""     # 文件内容 SHA-256
+    version_id: str = ""       # 当前版本 ID（第一阶段等同于 content_hash）
 
 
 @dataclass

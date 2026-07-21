@@ -16,8 +16,7 @@ if sys.platform == "win32":
     sys.stdin.reconfigure(encoding="utf-8")
     sys.stdout.reconfigure(encoding="utf-8")
 
-from chromadb import PersistentClient
-from chromadb.utils import embedding_functions
+from doc_mgr.storage import get_store
 
 logger = logging.getLogger("standards_query")
 
@@ -31,10 +30,6 @@ STANDARD_ID_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-# ===== 路径 =====
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(_SCRIPT_DIR))
-CHROMA_PATH = os.path.join(_PROJECT_ROOT, "knowledge_base")
 COLLECTION_NAME = "standards"
 
 # 搜索参数
@@ -44,38 +39,6 @@ DISTANCE_THRESHOLD_MEDIUM = 0.9
 
 # 搜索结果最小数量（低于此数量时提示用户换种问法）
 MIN_RESULTS_THRESHOLD = 1
-
-# ===== Chroma 客户端（延迟初始化）=====
-_client = None
-_ef = None
-_collection = None
-
-
-def _get_collection():
-    """懒加载 Chroma standards collection"""
-    global _client, _ef, _collection
-    if _collection is not None:
-        return _collection
-    if _client is None:
-        _client = PersistentClient(path=CHROMA_PATH)
-        logger.info("Chroma 客户端已连接")
-    if _ef is None:
-        logger.info("加载 embedding 模型（约 30MB）...")
-        _ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name="BAAI/bge-small-zh-v1.5"
-        )
-
-    try:
-        import chromadb
-        _collection = _client.get_collection(COLLECTION_NAME, embedding_function=_ef)
-    except (ValueError, chromadb.errors.NotFoundError):
-        logger.warning(f"Chroma collection '{COLLECTION_NAME}' 不存在，请先运行 sync_standards.py")
-        _collection = None
-        return None
-
-    logger.info(f"Chroma 就绪，共 {_collection.count()} 条标准记录")
-    return _collection
-
 
 def _extract_standard_id(query: str) -> str | None:
     """从查询中提取标准编号"""
@@ -90,13 +53,11 @@ def _exact_match_by_std_id(std_id: str) -> dict | None:
 
     支持模糊匹配：GB/T 34133-2023 可匹配 GB/T 34133-2023
     """
-    collection = _get_collection()
-    if collection is None:
-        return None
+    store = get_store()
 
     # 尝试精确匹配
     try:
-        result = collection.get(where={"std_id": std_id})
+        result = store.get(COLLECTION_NAME, where={"std_id": std_id})
         if result and result.get("metadatas") and result["metadatas"]:
             meta = result["metadatas"][0]
             return {"metadata": meta}
@@ -107,7 +68,7 @@ def _exact_match_by_std_id(std_id: str) -> dict | None:
     normalized_id = re.sub(r'[\s/\-.]', '', std_id.lower())
     try:
         # 获取所有记录进行客户端过滤
-        all_results = collection.get()
+        all_results = store.get(COLLECTION_NAME)
         if all_results and all_results.get("metadatas"):
             for meta in all_results["metadatas"]:
                 if meta and "std_id" in meta:
@@ -148,13 +109,10 @@ def search_kb(query: str) -> list[dict]:
             return [meta]
 
     # ===== 语义搜索 =====
-    collection = _get_collection()
-    if collection is None:
-        return []
-
     try:
-        results = collection.query(
-            query_texts=[full_text],
+        results = get_store().query(
+            COLLECTION_NAME,
+            query_text=full_text,
             n_results=SEARCH_TOP_K,
         )
     except Exception as e:

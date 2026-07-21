@@ -22,6 +22,7 @@ from .engine import process_file
 from .storage import get_store
 from .views import ADMIN_HTML
 from .task_manager import get_manager as get_task_manager
+from .identity import file_sha256
 
 logger = logging.getLogger("doc_mgr.router")
 
@@ -209,7 +210,7 @@ async def upload_file(
             file_path=save_path,
             file_name=_filename,
             file_size=len(content),
-            file_hash=str(int(os.path.getmtime(save_path))),
+            file_hash=file_sha256(save_path),
             target_collection=_collection,
             upload_user_id=user_id or "admin",
             upload_user_name="管理员",
@@ -602,8 +603,7 @@ def trigger_sync(
         fname = os.path.basename(file_path)
         target = collection or "standards"
 
-        # 提交后台任务（不做 Chroma 预检查，即使已入库也走 MinerU 获取最新 ZIP）
-        # Chroma 入库时自带 ID 去重，不会重复写入
+        # 提交后台任务；新版本完整写入后由存储层替换旧版本
         from .task_manager import get_manager as get_task_manager
         manager = get_task_manager()
         record = manager.submit(
@@ -646,7 +646,7 @@ def _run_sync_task(file_path: str, fname: str,
 
     try:
         fsize = os.path.getsize(file_path)
-        fhash = str(int(os.path.getmtime(file_path)))
+        fhash = file_sha256(file_path)
     except OSError:
         fsize, fhash = 0, ""
 
@@ -656,7 +656,7 @@ def _run_sync_task(file_path: str, fname: str,
     _rp("syncing", 10, "开始同步处理...")
 
     doc = process_file(file_path, file_name=fname,
-                       target_collection=target)
+                       target_collection=target, force=force)
 
     if doc.status in ("done", "skipped"):
         tracker.mark_synced(file_path)

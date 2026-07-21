@@ -18,6 +18,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from .engine import process_file, check_chroma_has_file
 from .sync_tracker import SyncTracker
+from .identity import file_sha256
 
 logger = logging.getLogger("doc_mgr.scheduler")
 
@@ -39,10 +40,9 @@ def _resolve(relative: str) -> str:
 
 
 def _compute_hash(file_path: str) -> str:
-    """快速文件变化检测：使用修改时间戳"""
+    """使用文件内容 SHA-256 检测变化。"""
     try:
-        mtime = os.path.getmtime(file_path)
-        return str(int(mtime))
+        return file_sha256(file_path)
     except OSError:
         return ""
 
@@ -93,10 +93,21 @@ def _scan_and_sync(force: bool = False):
                             and existing.get("file_hash") == fhash
                             and not force):
                         continue  # 无变化，跳过
+                    legacy_hash = str(existing.get("file_hash", ""))
+                    current_mtime = str(int(os.path.getmtime(fpath)))
+                    if (existing.get("sync_status") == "synced"
+                            and legacy_hash.isdigit()
+                            and legacy_hash == current_mtime
+                            and not force):
+                        target = existing.get("target_collection") or default_collection
+                        tracker.upsert_file(fpath, fname, fsize, fhash, target)
+                        tracker.mark_synced(fpath)
+                        logger.info(f"  哈希记录升级为 SHA-256（内容未重新处理）: {fname}")
+                        continue
                     logger.info(f"  变更/重试: {fname}")
 
                 # 预检查 2: Chroma 里是否已有这个文件的切块？（仅非强制模式）
-                if not force:
+                if not force and existing is None:
                     # 判断 target_collection
                     target = default_collection
                     if check_chroma_has_file(target, fname):
@@ -114,7 +125,8 @@ def _scan_and_sync(force: bool = False):
                 # 执行同步
                 try:
                     doc = process_file(fpath, file_name=fname,
-                                       target_collection=target)
+                                       target_collection=target,
+                                       force=force)
                     if doc.status in ("done", "skipped"):
                         tracker.mark_synced(fpath)
                         logger.info(f"  ✅ {fname} → {doc.chunk_count} 块（来源: {doc.source}）")

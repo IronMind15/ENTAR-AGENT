@@ -18,6 +18,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from doc_mgr.identity import file_sha256
+
 logger = logging.getLogger("file_handler")
 
 # 文件保存根目录
@@ -149,7 +151,7 @@ def download_and_save_file(
                 file_path=str(file_path),
                 file_name=file_path.name,
                 file_size=file_size,
-                file_hash=str(int(os.path.getmtime(str(file_path)))),
+                file_hash=file_sha256(str(file_path)),
                 target_collection=target_collection,
                 upload_user_id=user_id,
                 upload_user_name=user_name or "",

@@ -12,9 +12,15 @@
   - Markdown：标题层级切块
 """
 
+import json
+import logging
 import os
 import re
-import logging
+import shutil
+import stat
+import tempfile
+import zipfile
+from pathlib import PurePosixPath
 from typing import Optional
 
 from .models import Chunk, Document
@@ -24,6 +30,7 @@ from .extractors import extract_excel_rows, format_excel_row
 from .extractors import extract_pdf_text
 from .sync_tracker import SyncTracker
 from .task_manager import report_progress as _report_progress
+from .identity import file_sha256, stable_document_id
 
 logger = logging.getLogger("doc_mgr.engine")
 
@@ -68,11 +75,158 @@ def check_chroma_has_file(collection: str, file_name: str) -> bool:
     return False
 
 
-def _try_mineru(file_path: str, file_name: str) -> Optional[str]:
+def _get_pdf_page_count(file_path: str) -> int:
+    """获取 PDF 总页数"""
+    import fitz
+    doc = fitz.open(file_path)
+    try:
+        return doc.page_count
+    finally:
+        doc.close()
+
+
+def _split_pdf(file_path: str, cache_dir: str, max_pages: int = 200) -> list[str]:
+    """将超过 max_pages 页的 PDF 拆分成多份子 PDF
+
+    循环拆分，直到每一份都 ≤ max_pages：
+      - 401 页 → 拆成 1-200、201-400、401（共 3 份）
+      - 888 页 → 拆成 5 份（200+200+200+200+88）
+
+    Args:
+        file_path: 源 PDF 路径
+        cache_dir: 缓存目录（存放拆分后的子文件）
+        max_pages: 每份最大页数
+
+    Returns:
+        拆分后的 PDF 路径列表。如果页数没超限，返回 [file_path]
+    """
+    import fitz
+
+    os.makedirs(cache_dir, exist_ok=True)
+    doc = fitz.open(file_path)
+    try:
+        total = doc.page_count
+        if total <= max_pages:
+            return [file_path]
+
+        stem = os.path.splitext(os.path.basename(file_path))[0]
+        chunk_paths = []
+        total_parts = (total + max_pages - 1) // max_pages
+
+        for i in range(0, total, max_pages):
+            end = min(i + max_pages, total)
+            part_num = i // max_pages + 1
+            chunk_name = f"{stem}_p{part_num}of{total_parts}.pdf"
+            chunk_path = os.path.join(cache_dir, chunk_name)
+
+            new_doc = fitz.open()
+            try:
+                new_doc.insert_pdf(doc, from_page=i, to_page=end - 1)
+                new_doc.save(chunk_path)
+            finally:
+                new_doc.close()
+
+            chunk_paths.append(chunk_path)
+            logger.info(f"    拆分: 第{i+1}-{end}页 → {chunk_name}")
+
+        return chunk_paths
+    finally:
+        doc.close()
+
+
+_MAX_ZIP_MEMBERS = 5000
+_MAX_ZIP_UNCOMPRESSED = 500 * 1024 * 1024
+_MAX_ZIP_RATIO = 200
+
+
+def _validated_zip_target(cache_dir: str, member_name: str) -> str:
+    """校验 ZIP 成员路径，返回受 cache_dir 约束的绝对路径。"""
+    normalized = member_name.replace("\\", "/")
+    path = PurePosixPath(normalized)
+    if (not normalized or path.is_absolute()
+            or re.match(r"^[A-Za-z]:", normalized)
+            or any(part == ".." for part in path.parts)):
+        raise ValueError(f"ZIP 包含不安全路径: {member_name}")
+
+    root = os.path.abspath(cache_dir)
+    target = os.path.abspath(os.path.join(root, *path.parts))
+    if os.path.commonpath([root, target]) != root:
+        raise ValueError(f"ZIP 路径越界: {member_name}")
+    return target
+
+
+def _extract_mineru_result(result_path: str, cache_dir: str) -> Optional[str]:
+    """从 MinerU 返回结果中提取 Markdown 文件路径
+
+    处理 ZIP（解压找 .md）和直接 MD 两种情况。
+
+    Returns:
+        Markdown 文件路径，或 None
+    """
+    if not result_path:
+        return None
+
+    lower_path = result_path.lower()
+    if lower_path.endswith(".zip"):
+        with zipfile.ZipFile(result_path, "r") as zf:
+            infos = zf.infolist()
+            if len(infos) > _MAX_ZIP_MEMBERS:
+                raise ValueError(f"ZIP 文件数量超限: {len(infos)}")
+
+            total_size = sum(info.file_size for info in infos)
+            if total_size > _MAX_ZIP_UNCOMPRESSED:
+                raise ValueError(f"ZIP 解压后大小超限: {total_size} bytes")
+
+            md_infos = []
+            for info in infos:
+                target = _validated_zip_target(cache_dir, info.filename)
+                mode = (info.external_attr >> 16) & 0xFFFF
+                if stat.S_ISLNK(mode):
+                    raise ValueError(f"ZIP 不允许符号链接: {info.filename}")
+                if (info.file_size > 0 and info.compress_size > 0
+                        and info.file_size / info.compress_size > _MAX_ZIP_RATIO):
+                    raise ValueError(f"ZIP 压缩比异常: {info.filename}")
+                if info.filename.lower().endswith(".md") and not info.is_dir():
+                    md_infos.append((info, target))
+
+            full_md = [item for item in md_infos
+                       if PurePosixPath(item[0].filename.replace("\\", "/")).name.lower() == "full.md"]
+            candidates = full_md or md_infos
+            if len(candidates) != 1:
+                raise ValueError(f"MinerU ZIP 中 Markdown 结果不唯一: {len(candidates)}")
+
+            os.makedirs(cache_dir, exist_ok=True)
+            for info in infos:
+                target = _validated_zip_target(cache_dir, info.filename)
+                if info.is_dir():
+                    os.makedirs(target, exist_ok=True)
+                    continue
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                with zf.open(info, "r") as source, open(target, "wb") as dest:
+                    shutil.copyfileobj(source, dest, length=1024 * 1024)
+
+            extracted = candidates[0][1]
+            if os.path.isfile(extracted):
+                logger.info(f"  MinerU ZIP 安全解压完成: {extracted}")
+                return extracted
+    elif lower_path.endswith(".md"):
+        logger.info(f"  MinerU 直接输出 MD: {result_path}")
+        return result_path
+
+    return None
+
+
+def _try_mineru(file_path: str, file_name: str,
+                 content_hash: str = "", force: bool = False) -> Optional[str]:
     """尝试用 MinerU 处理 PDF，返回生成的 Markdown 路径
 
     如果 MinerU 不可用、失败或超时，返回 None 让调用方走回退路径。
+
+    自动处理：
+      - 超过 200 页的 PDF 自动拆分成多份分别送 MinerU，结果合并后返回
+      - 有缓存时直接使用缓存结果
     """
+    run_context = None
     try:
         # 动态导入（MinerU 依赖可能未安装）
         import sys as _sys
@@ -93,39 +247,82 @@ def _try_mineru(file_path: str, file_name: str) -> Optional[str]:
         mineru_dir = _get_mineru_output_dir(file_path)
         cache_dir = os.path.join(mineru_dir, f"{stem}-mineru-cache")
         cached_md = os.path.join(cache_dir, "full.md")
+        manifest_path = os.path.join(cache_dir, "cache.json")
+        current_hash = content_hash or file_sha256(file_path)
 
-        if os.path.isfile(cached_md):
-            logger.info(f"  使用缓存的 MinerU 输出: {cached_md}")
-            return cached_md
+        if not force and os.path.isfile(cached_md) and os.path.isfile(manifest_path):
+            try:
+                with open(manifest_path, "r", encoding="utf-8") as manifest_file:
+                    manifest = json.load(manifest_file)
+                if manifest.get("content_hash") == current_hash:
+                    logger.info(f"  使用内容哈希匹配的 MinerU 缓存: {cached_md}")
+                    return cached_md
+            except (OSError, ValueError, TypeError) as e:
+                logger.warning(f"  MinerU 缓存清单无效，将重新处理: {e}")
 
-        # 调用 MinerU API
-        logger.info(f"  调用 MinerU 处理: {file_name}")
         os.makedirs(cache_dir, exist_ok=True)
-        result_path = mineru_extract(file_path, cache_dir)
+        run_context = tempfile.TemporaryDirectory(prefix="run-", dir=cache_dir)
+        run_dir = run_context.name
 
-        # 处理返回结果（可能是 ZIP 或 MD）
-        if result_path:
-            if result_path.endswith(".zip"):
-                # 解压 ZIP 获取 full.md
-                import zipfile
-                with zipfile.ZipFile(result_path, 'r') as zf:
-                    # 查找 full.md
-                    md_files = [n for n in zf.namelist() if n.endswith("full.md") or n.endswith(".md")]
-                    if md_files:
-                        target = os.path.join(cache_dir, md_files[0])
-                        # 如果 ZIP 内是平铺的，直接解压到 cache_dir
-                        zf.extractall(cache_dir)
-                        # 找到最终的 full.md
-                        extracted_md = os.path.join(cache_dir, md_files[0])
-                        if os.path.isfile(extracted_md):
-                            logger.info(f"  MinerU ZIP 解压完成: {extracted_md}")
-                            return extracted_md
-            elif result_path.endswith(".md"):
-                logger.info(f"  MinerU 直接输出 MD: {result_path}")
-                return result_path
+        # === 检查页数，200 页以上自动拆分 ===
+        pdf_paths = _split_pdf(file_path, cache_dir, max_pages=200)
+        is_split = len(pdf_paths) > 1
+        if is_split:
+            total_pages = _get_pdf_page_count(file_path)
+            logger.info(f"  📄 PDF 共 {total_pages} 页，超过 200 页限制，拆分为 {len(pdf_paths)} 份处理")
 
-        logger.warning("  MinerU 未产生有效输出")
-        return None
+        # === 逐份送入 MinerU ===
+        md_parts: list[str] = []
+        failed_parts: list[str] = []
+        for idx, chunk_path in enumerate(pdf_paths):
+            chunk_name = os.path.basename(chunk_path)
+            prefix = f"  [{idx+1}/{len(pdf_paths)}]" if is_split else ""
+            logger.info(f"{prefix} 调用 MinerU 处理: {chunk_name}")
+
+            try:
+                part_dir = os.path.join(run_dir, f"part-{idx + 1:04d}")
+                os.makedirs(part_dir, exist_ok=True)
+                result_path = mineru_extract(chunk_path, part_dir)
+                md_file = _extract_mineru_result(result_path, part_dir)
+                if md_file and os.path.isfile(md_file):
+                    md_parts.append(md_file)
+                    logger.info(f"{prefix} ✅ MinerU 处理成功: {chunk_name}")
+                else:
+                    failed_parts.append(chunk_name)
+                    logger.warning(f"{prefix} ⚠️ MinerU 未产生有效输出: {chunk_name}")
+            except Exception as e:
+                failed_parts.append(chunk_name)
+                logger.warning(f"{prefix} ❌ MinerU 处理失败: {chunk_name} - {e}")
+                continue
+
+        if failed_parts or len(md_parts) != len(pdf_paths):
+            logger.warning(
+                f"  MinerU 分段结果不完整，拒绝合并（成功 {len(md_parts)}/{len(pdf_paths)}，"
+                f"失败: {', '.join(failed_parts) or '未知'}）"
+            )
+            return None
+
+        # === 按 PDF 分段顺序合并，先写临时文件再替换正式缓存 ===
+        logger.info(f"  合并 {len(md_parts)} 份 MinerU 结果...")
+        merged_path = os.path.join(cache_dir, "full.md")
+        temp_merged = os.path.join(run_dir, "merged.md")
+        with open(temp_merged, "w", encoding="utf-8") as merged:
+            for i, md_file in enumerate(md_parts):
+                with open(md_file, "r", encoding="utf-8") as part_file:
+                    content = part_file.read()
+                if not content.strip():
+                    raise ValueError(f"MinerU 分段结果为空: {md_file}")
+                if i > 0:
+                    merged.write("\n\n<!-- MinerU 分块合并标记 -->\n\n")
+                merged.write(content)
+        os.replace(temp_merged, merged_path)
+        with open(manifest_path, "w", encoding="utf-8") as manifest_file:
+            json.dump({
+                "content_hash": current_hash,
+                "part_count": len(md_parts),
+            }, manifest_file, ensure_ascii=False, indent=2)
+        logger.info(f"  ✅ 合并完成: {merged_path}")
+        return merged_path
 
     except TimeoutError as e:
         logger.warning(f"  ⏰ MinerU 远程转换超时，回退本地 PyMuPDF 处理: {e}")
@@ -133,10 +330,14 @@ def _try_mineru(file_path: str, file_name: str) -> Optional[str]:
     except Exception as e:
         logger.warning(f"  ❌ MinerU 远程转换失败，回退本地 PyMuPDF 处理: {e}")
         return None
+    finally:
+        if run_context is not None:
+            run_context.cleanup()
 
 
 def process_file(file_path: str, file_name: Optional[str] = None,
-                 target_collection: Optional[str] = None) -> Document:
+                 target_collection: Optional[str] = None,
+                 force: bool = False) -> Document:
     """处理单个文件：提取 → 切块 → 入库
 
     Args:
@@ -149,31 +350,66 @@ def process_file(file_path: str, file_name: Optional[str] = None,
     """
     name = file_name or os.path.basename(file_path)
     ext = os.path.splitext(name)[1].lower()
+    supported_exts = (".pdf", ".xlsx", ".xls", ".md")
+    if ext not in supported_exts:
+        ext = os.path.splitext(file_path)[1].lower()
     size = os.path.getsize(file_path)
-    store = get_store()
+    content_hash = file_sha256(file_path)
+    doc_id = stable_document_id(file_path)
+    default_collections = {
+        ".pdf": "standards",
+        ".xlsx": "error_codes",
+        ".xls": "error_codes",
+        ".md": "standards",
+    }
+    collection = target_collection or default_collections.get(ext, "")
 
     logger.info(f"开始处理: {name} ({size / 1024:.1f}KB)")
 
-    if ext == ".pdf":
-        return _process_pdf(file_path, name, size, store, target_collection)
-    elif ext in (".xlsx", ".xls"):
-        return _process_excel(file_path, name, size, store, target_collection)
-    elif ext == ".md":
-        return _process_markdown(file_path, name, size, store, target_collection)
-    else:
+    if ext not in supported_exts:
         logger.warning(f"不支持的文件类型: {ext}")
-        return Document(
-            file_name=name, file_path=file_path,
-            file_size=size, status="error",
-            message=f"不支持的文件类型: {ext}",
+        doc = Document(
+            file_name=name, file_path=file_path, file_size=size,
+            status="error", message=f"不支持的文件类型: {ext}",
+            doc_id=doc_id, content_hash=content_hash,
+            version_id=content_hash,
         )
+    else:
+        try:
+            store = get_store()
+            common = {
+                "doc_id": doc_id,
+                "content_hash": content_hash,
+            }
+            if ext == ".pdf":
+                doc = _process_pdf(
+                    file_path, name, size, store, collection,
+                    force=force, **common,
+                )
+            elif ext in (".xlsx", ".xls"):
+                doc = _process_excel(
+                    file_path, name, size, store, collection, **common,
+                )
+            else:
+                doc = _process_markdown(
+                    file_path, name, size, store, collection, **common,
+                )
+        except Exception as e:
+            logger.exception(f"文档处理失败: {name}: {e}")
+            doc = Document(
+                file_name=name, file_path=file_path, file_size=size,
+                collection=collection, status="error", message=str(e),
+                doc_id=doc_id, content_hash=content_hash,
+                version_id=content_hash,
+            )
 
     # 记录同步状态（所有处理路径共用的出口）
-    _record_sync_status(name, file_path, size, doc, store)
+    _record_sync_status(name, file_path, size, content_hash, doc)
+    return doc
 
 
 def _record_sync_status(file_name: str, file_path: str, file_size: int,
-                         doc: Document, store: object = None) -> None:
+                         content_hash: str, doc: Document) -> None:
     """记录文件同步状态到 sync_tracker
 
     放在 process_file 内部以确保所有调用路径（CLI/Admin/DingTalk/调度器）
@@ -185,7 +421,7 @@ def _record_sync_status(file_name: str, file_path: str, file_size: int,
             file_path=file_path,
             file_name=file_name,
             file_size=file_size,
-            file_hash=str(int(os.path.getmtime(file_path))),
+            file_hash=content_hash,
             target_collection=doc.collection or "",
         )
         if doc.status == "done":
@@ -208,7 +444,9 @@ def process_files(file_paths: list[str]) -> list[Document]:
 # ==================== PDF 处理 ====================
 
 def _process_pdf(file_path: str, file_name: str, file_size: int,
-                 store: VectorStore, target_collection: str = "standards") -> Document:
+                 store: VectorStore, target_collection: str = "standards",
+                 doc_id: str = "", content_hash: str = "",
+                 force: bool = False) -> Document:
     """处理 PDF 文件
 
     策略：
@@ -219,16 +457,23 @@ def _process_pdf(file_path: str, file_name: str, file_size: int,
     doc = Document(
         file_name=file_name, file_path=file_path,
         file_size=file_size, collection=target_collection,
+        doc_id=doc_id, content_hash=content_hash,
+        version_id=content_hash,
     )
 
     # ---- 方案 A：MinerU 优先 ----
     _report_progress("mineru", 15, "MinerU 远程转换中...")
-    mineru_md = _try_mineru(file_path, file_name)
+    mineru_md = _try_mineru(
+        file_path, file_name, content_hash=content_hash, force=force,
+    )
     if mineru_md and os.path.isfile(mineru_md):
         _report_progress("download", 40, "MinerU 转换完成，下载结果...")
         logger.info(f"  MinerU 成功，走 Markdown 入库路径")
         # 用 _process_markdown 处理 MinerU 输出的 MD 文件
-        md_doc = _process_markdown(mineru_md, file_name, file_size, store, target_collection)
+        md_doc = _process_markdown(
+            mineru_md, file_name, file_size, store, target_collection,
+            doc_id=doc_id, content_hash=content_hash,
+        )
         # 继承 MinerU 的处理结果
         doc.status = md_doc.status
         doc.chunk_count = md_doc.chunk_count
@@ -274,13 +519,18 @@ def _process_pdf(file_path: str, file_name: str, file_size: int,
 
     # 入库
     _report_progress("indexing", 80, f"切块完成（{len(chunks)} 块），入库到知识库...")
-    ids, documents, metadatas = _prepare_chunks(chunks, file_name)
-    added = store.add("standards", ids, documents, metadatas)
+    ids, documents, metadatas = _prepare_chunks(
+        chunks, file_name, doc_id=doc_id, content_hash=content_hash,
+    )
+    added = store.replace_document(
+        target_collection, doc_id, file_name,
+        ids, documents, metadatas,
+    )
 
     doc.chunk_count = added
     doc.source = "pymupdf"
-    doc.status = "done" if added > 0 else "skipped"
-    doc.message = f"PyMuPDF 切块入库 {added} 条"
+    doc.status = "done"
+    doc.message = f"PyMuPDF 新版本换库 {added} 条"
     logger.info(f"  PDF 处理完成（PyMuPDF）: {file_name} → {added} 块")
     return doc
 
@@ -288,11 +538,14 @@ def _process_pdf(file_path: str, file_name: str, file_size: int,
 # ==================== Excel 处理 ====================
 
 def _process_excel(file_path: str, file_name: str, file_size: int,
-                   store: VectorStore, target_collection: str = "error_codes") -> Document:
+                   store: VectorStore, target_collection: str = "error_codes",
+                   doc_id: str = "", content_hash: str = "") -> Document:
     """处理 Excel 文件（故障代码）"""
     doc = Document(
         file_name=file_name, file_path=file_path,
         file_size=file_size, collection=target_collection,
+        doc_id=doc_id, content_hash=content_hash,
+        version_id=content_hash,
     )
 
     # 1. 提取行数据
@@ -311,24 +564,54 @@ def _process_excel(file_path: str, file_name: str, file_size: int,
     documents = []
     metadatas = []
 
+    # 兼容旧知识库中的 row_行号 ID：同一故障记录继续沿用旧 ID，
+    # 避免第一阶段切换 ID 规则时立即产生一份重复数据。
+    legacy_ids = [f"row_{r.get('_row_num', 0)}" for r in records]
+    legacy_meta: dict[str, dict] = {}
+    try:
+        existing = store.get(target_collection, ids=legacy_ids)
+        for index, existing_id in enumerate(existing.get("ids", [])):
+            metas = existing.get("metadatas", [])
+            legacy_meta[existing_id] = metas[index] if index < len(metas) else {}
+    except Exception as e:
+        logger.warning(f"  检查旧版 Excel ID 失败，将使用新版文档级 ID: {e}")
+
+    matched_legacy_ids: list[str] = []
     for r in records:
         row_num = r.pop("_row_num", 0)
         sheet_name = r.pop("_sheet_name", "")
         doc_text = format_excel_row(r)
 
-        ids.append(f"row_{row_num}")
+        safe_sheet = re.sub(r"[^a-zA-Z0-9一-鿿-]", "_", sheet_name)
+        legacy_id = f"row_{row_num}"
+        old_meta = legacy_meta.get(legacy_id, {})
+        same_legacy_record = bool(old_meta) and (
+            (r.get("fault_code") and old_meta.get("fault_code") == r.get("fault_code"))
+            or (r.get("name") and old_meta.get("name") == r.get("name"))
+        )
+        if same_legacy_record:
+            matched_legacy_ids.append(legacy_id)
+        ids.append(f"excel_{doc_id or file_name}_{safe_sheet}_{row_num}")
         documents.append(doc_text)
         r["sheet_name"] = sheet_name
         r["row_num"] = row_num
+        r["file_name"] = file_name
+        r["doc_id"] = doc_id
+        r["content_hash"] = content_hash
+        r["version_id"] = content_hash
         metadatas.append(r)
 
     # 3. 入库
-    added = store.add("error_codes", ids, documents, metadatas)
+    added = store.replace_document(
+        target_collection, doc_id, file_name,
+        ids, documents, metadatas,
+        legacy_ids=matched_legacy_ids,
+    )
 
     doc.chunk_count = added
     doc.source = "excel"
-    doc.status = "done" if added > 0 else "skipped"
-    doc.message = f"入库 {added} 条故障代码"
+    doc.status = "done"
+    doc.message = f"新版本换库 {added} 条故障代码"
     logger.info(f"  Excel 处理完成: {file_name} → {added} 条")
     return doc
 
@@ -336,7 +619,8 @@ def _process_excel(file_path: str, file_name: str, file_size: int,
 # ==================== Markdown 处理（MinerU 输出） ====================
 
 def _process_markdown(file_path: str, file_name: str, file_size: int,
-                      store: VectorStore, target_collection: str = "standards") -> Document:
+                      store: VectorStore, target_collection: str = "standards",
+                      doc_id: str = "", content_hash: str = "") -> Document:
     """处理 Markdown 文件（MinerU 等工具输出）
 
     流程：读取 Markdown → 提取标准信息 → 切块 → 复制图片 → 入库
@@ -346,6 +630,8 @@ def _process_markdown(file_path: str, file_name: str, file_size: int,
     doc = Document(
         file_name=file_name, file_path=file_path,
         file_size=file_size, collection=target_collection,
+        doc_id=doc_id, content_hash=content_hash,
+        version_id=content_hash,
     )
 
     # 1. 读取 Markdown 内容
@@ -377,6 +663,9 @@ def _process_markdown(file_path: str, file_name: str, file_size: int,
         "std_title": std_title,
         "file_name": file_name,
         "source": "mineru",  # 标记来源为 MinerU
+        "doc_id": doc_id,
+        "content_hash": content_hash,
+        "version_id": content_hash,
     }
 
     # 4. MarkdownChunker 切块
@@ -398,19 +687,20 @@ def _process_markdown(file_path: str, file_name: str, file_size: int,
             except Exception as e:
                 logger.warning(f"  复制图片失败: {e}")
 
-    # 6. 入库（自带 ID 去重，已存在的 chunk 自动跳过）
+    # 6. 两阶段换版：新块完整写入后才退休旧版本
     _report_progress("indexing", 80, f"切块完成（{len(chunks)} 块），入库到知识库...")
-    ids, documents, metadatas = _prepare_chunks(chunks, file_name)
-    added = store.add(target_collection, ids, documents, metadatas)
+    ids, documents, metadatas = _prepare_chunks(
+        chunks, file_name, doc_id=doc_id, content_hash=content_hash,
+    )
+    added = store.replace_document(
+        target_collection, doc_id, file_name,
+        ids, documents, metadatas,
+    )
 
     doc.chunk_count = added
     doc.source = "markdown"
-    if added > 0:
-        doc.status = "done"
-        doc.message = f"入库 {added} 条新切块"
-    else:
-        doc.status = "done"
-        doc.message = "Chroma 已有该文件，跳过入库（MinerU 结果已保存到本地）"
+    doc.status = "done"
+    doc.message = f"新版本换库 {added} 条切块"
     logger.info(f"  Markdown 处理完成: {file_name} → {added} 块")
     return doc
 
@@ -452,7 +742,8 @@ def _extract_std_info(file_name: str, content: str) -> tuple[str, str]:
 
 # ==================== 辅助函数 ====================
 
-def _prepare_chunks(chunks: list[Chunk], file_name: str
+def _prepare_chunks(chunks: list[Chunk], file_name: str,
+                    doc_id: str = "", content_hash: str = ""
                     ) -> tuple[list[str], list[str], list[dict]]:
     """将 Chunk 对象转为 Chroma 的 add() 需要的格式
 
@@ -475,6 +766,10 @@ def _prepare_chunks(chunks: list[Chunk], file_name: str
 
         meta = dict(ch.metadata)
         meta["chunk_index"] = ch.chunk_index
+        meta["file_name"] = file_name
+        meta["doc_id"] = doc_id
+        meta["content_hash"] = content_hash
+        meta["version_id"] = content_hash
 
         ids.append(uid)
         documents.append(ch.text)

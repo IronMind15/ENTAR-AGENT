@@ -25,7 +25,7 @@ if sys.platform == "win32":
 # 添加 scripts 目录到 path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from doc_mgr.engine import _process_markdown
+from doc_mgr.engine import process_file
 from doc_mgr.storage import get_store
 
 # 配置日志
@@ -78,7 +78,11 @@ def process_single(md_path: str, folder_name: str, store) -> dict:
     logger.info(f"处理: {folder_name}")
 
     try:
-        doc = _process_markdown(md_path, folder_name, 0, store)
+        doc = process_file(
+            md_path,
+            file_name=folder_name,
+            target_collection="standards",
+        )
         return {
             "folder": folder_name,
             "status": doc.status,
@@ -133,7 +137,7 @@ def main():
 
     # 汇总
     success = sum(1 for r in results if r["status"] == "done")
-    total_chunks = sum(r["chunk_count"] for r in results)
+    total_chunks = sum(r.get("chunk_count", 0) for r in results)
 
     logger.info("=" * 60)
     logger.info(f"📊 处理完成: {success}/{len(results)} 成功")
