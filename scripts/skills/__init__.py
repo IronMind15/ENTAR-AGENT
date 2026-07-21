@@ -54,7 +54,7 @@ def get_matched_skill(query: str) -> Optional[type[BaseSkill]]:
     """遍历已注册技能，返回第一个 match() 返回 True 的
 
     技能按 priority 降序遍历（高优先级先匹配）。
-    chat 技能作为兜底（priority=0，match 始终返回 True），
+    RAG Agent 作为兜底（priority=50，match 始终返回 True），
     因此此函数始终有返回值，但在防御性编程中仍保留 None 分支。
     """
     for skill_cls in _skill_registry:
@@ -71,4 +71,3 @@ def get_skill_list() -> list[type[BaseSkill]]:
 # ===== 自动导入技能模块（确保 @register 装饰器执行） =====
 from . import error_query  # noqa: E402, F811 — 优先级 100：仅精确故障代码快速通道
 from . import agent        # noqa: E402, F811 — 优先级 50 ：RAG Agent（LLM + 工具调用，统一处理所有问题）
-# chat.py 仍保留为工具模块（agent.py 在 API 失败时兜底调用），不作为独立技能注册

@@ -13,6 +13,7 @@
 
 import os
 import logging
+import re
 import requests
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +28,29 @@ _UPLOAD_ROOT = Path(__file__).parent.parent / "data" / "uploads"
 
 # 支持自动处理的文件类型
 _AUTO_PROCESS_EXTENSIONS = {".pdf", ".xlsx", ".xls", ".md"}
+
+
+def sanitize_file_name(file_name: str) -> str:
+    """移除路径片段和 Windows 非法字符，避免上传文件名逃逸目录。"""
+    raw = str(file_name or "").replace("\\", "/")
+    name = raw.rsplit("/", 1)[-1].strip().strip(".")
+    name = re.sub(r'[\x00-\x1f<>:"/\\|?*]', "_", name)
+    if not name:
+        name = "uploaded_file"
+
+    stem, ext = os.path.splitext(name)
+    if stem.upper() in {
+        "CON", "PRN", "AUX", "NUL",
+        *(f"COM{i}" for i in range(1, 10)),
+        *(f"LPT{i}" for i in range(1, 10)),
+    }:
+        stem = f"_{stem}"
+    # 给日期、用户目录和冲突序号预留路径长度空间
+    if len(stem) > 160:
+        stem = stem[:160]
+    if len(ext) > 20:
+        ext = ext[:20]
+    return f"{stem}{ext}"
 
 
 def get_upload_dir(user_id: str, user_name: str = "") -> Path:
@@ -88,6 +112,7 @@ def download_and_save_file(
     Returns:
         {"success": bool, "file_path": str|None, "file_name": str, "file_size": int, "message": str}
     """
+    file_name = sanitize_file_name(file_name)
     result = {
         "success": False,
         "file_path": None,
@@ -204,6 +229,13 @@ def format_file_received_message(result: dict, auto_process: bool = False) -> st
     if auto_process:
         ext = get_file_type(result["file_name"])
         if ext in _AUTO_PROCESS_EXTENSIONS:
-            msg += f"\n👤 文件已保存到待处理区，请联系管理员登录后台完成入库同步。\n"
+            review_id = result.get("review_id", "")
+            if review_id:
+                msg += (
+                    f"\n🔔 已提交知识库审核，申请编号：{review_id}\n"
+                    "审核人同意后才会开始同步。\n"
+                )
+            else:
+                msg += "\n👤 文件已保存到待处理区，请联系管理员完成入库同步。\n"
 
     return msg

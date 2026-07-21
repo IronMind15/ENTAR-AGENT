@@ -14,6 +14,7 @@ import logging
 import os
 import sqlite3
 import threading
+import uuid
 from datetime import datetime
 from typing import Optional
 
@@ -79,10 +80,22 @@ class SyncTracker:
                     CHECK(sync_status IN ('pending','synced','error'))
                 )
             """)
-            # 迁移：给旧表加 upload_user_id / upload_user_name 列
-            for col in ("upload_user_id", "upload_user_name"):
+            # 迁移：给旧表补齐上传者和审核流程字段
+            migration_columns = {
+                "upload_user_id": "TEXT DEFAULT ''",
+                "upload_user_name": "TEXT DEFAULT ''",
+                "review_id": "TEXT DEFAULT ''",
+                "reviewer_staff_id": "TEXT DEFAULT ''",
+                "review_status": "TEXT DEFAULT ''",
+                "reviewed_by": "TEXT DEFAULT ''",
+                "reviewed_at": "TEXT",
+                "review_task_id": "TEXT DEFAULT ''",
+            }
+            for col, definition in migration_columns.items():
                 try:
-                    conn.execute(f"ALTER TABLE sync_status ADD COLUMN {col} TEXT DEFAULT ''")
+                    conn.execute(
+                        f"ALTER TABLE sync_status ADD COLUMN {col} {definition}"
+                    )
                     logger.info(f"[迁移] sync_status 表新增列: {col}")
                 except sqlite3.OperationalError:
                     pass  # 列已存在
@@ -93,6 +106,11 @@ class SyncTracker:
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_sync_collection
                 ON sync_status(target_collection)
+            """)
+            conn.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_review_id
+                ON sync_status(review_id)
+                WHERE review_id <> ''
             """)
             conn.commit()
 
@@ -124,8 +142,12 @@ class SyncTracker:
                     file_size      = excluded.file_size,
                     file_hash      = excluded.file_hash,
                     target_collection = excluded.target_collection,
-                    upload_user_id = excluded.upload_user_id,
-                    upload_user_name = excluded.upload_user_name,
+                    upload_user_id = CASE
+                        WHEN excluded.upload_user_id <> ''
+                        THEN excluded.upload_user_id ELSE upload_user_id END,
+                    upload_user_name = CASE
+                        WHEN excluded.upload_user_name <> ''
+                        THEN excluded.upload_user_name ELSE upload_user_name END,
                     updated_at     = excluded.updated_at,
                     sync_status    = CASE
                         WHEN sync_status = 'error'
@@ -136,6 +158,106 @@ class SyncTracker:
                     END
             """, (file_path, file_name, file_size, file_hash,
                   target_collection, upload_user_id, upload_user_name, now))
+            conn.commit()
+
+    def create_review(self, file_path: str, reviewer_staff_id: str) -> str:
+        """为已追踪文件创建一次审核申请，返回短申请编号。
+
+        同一文件仍处于 pending 且审核人未变化时复用原申请，避免机器人
+        回调重试造成重复推送和重复审批。
+        """
+        reviewer_staff_id = reviewer_staff_id.strip()
+        if not reviewer_staff_id:
+            raise ValueError("审核人 staff_id 不能为空")
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock:
+            conn = self._get_conn()
+            row = conn.execute(
+                "SELECT review_id, reviewer_staff_id, review_status "
+                "FROM sync_status WHERE file_path = ?",
+                (file_path,),
+            ).fetchone()
+            if not row:
+                raise ValueError("文件尚未登记到同步追踪器")
+            if (row["review_status"] == "pending"
+                    and row["reviewer_staff_id"] == reviewer_staff_id
+                    and row["review_id"]):
+                return str(row["review_id"])
+
+            review_id = uuid.uuid4().hex[:8].upper()
+            conn.execute("""
+                UPDATE sync_status SET
+                    review_id = ?,
+                    reviewer_staff_id = ?,
+                    review_status = 'pending',
+                    reviewed_by = '',
+                    reviewed_at = NULL,
+                    review_task_id = '',
+                    updated_at = ?
+                WHERE file_path = ?
+            """, (review_id, reviewer_staff_id, now, file_path))
+            conn.commit()
+            return review_id
+
+    def get_review(self, review_id: str) -> Optional[dict]:
+        """按申请编号查询审核记录。"""
+        with self._lock:
+            conn = self._get_conn()
+            row = conn.execute(
+                "SELECT * FROM sync_status WHERE review_id = ?",
+                (review_id.strip().upper(),),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def decide_review(self, review_id: str, decision: str,
+                      reviewed_by: str) -> bool:
+        """原子地批准或拒绝 pending 申请；重复处理返回 False。"""
+        if decision not in ("approved", "rejected"):
+            raise ValueError("无效审核结果")
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock:
+            conn = self._get_conn()
+            cur = conn.execute("""
+                UPDATE sync_status SET
+                    review_status = ?,
+                    reviewed_by = ?,
+                    reviewed_at = ?,
+                    updated_at = ?
+                WHERE review_id = ? AND review_status = 'pending'
+            """, (
+                decision, reviewed_by, now, now,
+                review_id.strip().upper(),
+            ))
+            conn.commit()
+            return cur.rowcount == 1
+
+    def set_review_task(self, review_id: str, task_id: str) -> None:
+        """记录批准后启动的后台同步任务编号。"""
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock:
+            conn = self._get_conn()
+            conn.execute("""
+                UPDATE sync_status SET review_task_id = ?, updated_at = ?
+                WHERE review_id = ? AND review_status = 'approved'
+            """, (task_id, now, review_id.strip().upper()))
+            conn.commit()
+
+    def reset_review_pending(self, review_id: str) -> None:
+        """后台任务提交失败时撤销决定，允许审核人重试。"""
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock:
+            conn = self._get_conn()
+            conn.execute("""
+                UPDATE sync_status SET
+                    review_status = 'pending',
+                    reviewed_by = '',
+                    reviewed_at = NULL,
+                    review_task_id = '',
+                    updated_at = ?
+                WHERE review_id = ? AND review_status = 'approved'
+                  AND review_task_id = ''
+            """, (now, review_id.strip().upper()))
             conn.commit()
 
     def update_collection(self, file_path: str, collection: str) -> None:

@@ -17,6 +17,22 @@ from doc_mgr.sync_tracker import SyncTracker
 
 
 class SyncTrackerTests(unittest.TestCase):
+    def test_processing_upsert_keeps_original_uploader(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tracker = SyncTracker(str(Path(temp_dir) / "tracker.db"))
+            tracker.upsert_file(
+                "a.pdf", "a.pdf", 1, "hash-a", "standards",
+                upload_user_id="union-1", upload_user_name="上传员工",
+            )
+
+            # 文档引擎处理完成时不会再次携带上传者参数。
+            tracker.upsert_file("a.pdf", "a.pdf", 1, "hash-a", "standards")
+
+            row = tracker.get_status("a.pdf")
+            self.assertEqual("union-1", row["upload_user_id"])
+            self.assertEqual("上传员工", row["upload_user_name"])
+            tracker.close()
+
     def test_content_change_moves_synced_file_back_to_pending(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             tracker = SyncTracker(str(Path(temp_dir) / "tracker.db"))

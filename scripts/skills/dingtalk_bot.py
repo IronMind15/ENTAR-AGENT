@@ -81,16 +81,32 @@ class ErrorQueryHandler(ChatbotHandler):
         if not text:
             return AckMessage.STATUS_OK, "ok"
 
-        # ---- 通过技能注册中心路由 ----
-        from skills import get_matched_skill
-
-        skill_cls = get_matched_skill(text)
-        if skill_cls:
-            logger.info(f"  → {skill_cls.name}: {text[:40]}")
-            result = skill_cls.handle(text, user_id=user_id)
+        # ---- 审核口令与普通技能路由 ----
+        if text in ("查看我的审核ID", "我的审核ID", "查看我的钉钉ID"):
+            answer = (
+                f"你的钉钉员工 ID：{staff_id}"
+                if staff_id else
+                "当前消息没有携带钉钉员工 ID，请确认应用已取得通讯录基础权限。"
+            )
+            result = {"answer": answer, "source": "review_identity"}
         else:
-            logger.info(f"  → 备用处理: {text[:40]}")
-            result = {"answer": f"抱歉，我暂时无法处理这个问题。", "source": "fallback"}
+            from knowledge_review import handle_review_message
+            review_answer = handle_review_message(text, staff_id)
+            if review_answer is not None:
+                result = {"answer": review_answer, "source": "knowledge_review"}
+            else:
+                from skills import get_matched_skill
+
+                skill_cls = get_matched_skill(text)
+                if skill_cls:
+                    logger.info(f"  → {skill_cls.name}: {text[:40]}")
+                    result = skill_cls.handle(text, user_id=user_id)
+                else:
+                    logger.info(f"  → 备用处理: {text[:40]}")
+                    result = {
+                        "answer": "抱歉，我暂时无法处理这个问题。",
+                        "source": "fallback",
+                    }
 
         answer = result.get("answer", "") or "抱歉，我没有找到相关信息。"
 
@@ -142,6 +158,16 @@ class ErrorQueryHandler(ChatbotHandler):
                 chatbot_handler=self,
                 user_name=sender,
             )
+
+            # 固定审核人测试模式：登记申请并后台主动推送，不阻塞上传回执
+            if result["success"]:
+                try:
+                    from knowledge_review import queue_review_for_upload
+                    review = queue_review_for_upload(result, user_id, sender)
+                    if review:
+                        result["review_id"] = review["review_id"]
+                except Exception as review_err:
+                    logger.error(f"创建知识库审核申请失败: {review_err}")
 
             # 构建回复消息（已包含待处理提示）
             answer = format_file_received_message(result, auto_process=True)

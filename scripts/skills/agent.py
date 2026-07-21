@@ -222,9 +222,10 @@ def _execute_tool(tool_call: dict) -> str:
 def _handle_impl(query: str, user_id: str = "") -> dict:
     """RAG Agent 处理入口
 
-    两级策略：
+    三级策略：
       1. 快速通道：精确匹配故障代码（d4-1 等）→ 直接返回格式化结果，不走 LLM
-      2. Agent 通道：LLM + search_knowledge_base 工具 → 智能 RAG 回答
+      2. 快速通道：精确匹配标准编号（GB/T 34133 等）→ 直接返回，不走 LLM
+      3. Agent 通道：LLM + 知识库工具 → 智能 RAG 回答或直接聊天
 
     记忆融合：
       - 有 user_id 时，主动注入该用户最近对话记录（5轮）作为上下文
@@ -347,10 +348,10 @@ def _handle_impl(query: str, user_id: str = "") -> dict:
 
 @register
 class RAGAgentSkill(BaseSkill):
-    """RAG Agent 技能：大模型主动检索知识库，智能回答"""
+    """RAG Agent 技能：大模型主动检索故障和标准知识库，或直接回答。"""
     name = "智能 RAG"
-    description = "LLM 主动检索 PCS 故障知识库，智能回答故障相关问题"
-    priority = 50  # 高于通用聊天，低于精确故障代码
+    description = "LLM 主动检索故障/标准知识库，并处理通用对话"
+    priority = 50  # 低于精确故障代码；其余问题由本技能统一兜底
 
     @classmethod
     def match(cls, query: str) -> bool:

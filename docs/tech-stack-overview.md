@@ -48,7 +48,7 @@ async def home(): return HTMLResponse(HOME_HTML)
 
 **说明：** 轻量级向量数据库，专为 AI 应用设计。核心能力是存储文本的"语义向量"并做相似度搜索。与 Pinecone、Milvus、Qdrant 同属向量数据库赛道，Chroma 是其中最小、最易用的。
 
-**项目案例：** `knowledge_base/` 目录存有 133 条故障记录的向量索引。用户搜"逆变器报错了"，Chroma 能找到语义最接近的故障记录（如"急停告警"），用关键词匹配做不到。
+**项目案例：** `knowledge_base/` 中包含 `error_codes`（133 条 PCS 故障记录）和 `standards`（标准文档切块）两个 Collection。v1.2.6 起由统一存储层隐藏 staging/retired 版本，查询只返回当前可见内容。
 
 ```python
 from chromadb import PersistentClient
@@ -159,35 +159,25 @@ class MyHandler(ChatbotHandler):
 
 ---
 
-### 13. ChromaDB — 向量数据库（补充：多集合支持）
+### 13. VectorStore 存储抽象层 — 可切换的存储架构
 
-**说明：** 轻量级向量数据库，支持**多个 Collection** 隔离不同知识库。与 Pinecone、Milvus、Qdrant 同属向量数据库赛道，Chroma 是其中最小、最易用的。
+**说明：** v1.2.1 引入 `VectorStore` ABC（抽象基类），当前实现为 `ChromaStore`。迁移到 Qdrant 时需要实现同一接口，再切换 `get_store()` 注册实现，不是简单替换数据库名称。
 
-**项目案例：** 当前有两个 Collection：
-- `error_codes` — 133 条 PCS 故障记录
-- `standards` — 标准文档 PDF（含 MinerU OCR 提取的 Markdown）
-
----
-
-### 14. VectorStore 存储抽象层 — 可切换的存储架构
-
-**说明：** v1.2.1 引入的存储抽象层，定义 `VectorStore` ABC（抽象基类），当前实现 `ChromaStore`。后续切换到 Qdrant 只需在 `storage.py` 改一行注册。
-
-**项目案例：** `doc_mgr/storage.py` 中的 `VectorStore` 接口，统一了 `add/search/delete/list` 操作，与具体向量库解耦。
+**项目案例：** `doc_mgr/storage.py` 统一了 `add/replace_document/query/get/delete/count/list_collections` 操作。v1.2.6 新增安全文档版本替换，查询层自动隔离暂存和退休版本。
 
 ```python
 class VectorStore(ABC):
     @abstractmethod
     def add(self, documents, ids, metadatas=None): ...
     @abstractmethod
-    def search(self, query, n_results=5): ...
+    def replace_document(self, collection, doc_id, file_name, ...): ...
     @abstractmethod
-    def delete(self, ids): ...
+    def query(self, collection, query_text, n_results=5): ...
 ```
 
 ---
 
-### 15. MinerU（大模型视觉识别）— 扫描 PDF OCR 引擎
+### 14. MinerU（大模型视觉识别）— 扫描 PDF OCR 引擎
 
 **说明：** v1.2.2 引入的 OCR 技术栈升级。MinerU 调用 VLM（视觉大模型）识别扫描 PDF 中的文字、表格、图片，输出结构化 Markdown。替代传统 OCR 路线（PaddleOCR），对复杂排版（多栏、表格、公式）效果更好。
 
@@ -195,7 +185,7 @@ class VectorStore(ABC):
 
 ---
 
-### 16. MarkdownChunker — Markdown 标题层级切块器
+### 15. MarkdownChunker — Markdown 标题层级切块器
 
 **说明：** v1.2.2 新增的切块器，用于处理 MinerU 输出的 Markdown 文件。按 `#` `##` `###` 标题层级智能切块，支持中文标准章节号提取。
 
@@ -203,7 +193,7 @@ class VectorStore(ABC):
 
 ---
 
-### 17. file_handler.py — 钉钉文件接收模块
+### 16. file_handler.py — 钉钉文件接收模块
 
 **说明：** v1.2.3 新增，接收钉钉用户发送的文件（PDF/Excel/图片），自动下载到 `data/uploads/用户名_ID/日期/`。复用 `dingtalk_stream` SDK 的下载方法，无需额外依赖。
 
@@ -211,11 +201,11 @@ class VectorStore(ABC):
 
 ---
 
-### 18. doc_mgr 文档管理子系统 — 统一文档生命周期管理
+### 17. doc_mgr 文档管理子系统 — 统一文档生命周期管理
 
 **说明：** v1.2.1 引入的独立子系统，将文档的**上传→提取→切块→入库**全流程统一管理。内置 Web 管理页面（`/admin`），支持文件归属类型选择、搜索测试、删除管理。
 
-**项目案例：** `scripts/doc_mgr/` 目录，包含 `engine.py`（处理引擎）、`router.py`（API 路由 6 端点）、`views.py`（管理界面三 Tab）。
+**项目案例：** `scripts/doc_mgr/` 包含处理引擎、API/管理页面、后台任务、同步状态、内容指纹、切块器和存储层。
 
 ```
 上传文件 → 自动识别类型 → 提取文本 → 智能切块 → Chroma 入库
@@ -223,15 +213,15 @@ class VectorStore(ABC):
 
 ---
 
-### 19. Git & GitHub — 版本控制
+### 18. Git & GitHub — 版本控制
 
 **说明：** Git 是本地版本管理（时光机），GitHub 是云端备份（网盘+协作平台）。
 
-**项目案例：** 整个项目在 Git 管理下，打了 v1.0 / v1.1 / v1.2.1 / v1.2.2 / v1.2.3 标签，每次提交记录变更，推送到 GitHub 远程仓库。国内环境通过本地 Clash 代理（127.0.0.1:7890）直连原生 GitHub 地址推送。
+**项目案例：** 项目通过 Git 管理并发布到 GitHub，当前正式标签为 v1.2.6。发布前更新 README/CHANGELOG、运行测试，再提交并推送带说明标签。
 
 ---
 
-### 20. HNSW 索引 — 近似最近邻搜索算法
+### 19. HNSW 索引 — 近似最近邻搜索算法
 
 **说明：** Hierarchical Navigable Small World，向量数据库的核心索引算法。把高维向量组织成多层图结构，搜索时"从粗到细"快速定位最近邻。
 
@@ -239,15 +229,15 @@ class VectorStore(ABC):
 
 ---
 
-### 21. 宝塔面板 — 服务器运维面板
+### 20. 宝塔面板 — 服务器运维面板
 
 **说明：** Linux 服务器可视化运维工具，通过网页管理网站、数据库、防火墙等。对不熟悉 Linux 命令行的用户非常友好。
 
-**项目案例：** Ubuntu 22.04 云服务器 + 宝塔面板，部署恩特小助手实现 7×24 在线。
+**项目案例：** 仓库保留 Ubuntu 22.04 + 宝塔面板的部署方案，可用于实现 7×24 在线；当前线上实例状态仍需单独检查，不能仅凭文档判断已部署成功。
 
 ---
 
-### 22. Logging — Python 日志系统
+### 21. Logging — Python 日志系统
 
 **说明：** 替代 `print()` 的正规日志方案，支持分级（DEBUG/INFO/WARNING/ERROR）、输出到文件+控制台、格式化时间戳。
 
@@ -255,7 +245,7 @@ class VectorStore(ABC):
 
 ---
 
-### 23. Jinja2 / HTML 模板 — Web 前端渲染
+### 22. Jinja2 / HTML 模板 — Web 前端渲染
 
 **说明：** 服务端渲染 HTML 页面，FastAPI 内嵌 HTML 模板，适合简单的 Web 界面。
 
@@ -263,23 +253,17 @@ class VectorStore(ABC):
 
 ---
 
-## 二、未来可学技术（规划/调研中）
+### 23. SQLite — 用户、会话、权限与同步状态存储
 
-### 1. SQLite — 轻量关系数据库
+**说明：** Python 内置的嵌入式关系数据库，零部署，支持事务、索引和 WAL 模式，适合当前单实例规模。
 
-**说明：** 嵌入式关系数据库，Python 自带 `sqlite3` 模块，零部署。支持 SQL 查询、事务（ACID）、索引。单文件存储，备份方便。
-
-**项目场景：** **计划替换 JSON 文件存聊天记忆。** 有了 SQLite，可以"查用户最近 7 天的聊天记录""按关键词搜索历史对话"，JSON 做不到这些。
-
-```python
-import sqlite3
-conn = sqlite3.connect("data/memory.db")
-conn.execute("INSERT INTO memories VALUES (?, ?, ?)", (user_id, role, content))
-```
+**项目案例：** v1.2.4 起，`user_store.py` 使用 SQLite 存储用户资料、对话和权限；`doc_mgr/sync_tracker.py` 使用独立 SQLite 表追踪文件同步状态。JSON 仅作为兼容回退，不再是主存储。
 
 ---
 
-### 2. PostgreSQL — 企业级关系数据库
+## 二、未来可学技术（规划/调研中）
+
+### 1. PostgreSQL — 企业级关系数据库
 
 **说明：** 功能最完善的开源关系数据库，支持高并发、JSON 字段、地理空间查询、全文搜索等。是工业界事实标准。
 
@@ -287,15 +271,15 @@ conn.execute("INSERT INTO memories VALUES (?, ?, ?)", (user_id, role, content))
 
 ---
 
-### 3. Milvus / Qdrant — 企业级向量数据库
+### 2. Milvus / Qdrant — 企业级向量数据库
 
 **说明：** Chroma 的"大哥"，支持分布式部署、GPU 加速、每秒处理百万级向量搜索。适合数据量超大的场景。
 
-**项目场景：** 知识库扩展到多个 PCS 参数表 + 产品文档 + 经验记录，数据量到十万级以上时考虑迁移。**目前存储抽象层（VectorStore ABC → ChromaStore）已就位，切换只需改 `storage.py` 一行注册。**
+**项目场景：** 知识库扩展到多个 PCS 参数表 + 产品文档 + 经验记录，且现有 Chroma 出现可量化瓶颈时再考虑迁移。当前存储抽象层已就位，但仍需完整实现 Qdrant/Milvus 适配器、版本替换语义和迁移验证；完成这些工作后，应用侧只需切换注册实现。
 
 ---
 
-### 4. MCP（Model Context Protocol） — AI 工具协议
+### 3. MCP（Model Context Protocol） — AI 工具协议
 
 **说明：** Anthropic 推出的标准化 AI 工具协议，类似 AI 界的 USB 接口。任何 MCP 服务器都可以被任何 MCP 客户端（如 Claude、Cursor）调用。
 
@@ -303,7 +287,7 @@ conn.execute("INSERT INTO memories VALUES (?, ?, ?)", (user_id, role, content))
 
 ---
 
-### 5. GitHub Actions — CI/CD 自动化
+### 4. GitHub Actions — CI/CD 自动化
 
 **说明：** GitHub 自带的自动化流水线。代码推送后自动跑测试、自动部署到服务器。
 
@@ -314,7 +298,7 @@ conn.execute("INSERT INTO memories VALUES (?, ?, ?)", (user_id, role, content))
 
 ---
 
-### 6. React / Vue — 前端框架
+### 5. React / Vue — 前端框架
 
 **说明：** 现代前端框架，构建交互式 Web 界面。React 由 Facebook 维护，Vue 是国产框架（尤雨溪），学习曲线更平缓。
 
@@ -322,7 +306,7 @@ conn.execute("INSERT INTO memories VALUES (?, ?, ?)", (user_id, role, content))
 
 ---
 
-### 7. Reranker（重排序模型） — 搜索精度优化
+### 6. Reranker（重排序模型） — 搜索精度优化
 
 **说明：** 两阶段检索：第一阶段用 embedding 粗召回（快，但精度一般），第二阶段用交叉编码器精排序（慢，但精度极高）。bge-reranker 是 BAAI 出品的重排序模型。
 
@@ -334,7 +318,7 @@ conn.execute("INSERT INTO memories VALUES (?, ?, ?)", (user_id, role, content))
 
 ---
 
-### 8. WebSocket — 实时通信
+### 7. WebSocket — 实时通信
 
 **说明：** 浏览器和服务器之间的长连接，服务器可以主动推数据给浏览器。不像 HTTP 轮询（定时发请求），WebSocket 是"有消息就推"。
 
@@ -342,7 +326,7 @@ conn.execute("INSERT INTO memories VALUES (?, ?, ?)", (user_id, role, content))
 
 ---
 
-### 9. LangChain / LlamaIndex — LLM 框架
+### 8. LangChain / LlamaIndex — LLM 框架
 
 **说明：** LangChain 是 LLM 应用开发框架，封装了 RAG、Agent、Chain 等常见模式。LlamaIndex 专注数据索引和检索（RAG 增强）。
 
@@ -350,7 +334,7 @@ conn.execute("INSERT INTO memories VALUES (?, ?, ?)", (user_id, role, content))
 
 ---
 
-### 10. Redis — 内存缓存 / 消息队列
+### 9. Redis — 内存缓存 / 消息队列
 
 **说明：** 纯内存数据库，读写微秒级。可以用作缓存（加速查询）、消息队列（异步任务）、会话存储（登录状态）。
 
@@ -360,7 +344,7 @@ conn.execute("INSERT INTO memories VALUES (?, ?, ?)", (user_id, role, content))
 
 ---
 
-### 11. MongoDB — 文档数据库
+### 10. MongoDB — 文档数据库
 
 **说明：** NoSQL 数据库，存 JSON 文档。天然适合聊天记录、日志等半结构化数据。水平扩展容易（分片）。
 
@@ -368,7 +352,7 @@ conn.execute("INSERT INTO memories VALUES (?, ?, ?)", (user_id, role, content))
 
 ---
 
-### 12. Kubernetes — 容器编排
+### 11. Kubernetes — 容器编排
 
 **说明：** 容器管理平台，自动部署、扩展、管理容器化应用。当前最主流的云原生基础设施。
 
@@ -376,7 +360,7 @@ conn.execute("INSERT INTO memories VALUES (?, ?, ?)", (user_id, role, content))
 
 ---
 
-### 13. Prometheus + Grafana — 监控体系
+### 12. Prometheus + Grafana — 监控体系
 
 **说明：** Prometheus 采集指标数据（请求量、延迟、错误率），Grafana 可视化展示仪表盘。
 
@@ -387,57 +371,59 @@ conn.execute("INSERT INTO memories VALUES (?, ?, ?)", (user_id, role, content))
 ## 三、技术栈演进路线图
 
 ```
-现在 (v1.2.3)
+现在 (v1.2.6)
 ├── 编程语言：Python
 ├── Web框架：FastAPI + Uvicorn
 ├── 知识库：Chroma + bge-small-zh（多集合：error_codes + standards）
 ├── LLM：DeepSeek API (Function Calling)
 ├── Agent：手写 RAG Agent（多工具路由）
-├── 记忆：JSON 文件（临时）
-├── 部署：Docker / 宝塔面板
-├── 版本：Git + GitHub（v1.0~v1.2.3）
+├── 记忆与权限：SQLite（JSON 仅兼容回退）
+├── 文档同步：SHA-256 指纹 + 安全版本替换
+├── 部署：本机已验证；Docker / 云端配置待生产回归
+├── 版本：Git + GitHub（当前 v1.2.6）
 ├── 消息：钉钉 Stream
 ├── PDF提取：PyMuPDF 结构分析切块 / MinerU 大模型视觉OCR
-├── 文档管理：doc_mgr 子系统（存储抽象层，web 管理页面）
+├── 文档管理：doc_mgr 子系统（管理页面、任务、同步状态、版本隔离）
 ├── 文件接收：钉钉文件/图片自动下载保存
-└── 日志：Logging
+└── 测试：20 项文档处理回归测试
 
       ↓
 
-近期规划
-├── 记忆：JSON → SQLite ← 🔜 最近要做的
-├── 搜索：加入 Reranker 精排（可选）
-└── Web UI：升级交互体验（可选）
+近期：可靠性与安全闭环
+├── 正式数据副本 + 真实 MinerU / 钉钉 / Docker 端到端验收
+├── staging/retired 崩溃恢复与空间清理
+├── 管理 API、上传、Web 身份和 XSS 安全加固
+├── 固定检索评测集与质量指标
+└── GitHub Actions 自动测试与敏感文件检查
 
       ↓
 
-中期规划
-├── 知识库：多集合（故障 + 文档 + 经验）
-├── Agent：LangChain 管理多工具
-├── 前端：React / Vue 升级
-├── 通信：WebSocket 流式输出
-├── 缓存：Redis
-└── 监控：Prometheus + Grafana
+中期：可运营的企业知识助手
+├── 经验知识库：提交 → 审核 → 发布 → 纠错 → 失效
+├── 部门/角色级文档 ACL
+├── 钉钉知识库连接器与来源删除同步
+├── 混合检索 / Reranker（由评测结果决定）
+└── 入库审计、质量看板与运行监控
 
       ↓
 
-远期规划
-├── 存储：SQLite → PostgreSQL
-├── 向量库：Chroma → Milvus / Qdrant
-├── 部署：Docker → Kubernetes
-├── 自动化：GitHub Actions CI/CD
-├── 工具协议：MCP 标准化
-└── 架构：单体 → 微服务
+远期：出现明确规模瓶颈后再平台化
+├── 多实例事务：SQLite → PostgreSQL
+├── 大规模向量检索：Chroma → Qdrant / Milvus
+├── 异步任务与缓存：Redis / 队列
+├── 标准化连接器：MCP 或内部工具协议
+├── 集中监控：Prometheus + Grafana
+└── 只有在运维收益明确时才考虑 Kubernetes / 微服务 / 多 Agent
 ```
 
 ---
 
 ## 一句话总结
 
-> **学到手的：** Python + FastAPI + Chroma + DeepSeek + RAG + Docker + PyMuPDF + MinerU + Git — 已经能独立搭一个包含故障查询、标准文档检索、钉钉交互的 AI 应用从开发到上线。
+> **已经具备：** Python + FastAPI + Chroma + DeepSeek + RAG + SQLite + Docker + PyMuPDF + MinerU + Git，能够构建包含故障查询、标准文档检索、钉钉交互和文档生命周期管理的 AI 应用。
 >
-> **下一步重点：** SQLite + WebSocket + 前端框架 — 补齐存储、实时、界面三个短板。
+> **下一步重点：** 真实环境验收、安全权限、检索评测和可观测性。先证明系统稳定可信，再扩展经验知识库和平台能力。
 
 ---
 
-*恩特能源 · 恩特小助手 · 2026-07-14 · v1.2.3*
+*恩特能源 · 恩特小助手 · 2026-07-21 · v1.2.6*

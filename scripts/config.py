@@ -52,6 +52,12 @@ DINGTALK_CLIENT_SECRET: str = _get_config("DINGTALK_CLIENT_SECRET")
 # 钉钉 REST API
 DINGTALK_API_BASE: str = "https://api.dingtalk.com"
 
+# 知识库上传审核
+# fixed：所有上传申请只推送给固定审核人（测试阶段）
+# 后续可新增 department_manager，由审核人解析器按上传者部门选择主管
+KNOWLEDGE_REVIEW_MODE: str = _get_config("KNOWLEDGE_REVIEW_MODE") or "fixed"
+KNOWLEDGE_REVIEWER_STAFF_IDS: str = _get_config("KNOWLEDGE_REVIEWER_STAFF_IDS")
+
 # 存储后端：sqlite（推荐）| json（回退）
 MEMORY_BACKEND: str = "sqlite"
 

@@ -1,0 +1,9 @@
+[mcp_servers.fetch]
+command = "python"
+args = [
+    "-m",
+    "mcp_server_fetch",
+]
+
+[mcp_servers.tavily]
+url = "https://mcp.tavily.com/mcp/?tavilyApiKey=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"

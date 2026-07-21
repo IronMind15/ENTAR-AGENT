@@ -1,4 +1,4 @@
-# CLAUDE.md — 恩特能源 AI Agent 项目
+# AGENTS.md — 恩特能源 AI Agent 项目
 
 ## 🤖 与 AI 协作规则
 
@@ -13,9 +13,9 @@
 
 恩特能源（天津恩特能源科技有限公司，Tianjin Entar Energy Technology Co., Ltd.，品牌 ENTAR）AI Agent 项目。目标是搭建面向中小企业的 AI Agent 全生命周期管理平台。
 
-### 当前进度：三步走计划 — 第一步稳定化（v1.2.6）
+### 当前进度：三步走计划 - 第一步
 
-**第一步：故障代码智能查询 + 标准文档检索 + 通用聊天（核心能力已完成，正在做安全与真实环境验收）**
+**第一步：故障代码智能查询 + 通用聊天（已完成 MVP，托底，v1.2.3 全面完善）**
 - 基于 RAG（检索增强生成）架构的内部工具
 - 数据源：PCS参数表 V1.6.2.xlsx → 遥信（DI）sheet（133 条故障记录）+ 标准 PDF 文档（MinerU OCR 识别入库）
 - 两级查询策略：
@@ -28,20 +28,14 @@
 - ✅ 文档管理子系统（doc_mgr，v1.2.1）：统一上传→切块→入库，Web 管理页面（/admin）
 - ✅ 扫描 PDF OCR 识别（MinerU，v1.2.2）：大模型视觉识别 → Markdown → Chroma 入库
 - ✅ 钉钉文件接收（v1.2.3）：用户发送文件/图片到钉钉，自动下载保存
-- ✅ SQLite 用户、对话和权限存储（v1.2.4）
-- ✅ Web 同步管理、强制重学和任务进度追踪（v1.2.5）
-- ✅ SHA-256 内容指纹、安全版本替换和 MinerU 安全加固（v1.2.6）
-- 🧪 固定审核人主动推送与审批口令已完成代码和离线测试，尚未真实发消息
-- ✅ 29 项文档处理、版本替换和上传审核回归测试（含未发布功能）
 - ✅ 局域网共享（防火墙放行端口 8000）
 - ✅ 同事实测通过
-- ⚠️ v1.2.6 尚未在正式知识库、真实 MinerU 和钉钉生产环境完成端到端回归
 
 ## 项目结构
 
 ```
 D:\ENTAR_AGENT\
-├── CLAUDE.md                                    # ← 项目级指南（本文件）
+├── AGENTS.md                                    # ← 项目级指南（本文件）
 ├── CHANGELOG.md                                 # 版本变更日志
 ├── README.md                                    # 项目说明
 ├── .gitignore                                   # Git 忽略规则
@@ -65,18 +59,12 @@ D:\ENTAR_AGENT\
 │   ├── sync_mineru.py                           # 📄 MinerU 输出批量同步脚本（v1.2.2）
 │   ├── mineru_extract.py                        # 📄 MinerU 扫描 PDF 提取工具（v1.2.2）
 │   ├── file_handler.py                          # 📄 钉钉文件接收处理（v1.2.3）
-│   ├── dingtalk_notifier.py                     # 🔔 钉钉机器人主动单聊（未发布）
-│   ├── knowledge_review.py                      # ✅ 上传审核与同步触发（未发布）
-│   ├── user_store.py                            # 💾 SQLite 用户/会话/权限存储（v1.2.4）
 │   ├── web_page.py                              # 🌐 网页处理脚本
 │   ├── prompts/                                 # 📄 外置提示词目录（v1.2.3）
 │   │   └── system_prompt.txt                    #    系统提示词
 │   ├── doc_mgr/                                 # 🆕 v1.2.1 文档管理子系统
-│   │   ├── __init__.py, models.py, storage.py   # ⭐ 存储抽象层 + 文档版本替换
-│   │   ├── identity.py                          #    稳定文档 ID + SHA-256 指纹
+│   │   ├── __init__.py, models.py, storage.py   # ⭐ 存储抽象层
 │   │   ├── engine.py, router.py, views.py       #    引擎 + API + 管理界面
-│   │   ├── scheduler.py, sync_tracker.py        #    同步调度 + 状态追踪
-│   │   ├── task_manager.py                      #    后台任务队列
 │   │   ├── chunkers/                            #    切块器（PyMuPDF 结构分析 + Markdown 标题层级）
 │   │   │   ├── pymupdf_chunker.py               #    PyMuPDF 结构分析切块
 │   │   │   ├── markdown_chunker.py              # 🆕 Markdown 标题层级切块（v1.2.2）
@@ -91,7 +79,6 @@ D:\ENTAR_AGENT\
 │       ├── memory.py                            # 💭 会话记忆管理
 │       └── standards_query.py                   # 📋 标准文档查询
 │
-├── tests/                                       # 🧪 文档引擎/同步/安全/版本替换测试
 ├── docs/                                        # 📄 全部文档集中管理
 │   ├── 需求文档-恩特小助手文档制作.md             # 需求文档
 │   ├── 恩特小助手使用说明_20260706_151451.docx   # 使用说明（面向钉钉用户）
@@ -111,28 +98,45 @@ D:\ENTAR_AGENT\
 │   ├── docker-compose.yml
 │   └── pack.sh
 │
-└── .claude\                                     # Claude Code 配置
+└── .Codex\                                     # Codex 配置
 ```
 
 ## 技术架构
 
 ```
-浏览器 / 钉钉单聊
-        │
-        ▼
-FastAPI (main.py) → 技能注册中心
-        ├─ 精确故障代码 → error_query 快速通道（不调 LLM）
-        └─ 其他问题 → RAG Agent
-                       ├─ 精确标准编号快速通道（不调 LLM）
-                       ├─ DeepSeek Function Calling
-                       │     ├─ 故障知识库工具
-                       │     ├─ 标准知识库工具
-                       │     └─ 无需检索时直接回答
-                       └─ 注入 SQLite 最近对话
-
-查询工具 → doc_mgr.storage → Chroma
-                           ├─ error_codes
-                           └─ standards
+┌─ 用户入口 ────────────────────────────────────────┐
+│  Web 页面 (http://localhost:8000)  钉钉单聊 @机器人 │
+│         │                              │          │
+└─────────┼──────────────────────────────┼──────────┘
+          ▼                              ▼
+┌───────────────────────────────────────────────────┐
+│              FastAPI 服务 (main.py)                 │
+│              error_query.handle(q)                 │
+│                                                    │
+│    ┌── 提取到故障代码（d4-1 等）──┐                  │
+│    │    ↓ 精确匹配（metadata）     │                  │
+│    │    返回全部信息 + 来源       │  ← 不调 LLM     │
+│    └────────────────────────────┘                  │
+│                                                    │
+│    ┌── 自然语言 / 名称 / 原因 ──┐                  │
+│    │    ↓ 复杂 NL? → LLM 提取   │                  │
+│    │    ↓ Chroma 语义搜索       │                  │
+│    │    返回匹配结果 + 来源行号  │                  │
+│    └────────────────────────────┘                  │
+└──────────────────────┬────────────────────────────┘
+                       │
+                       ▼
+┌───────────────────────────────────────────────────┐
+│              Chroma 向量库 (knowledge_base/)       │
+│              BAAI/bge-small-zh-v1.5                │
+│              133 条故障记录                         │
+└───────────────────────────────────────────────────┘
+          │
+          ▼ (仅自然语言提取时调用)
+┌───────────────────────────────────────────────────┐
+│         DeepSeek API (deepseek-v4-flash)           │
+│         仅用于：关键词提取（prompt 极小）           │
+└───────────────────────────────────────────────────┘
 ```
 
 ### 文件类型 → Collection 映射
@@ -195,8 +199,7 @@ FastAPI (main.py) → 技能注册中心
 |------|------|------|
 | 数据源 | PCS参数表 V1.6.2.xlsx + 标准 PDF | 遥信（DI）sheet 133 条 + 国标/行标/国际标准 |
 | 文档管理 | doc_mgr 子系统 | 统一上传→切块→入库，含 Web 管理页面（/admin） |
-| 文档一致性 | SHA-256 + staging/active/retired | 内容变更检测、安全版本切换、失败回滚 |
-| 存储抽象层 | VectorStore ABC → ChromaStore | 后续可新增 Qdrant 适配器并切换注册实现 |
+| 存储抽象层 | VectorStore ABC → ChromaStore | 后续切 Qdrant 只需改 storage.py 一处 |
 | PDF 切块引擎 | PyMuPDF 结构分析 | 多信号融合（章节号 + 字体名 + 左边界），零新依赖 |
 | Markdown 切块 | MarkdownChunker | 按标题层级（# ## ###）智能切块，中文标准章节号提取 |
 | OCR 引擎 | MinerU VLM（大模型视觉识别） | 扫描 PDF → Markdown，替代传统 OCR 路线 |
@@ -208,8 +211,6 @@ FastAPI (main.py) → 技能注册中心
 | Agent 路由 | agent.py | 统一 Agent 循环：路由、聊天托底、记忆管理 |
 | 标准查询 | standards_query.py | 标准文档检索工具（含标准编号快速通道 v1.2.3） |
 | 文件接收 | file_handler.py | 钉钉文件/图片接收 → 自动下载保存到 data/uploads/ |
-| 上传审核 | knowledge_review.py + dingtalk_notifier.py | 固定审核人主动通知、一次性审批和后台同步 |
-| 自动化测试 | unittest | 20 项文档引擎、同步追踪、安全和版本替换测试 |
 | 部署 | Docker + docker-compose | 可选容器化部署 |
 
 ## 运行方式
@@ -253,28 +254,24 @@ docker-compose -f deploy/docker-compose.yml up -d
 
 ## 待办事项
 
-- [ ] **P0 真实环境验收**：先备份，再在副本环境验证 Excel/PDF/MinerU/查询/重学/删除完整链路
-- [ ] **P0 崩溃恢复**：启动时识别并恢复或清理遗留 staging/retired 数据
-- [ ] **P1 管理端安全**：统一认证所有 `/admin` API，补齐上传路径、大小、MIME 和 XSS 防护
-- [ ] **P1 Web 身份**：移除可伪造用户名作为权限依据，问答接口由 GET 迁移到 POST
-- [ ] **P1 部署安全**：Docker 非 root，确认镜像和部署包不含密钥或真实数据
-- [ ] **P2 检索评测**：建立固定问题集，记录命中率、无答案率、耗时和 API 成本
-- [ ] **P2 CI/可观测性**：GitHub Actions 自动测试，增加同步审计、容量与失败统计
-- [ ] **P3 业务扩展**：经验知识库、审核发布流程、钉钉知识库对接、群聊能力
-- [ ] **P3 部门审核**：固定审核人实测通过后，按上传者部门匹配主管并补充代理/超时机制
-- [ ] **P3 数据权限**：按部门/角色控制文档可见范围，并同步处理来源删除
+- [x] 第一步 MVP：故障代码智能查询
+- [x] 接入钉钉 Stream 模式机器人并上线
+- [x] 替换为实际工程数据（PCS参数表 133 条）
+- [x] 局域网共享
+- [x] Git 版本管理初始化
+- [x] 项目结构整理
+- [x] 标准文档查询（第一阶段：文本 PDF 入库）
+- [x] 扫描 PDF 标准 OCR 识别（MinerU 大模型视觉识别，v1.2.2）
+- [x] 钉钉文件接收功能（v1.2.3）
+- [ ] 第二、三步规划（参考调研报告）
+- [ ] 技能扩展：经验查询、钉钉知识库对接
 
 ## 已知问题 / 注意事项
 
 - Windows 控制台 GBK 编码可能无法输出 emoji，日志用纯文本符号
 - 语义搜索短关键词（如 2 字）匹配效果可能不理想，后续可优化
 - 服务跑在本地电脑，息屏/睡眠会断开钉钉连接
-- v1.2.6 的版本替换锁只保证单进程一致性，多 worker/多容器前需共享锁或活动版本指针
-- 旧数据缺少 `doc_id` 时按文件名兼容匹配，同名文件可能产生歧义
-- retired 旧版本若物理删除失败会继续占空间，需要后台清理任务
-- 管理 API、Web 身份、上传校验和 XSS 防护尚未形成完整安全闭环
 - `dingtalk_stream.ChatbotHandler.process()` 是 async 方法，但 SDK 内的 reply_* 方法是同步的，不要对它们用 `await`
 - 当前使用方式为钉钉单聊（搜索机器人），群聊功能暂未开放
-- 固定审核人主动推送尚未做真实钉钉端到端验证，需先配置 staff_id 并在副本知识库测试
 - `logs/` 目录运行时自动生成，已被 `.gitignore` 忽略不退版本
 - `data/standards/mineru_output/` 是 MinerU OCR 中间产物（185MB+），已加入 `.gitignore`，不退版本管理。如需重新入库，运行 `sync_mineru.py`
