@@ -9,8 +9,10 @@ services:
     ports:
       - "8000:8000"
     volumes:
+      # 代码挂载（修改后 docker restart 即可，无需 --build 重装依赖）
+      - ../scripts:/app/scripts
       # 配置文件挂载出来，方便修改 API 密钥
-      - ../scripts/local_config.py:/app/scripts/local_config.py
+      # （已包含在 scripts/ 挂载中，单独保留作为显式说明）
       # 知识库持久化，更新 Excel 后重新同步
       - ../knowledge_base:/app/knowledge_base
       # 用户数据持久化（uploads / standards / user_store.db）

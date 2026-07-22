@@ -19,6 +19,23 @@ from typing import Any, Callable
 
 logger = logging.getLogger("tools")
 
+# ===== 用户上下文（Agent 执行前注入，工具读取） =====
+# 使用 contextvars 保证异步安全，每次 Agent 请求独立
+import contextvars
+_current_user_centers: contextvars.ContextVar[list[str] | None] = \
+    contextvars.ContextVar("tool_user_centers", default=None)
+
+
+def set_user_centers(centers: list[str] | None) -> None:
+    """设置当前请求的用户归属中心列表（Agent 入口调用）"""
+    _current_user_centers.set(centers)
+
+
+def get_user_centers() -> list[str] | None:
+    """获取当前请求的用户归属中心列表（工具执行时调用）"""
+    return _current_user_centers.get()
+
+
 # ===== 注册中心 =====
 # {(name, definition, handler)}
 _tool_registry: dict[str, tuple[dict, Callable[[dict], str]]] = {}

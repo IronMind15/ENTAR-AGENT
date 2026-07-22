@@ -179,8 +179,63 @@ def _handle_impl(query: str, user_id: str = "") -> dict:
         logger.warning("DEEPSEEK_API_KEY 未配置，Agent 不可用")
         return {"answer": "DeepSeek API 未配置，无法处理此问题。请先在 local_config.py 中设置 DEEPSEEK_API_KEY。", "source": "agent"}
 
-    # 构建系统提示词，注入记忆上下文
+    # ---- 查询当前用户信息，注入认知上下文 ----
+    user_info_lines = []
+    user_centers = None
+    if user_id:
+        try:
+            from user_store import get_store
+            store = get_store()
+            user = store.get_user(user_id)
+            if user:
+                # 姓名
+                nick = user.get("nick") or user.get("nickname", "")
+                if nick:
+                    user_info_lines.append(f"当前用户：{nick}")
+                # 职务
+                title = user.get("title", "")
+                if title:
+                    user_info_lines.append(f"职务：{title}")
+                # 钉钉部门名（JSON 数组字符串 → 中文列表）
+                dept_raw = user.get("department_names", "")
+                if dept_raw:
+                    try:
+                        dept_list = json.loads(dept_raw) if isinstance(dept_raw, str) else dept_raw
+                        if isinstance(dept_list, list) and dept_list:
+                            user_info_lines.append(f"钉钉部门：{'、'.join(dept_list)}")
+                    except (json.JSONDecodeError, TypeError):
+                        if str(dept_raw).strip() and str(dept_raw) not in ("[]", ""):
+                            user_info_lines.append(f"钉钉部门：{dept_raw}")
+                # 归属中心
+                raw_centers = user.get("centers", "[]")
+                try:
+                    centers = json.loads(raw_centers) if isinstance(raw_centers, str) else list(raw_centers)
+                    user_centers = [c for c in centers if c] if isinstance(centers, list) else None
+                except (json.JSONDecodeError, TypeError):
+                    user_centers = None
+                if user_centers:
+                    from center_config import get_center_name
+                    center_names = [get_center_name(c) for c in user_centers]
+                    user_info_lines.append(f"归属中心：{'、'.join(center_names)}")
+                    # 设置工具上下文，实现按中心隔离查询
+                    from tools import set_user_centers
+                    set_user_centers(user_centers)
+        except Exception as e:
+            logger.warning(f"获取用户信息失败（不影响主流程）: {e}")
+
+    # 构建系统提示词，注入用户认知 + 记忆上下文
     system_content = SYSTEM_PROMPT
+
+    # 注入当前用户信息（让助手知道在跟谁说话）
+    if user_info_lines:
+        system_content += (
+            "\n\n【当前用户信息】\n"
+            + "\n".join(user_info_lines)
+            + "\n（用户问及身份、部门、中心时可参考上述信息回答；知识库查询时自动按归属中心过滤）"
+        )
+        logger.info(f"已注入用户档案 ({len(user_info_lines)} 条)")
+
+    # 注入最近对话记忆
     context = ""
     if user_id:
         try:

@@ -27,9 +27,20 @@ tar -xzf "$TAR_FILE" \
     --exclude="knowledge_base/*" \
     scripts/ deploy/ requirements.txt .dockerignore 2>/dev/null || true
 
-# 3. 重建 Docker 镜像并重启
-echo "🐳 重建 Docker 镜像..."
-docker compose -f deploy/docker-compose.yml up -d --build
+# 3. 检查 requirements.txt 是否已变更
+HASH_FILE="/tmp/entar_requirements_hash"
+CURRENT_HASH=$(md5sum requirements.txt 2>/dev/null | cut -d' ' -f1)
+PREV_HASH=""
+[ -f "$HASH_FILE" ] && PREV_HASH=$(cat "$HASH_FILE")
+
+if [ "$CURRENT_HASH" != "$PREV_HASH" ]; then
+    echo "🐳 检测到依赖变更，重建 Docker 镜像（耗时较长）..."
+    docker compose -f deploy/docker-compose.yml up -d --build
+    echo "$CURRENT_HASH" > "$HASH_FILE"
+else
+    echo "🚀 依赖无变更，直接重启容器（秒级）..."
+    docker compose -f deploy/docker-compose.yml up -d
+fi
 
 # 4. 检查状态
 echo "✅ 部署完成！检查容器状态："

@@ -37,7 +37,7 @@ DEFINITION = {
 
 @register("search_standards", DEFINITION)
 def execute(args: dict) -> str:
-    """执行标准文档搜索"""
+    """执行标准文档搜索（感知当前用户归属中心，按中心隔离 + 公共区回退）"""
     query = (args.get("query") or "").strip()
     if not query:
         return json.dumps(
@@ -46,10 +46,16 @@ def execute(args: dict) -> str:
 
     logger.info(f"  工具调用: search_standards(query={query})")
 
+    # 读取当前用户的归属中心，实现按中心隔离查询
+    from tools import get_user_centers
+    user_centers = get_user_centers()
+    if user_centers:
+        logger.info(f"  按中心过滤: {user_centers}")
+
     # 延迟导入避免循环依赖
     from skills.standards_query import search_kb as search_std_kb
 
-    results = search_std_kb(query)
+    results = search_std_kb(query, centers=user_centers)
     if not results:
         return json.dumps(
             {
