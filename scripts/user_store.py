@@ -162,6 +162,7 @@ class SQLiteUserStore(UserStore):
                 title           TEXT DEFAULT '',
                 leader          INTEGER DEFAULT 0,
                 role            TEXT DEFAULT 'user',
+                center          TEXT DEFAULT 'public',
                 department_ids  TEXT DEFAULT '[]',
                 department_names TEXT DEFAULT '[]',
                 first_seen      TEXT,
@@ -194,6 +195,13 @@ class SQLiteUserStore(UserStore):
                 FOREIGN KEY (user_id) REFERENCES users(user_id)
             );
         """)
+        conn.commit()
+        # 迁移：给旧表加 center 字段
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN center TEXT DEFAULT 'public'")
+            logger.info("[迁移] users 表新增列: center")
+        except sqlite3.OperationalError:
+            pass  # 列已存在
         conn.commit()
         logger.info(f"SQLite 用户存储已初始化: {self._db_path}")
 

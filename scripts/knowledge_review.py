@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from config import KNOWLEDGE_REVIEW_MODE, KNOWLEDGE_REVIEWER_STAFF_IDS
+from center_config import resolve_center, get_center_name
 from dingtalk_notifier import DingTalkNotifier
 from doc_mgr.sync_tracker import SyncTracker
 
@@ -64,6 +65,42 @@ def _collection_from_text(value: str, file_name: str) -> Optional[str]:
     return aliases.get(value.strip().lower())
 
 
+def _parse_extra_tokens(extra: str, file_name: str
+                        ) -> tuple[str, str]:
+    """从审核命令的额外文本中解析部门和目标库
+
+    支持灵活顺序：
+      "研发中心"          → (rd, 默认库)
+      "研发中心 标准库"    → (rd, standards)
+      "标准库 研发中心"    → (rd, standards)
+      "标准库"            → (public, standards)
+      ""                  → (public, 默认库)
+
+    Returns:
+        (department_id, collection_name)
+    """
+    if not extra:
+        return "public", default_collection(file_name)
+
+    tokens = extra.strip().split()
+    department = "public"
+    collection = default_collection(file_name)
+
+    for token in tokens:
+        # 尝试解析为部门
+        dept = resolve_center(token)
+        if dept:
+            department = dept
+            continue
+        # 尝试解析为目标库
+        coll = _collection_from_text(token, file_name)
+        if coll:
+            collection = coll
+            continue
+
+    return department, collection
+
+
 def _format_size(size: int) -> str:
     if size >= 1024 * 1024:
         return f"{size / 1024 / 1024:.1f} MB"
@@ -92,8 +129,13 @@ class KnowledgeReviewService:
         return resolve_reviewer_staff_ids(uploader_user_id)
 
     def create_request(self, file_path: str, file_name: str, file_size: int,
-                       uploader_user_id: str, uploader_name: str) -> Optional[dict]:
-        """登记审核申请；未配置审核人或文件不支持时返回 None。"""
+                       uploader_user_id: str, uploader_name: str,
+                       suggested_department: str = "public") -> Optional[dict]:
+        """登记审核申请；未配置审核人或文件不支持时返回 None。
+
+        Args:
+            suggested_department: 建议所属中心 ID
+        """
         if Path(file_name).suffix.lower() not in _SUPPORTED_EXTENSIONS:
             return None
         reviewers = self._reviewers_for(uploader_user_id)
@@ -117,6 +159,7 @@ class KnowledgeReviewService:
             "uploader_user_id": uploader_user_id,
             "uploader_name": uploader_name or "未知用户",
             "target_collection": target,
+            "suggested_department": suggested_department,
         }
 
     @staticmethod
@@ -125,6 +168,8 @@ class KnowledgeReviewService:
             "故障代码库" if request["target_collection"] == "error_codes"
             else "标准文档库"
         )
+        dept_id = request.get("suggested_department", "public")
+        dept_label = get_center_name(dept_id)
         review_id = request["review_id"]
         return (
             "### 知识库同步申请\n\n"
@@ -132,10 +177,13 @@ class KnowledgeReviewService:
             f"- 上传人：{request['uploader_name']}\n"
             f"- 文件名：{request['file_name']}\n"
             f"- 文件大小：{_format_size(int(request['file_size']))}\n"
-            f"- 建议入库：{target_label}\n\n"
-            f"同意请回复：`同意同步 {review_id}`\n\n"
-            f"拒绝请回复：`拒绝同步 {review_id} 原因`\n\n"
-            "如需改入另一类库，可在同意口令末尾加 `标准库` 或 `故障库`。"
+            f"- 建议入库：{target_label}\n"
+            f"- **建议部门：{dept_label}**\n\n"
+            f"✅ 同意入库（{dept_label}）：`同意同步 {review_id}`\n"
+            f"🔄 改部门或库：`同意同步 {review_id} 新部门` 或 `同意同步 {review_id} 新部门 新库`\n"
+            f"❌ 拒绝：`拒绝同步 {review_id} 原因`\n\n"
+            "部门可选：公共 / PMO / 研发 / 制造 / 商业 / 运营\n"
+            "库可选：标准库 / 故障库"
         )
 
     def notify(self, request: dict) -> dict:
@@ -195,7 +243,10 @@ class KnowledgeReviewService:
             logger.info(f"审核拒绝: {review_id}, reason={reason[:100]}")
             return f"已拒绝申请 {review_id}。文件仍保留在待处理区，没有进入知识库。"
 
-        collection = _collection_from_text(extra or "", row["file_name"])
+        # 从额外文本解析部门和目标库
+        department, collection = _parse_extra_tokens(
+            extra or "", row["file_name"]
+        )
         if collection not in _ALLOWED_COLLECTIONS:
             return "目标库不正确，请使用“标准库”或“故障库”。"
         if not self._is_safe_upload_file(row["file_path"]):
@@ -207,7 +258,7 @@ class KnowledgeReviewService:
             return f"申请 {review_id} 已被其他操作处理，请刷新后再看。"
 
         try:
-            task_id = self.submitter(row, collection)
+            task_id = self.submitter(row, collection, department=department)
         except Exception as exc:
             self.tracker.reset_review_pending(review_id)
             logger.exception(f"审核任务提交失败: {review_id}")
@@ -235,10 +286,18 @@ class KnowledgeReviewService:
         except (OSError, RuntimeError):
             return False
 
-    def _submit_sync_task(self, row: dict, collection: str) -> str:
-        """复用现有文档引擎和后台任务管理器启动同步。"""
+    def _submit_sync_task(self, row: dict, collection: str,
+                          department: str = "public") -> str:
+        """复用现有文档引擎和后台任务管理器启动同步。
+
+        Args:
+            department: 所属中心 ID，优先用参数值，无则从 row 中读取
+        """
         from doc_mgr.engine import process_file
         from doc_mgr.task_manager import get_manager
+
+        if not department or department == "public":
+            department = row.get("suggested_department", "public")
 
         file_path = row["file_path"]
         file_name = row["file_name"]
@@ -252,6 +311,7 @@ class KnowledgeReviewService:
                 file_name=file_name,
                 target_collection=collection,
                 force=False,
+                department=department,
             ),
         )
         return record.task_id
@@ -267,18 +327,32 @@ def get_review_service() -> KnowledgeReviewService:
     return _service
 
 
+def _get_user_department(user_id: str) -> str:
+    """从 user_store 查询用户的 center 字段，未设置时返回 public"""
+    try:
+        from user_store import get_store
+        user = get_store().get_user(user_id)
+        if user and user.get("center"):
+            return user["center"]
+    except Exception as e:
+        logger.debug(f"查询用户部门失败: {e}")
+    return "public"
+
+
 def queue_review_for_upload(result: dict, uploader_user_id: str,
                             uploader_name: str) -> Optional[dict]:
     """钉钉文件保存成功后的统一入口。"""
     if not result.get("success") or not result.get("file_path"):
         return None
     service = get_review_service()
+    suggested_dept = _get_user_department(uploader_user_id)
     request = service.create_request(
         file_path=result["file_path"],
         file_name=result["file_name"],
         file_size=int(result.get("file_size", 0)),
         uploader_user_id=uploader_user_id,
         uploader_name=uploader_name,
+        suggested_department=suggested_dept,
     )
     if request:
         service.notify_async(request)

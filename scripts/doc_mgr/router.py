@@ -159,6 +159,7 @@ async def upload_file(
     collection: str = Form(""),
     password: str = Form(""),
     user_id: str = Form(""),
+    department: str = Form("public"),
 ):
     """上传文件，保存到 uploads 目录并标记待处理
 
@@ -214,6 +215,7 @@ async def upload_file(
             target_collection=_collection,
             upload_user_id=user_id or "admin",
             upload_user_name="管理员",
+            suggested_department=department,
         )
     except Exception as track_err:
         logger.warning(f"记录同步追踪失败（不影响文件保存）: {track_err}")
@@ -639,6 +641,7 @@ def _run_sync_task(file_path: str, fname: str,
     """后台执行同步任务（被 task_manager 调用）
 
     独立的模块级函数，在后台线程中执行，自动关联进度上报。
+    从 sync_tracker 读取 suggested_department 传给 process_file。
     """
     from .engine import process_file
     from .sync_tracker import SyncTracker
@@ -655,8 +658,14 @@ def _run_sync_task(file_path: str, fname: str,
     from .task_manager import report_progress as _rp
     _rp("syncing", 10, "开始同步处理...")
 
+    # 读取部门信息
+    status = tracker.get_status(file_path)
+    department = (status.get("suggested_department", "public")
+                  if status else "public")
+
     doc = process_file(file_path, file_name=fname,
-                       target_collection=target, force=force)
+                       target_collection=target, force=force,
+                       department=department)
 
     if doc.status in ("done", "skipped"):
         tracker.mark_synced(file_path)

@@ -84,6 +84,7 @@ class SyncTracker:
             migration_columns = {
                 "upload_user_id": "TEXT DEFAULT ''",
                 "upload_user_name": "TEXT DEFAULT ''",
+                "suggested_department": "TEXT DEFAULT 'public'",
                 "review_id": "TEXT DEFAULT ''",
                 "reviewer_staff_id": "TEXT DEFAULT ''",
                 "review_status": "TEXT DEFAULT ''",
@@ -116,7 +117,8 @@ class SyncTracker:
 
     def upsert_file(self, file_path: str, file_name: str, file_size: int,
                     file_hash: str, target_collection: str = "",
-                    upload_user_id: str = "", upload_user_name: str = "") -> None:
+                    upload_user_id: str = "", upload_user_name: str = "",
+                    suggested_department: str = "public") -> None:
         """插入或更新文件记录
 
         Args:
@@ -127,6 +129,7 @@ class SyncTracker:
             target_collection: 目标知识库
             upload_user_id: 上传者钉钉 user_id
             upload_user_name: 上传者昵称
+            suggested_department: 建议所属中心 ID
         """
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with self._lock:
@@ -135,8 +138,9 @@ class SyncTracker:
                 INSERT INTO sync_status
                     (file_path, file_name, file_size, file_hash,
                      target_collection, upload_user_id, upload_user_name,
+                     suggested_department,
                      sync_status, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
                 ON CONFLICT(file_path) DO UPDATE SET
                     file_name      = excluded.file_name,
                     file_size      = excluded.file_size,
@@ -148,6 +152,7 @@ class SyncTracker:
                     upload_user_name = CASE
                         WHEN excluded.upload_user_name <> ''
                         THEN excluded.upload_user_name ELSE upload_user_name END,
+                    suggested_department = excluded.suggested_department,
                     updated_at     = excluded.updated_at,
                     sync_status    = CASE
                         WHEN sync_status = 'error'
@@ -157,7 +162,8 @@ class SyncTracker:
                         ELSE sync_status
                     END
             """, (file_path, file_name, file_size, file_hash,
-                  target_collection, upload_user_id, upload_user_name, now))
+                  target_collection, upload_user_id, upload_user_name,
+                  suggested_department, now))
             conn.commit()
 
     def create_review(self, file_path: str, reviewer_staff_id: str) -> str:

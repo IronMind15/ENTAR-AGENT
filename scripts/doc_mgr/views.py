@@ -415,6 +415,19 @@ ADMIN_HTML = r"""<!DOCTYPE html>
         </select>
         <p id="uploadTypeHint" style="font-size:12px;color:var(--text-secondary);margin-top:4px">📋 标准文档：上传 PDF 文件，自动切块入库到标准知识库</p>
       </div>
+      <div style="margin-bottom:16px">
+        <label style="font-size:13px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:6px">
+          所属部门（知识库所有者）
+        </label>
+        <select id="uploadDepartment" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;background:var(--card);color:var(--text);outline:none">
+          <option value="public">🌐 全公司公开</option>
+          <option value="pmo">📋 产品与项目管理中心（PMO）</option>
+          <option value="rd">🔬 研发中心</option>
+          <option value="mfg">🏭 制造中心</option>
+          <option value="bz">💼 商业中心</option>
+          <option value="ops">⚙️ 运营支持中心</option>
+        </select>
+      </div>
       <div class="drop-zone" id="dropZone">
         <div class="icon">📄</div>
         <p><strong>点击选择</strong> 或拖拽文件到此处</p>
@@ -710,6 +723,7 @@ function uploadFile(file) {
   var formData = new FormData();
   formData.append('file', file);
   formData.append('collection', document.getElementById('uploadCollection').value);
+  formData.append('department', document.getElementById('uploadDepartment').value);
 
   fetch('/admin/upload', { method: 'POST', body: formData })
     .then(function(r) {

@@ -337,13 +337,16 @@ def _try_mineru(file_path: str, file_name: str,
 
 def process_file(file_path: str, file_name: Optional[str] = None,
                  target_collection: Optional[str] = None,
-                 force: bool = False) -> Document:
+                 force: bool = False,
+                 department: str = "public") -> Document:
     """处理单个文件：提取 → 切块 → 入库
 
     Args:
         file_path: 文件绝对路径
         file_name: 文件名（上传时与临时路径不同名时使用）
         target_collection: 目标 collection 名，不指定则由扩展名自动判断
+        force: 是否强制重新处理
+        department: 所属中心 ID（默认 public = 全公司公开）
 
     Returns:
         Document 对象，记录处理结果
@@ -380,6 +383,7 @@ def process_file(file_path: str, file_name: Optional[str] = None,
             common = {
                 "doc_id": doc_id,
                 "content_hash": content_hash,
+                "department": department,
             }
             if ext == ".pdf":
                 doc = _process_pdf(
@@ -446,7 +450,8 @@ def process_files(file_paths: list[str]) -> list[Document]:
 def _process_pdf(file_path: str, file_name: str, file_size: int,
                  store: VectorStore, target_collection: str = "standards",
                  doc_id: str = "", content_hash: str = "",
-                 force: bool = False) -> Document:
+                 force: bool = False,
+                 department: str = "public") -> Document:
     """处理 PDF 文件
 
     策略：
@@ -473,6 +478,7 @@ def _process_pdf(file_path: str, file_name: str, file_size: int,
         md_doc = _process_markdown(
             mineru_md, file_name, file_size, store, target_collection,
             doc_id=doc_id, content_hash=content_hash,
+            department=department,
         )
         # 继承 MinerU 的处理结果
         doc.status = md_doc.status
@@ -521,6 +527,7 @@ def _process_pdf(file_path: str, file_name: str, file_size: int,
     _report_progress("indexing", 80, f"切块完成（{len(chunks)} 块），入库到知识库...")
     ids, documents, metadatas = _prepare_chunks(
         chunks, file_name, doc_id=doc_id, content_hash=content_hash,
+        department=department,
     )
     added = store.replace_document(
         target_collection, doc_id, file_name,
@@ -539,7 +546,8 @@ def _process_pdf(file_path: str, file_name: str, file_size: int,
 
 def _process_excel(file_path: str, file_name: str, file_size: int,
                    store: VectorStore, target_collection: str = "error_codes",
-                   doc_id: str = "", content_hash: str = "") -> Document:
+                   doc_id: str = "", content_hash: str = "",
+                   department: str = "public") -> Document:
     """处理 Excel 文件（故障代码）"""
     doc = Document(
         file_name=file_name, file_path=file_path,
@@ -599,6 +607,7 @@ def _process_excel(file_path: str, file_name: str, file_size: int,
         r["doc_id"] = doc_id
         r["content_hash"] = content_hash
         r["version_id"] = content_hash
+        r["department"] = department
         metadatas.append(r)
 
     # 3. 入库
@@ -620,7 +629,8 @@ def _process_excel(file_path: str, file_name: str, file_size: int,
 
 def _process_markdown(file_path: str, file_name: str, file_size: int,
                       store: VectorStore, target_collection: str = "standards",
-                      doc_id: str = "", content_hash: str = "") -> Document:
+                      doc_id: str = "", content_hash: str = "",
+                      department: str = "public") -> Document:
     """处理 Markdown 文件（MinerU 等工具输出）
 
     流程：读取 Markdown → 提取标准信息 → 切块 → 复制图片 → 入库
@@ -691,6 +701,7 @@ def _process_markdown(file_path: str, file_name: str, file_size: int,
     _report_progress("indexing", 80, f"切块完成（{len(chunks)} 块），入库到知识库...")
     ids, documents, metadatas = _prepare_chunks(
         chunks, file_name, doc_id=doc_id, content_hash=content_hash,
+        department=department,
     )
     added = store.replace_document(
         target_collection, doc_id, file_name,
@@ -743,11 +754,12 @@ def _extract_std_info(file_name: str, content: str) -> tuple[str, str]:
 # ==================== 辅助函数 ====================
 
 def _prepare_chunks(chunks: list[Chunk], file_name: str,
-                    doc_id: str = "", content_hash: str = ""
+                    doc_id: str = "", content_hash: str = "",
+                    department: str = "public"
                     ) -> tuple[list[str], list[str], list[dict]]:
     """将 Chunk 对象转为 Chroma 的 add() 需要的格式
 
-    生成唯一 ID（带去重计数器），拼接 doc_id 到 metadata。
+    生成唯一 ID（带去重计数器），拼接 doc_id 和 department 到 metadata。
     """
     ids = []
     documents = []
@@ -770,6 +782,7 @@ def _prepare_chunks(chunks: list[Chunk], file_name: str,
         meta["doc_id"] = doc_id
         meta["content_hash"] = content_hash
         meta["version_id"] = content_hash
+        meta["department"] = department
 
         ids.append(uid)
         documents.append(ch.text)

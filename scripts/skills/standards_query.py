@@ -16,6 +16,7 @@ if sys.platform == "win32":
     sys.stdin.reconfigure(encoding="utf-8")
     sys.stdout.reconfigure(encoding="utf-8")
 
+from center_config import get_center_name
 from doc_mgr.storage import get_store
 
 logger = logging.getLogger("standards_query")
@@ -81,15 +82,16 @@ def _exact_match_by_std_id(std_id: str) -> dict | None:
     return None
 
 
-def search_kb(query: str) -> list[dict]:
+def search_kb(query: str, department: str = "") -> list[dict]:
     """搜索标准知识库，返回结构化标准信息列表（JSON 格式，供 LLM 工具调用使用）
 
     查询策略：
       1. 先尝试精确标准编号匹配
-      2. 未命中则语义搜索
+      2. 未命中则语义搜索（如有部门参数，按部门过滤 + 回退）
 
     Args:
         query: 搜索关键词
+        department: 所属中心 ID，指定后只返回该部门 + 公共区的数据
 
     Returns:
         list[dict]: 每个 dict 包含标准信息（std_id, std_title, chapter 等）
@@ -109,15 +111,64 @@ def search_kb(query: str) -> list[dict]:
             return [meta]
 
     # ===== 语义搜索 =====
+    results = _semantic_search(full_text, department=department)
+    if results is None:
+        return []
+    return results
+
+
+def _semantic_search(query: str, department: str = "") -> list[dict] | None:
+    """执行语义搜索，支持按部门过滤 + 旧数据回退
+
+    如果指定了部门，先尝试按部门过滤；结果不足时回退到不限制部门
+    （兼容早期未打 department 标签的旧数据）。
+    """
     try:
-        results = get_store().query(
+        store = get_store()
+
+        # 1. 尝试按部门过滤
+        if department and department != "public":
+            query_kwargs = {
+                "query_text": query,
+                "n_results": SEARCH_TOP_K,
+                "where": {"department": {"$in": [department, "public"]}},
+            }
+            filtered = store.query(COLLECTION_NAME, **query_kwargs)
+            items = _parse_query_results(filtered)
+            if len(items) >= MIN_RESULTS_THRESHOLD:
+                return items
+            # 结果不足，回退到无过滤（兼容旧数据）
+            logger.info(
+                f"  部门过滤结果不足 ({len(items)}条)，回退到无条件搜索"
+            )
+
+        # 2. 无条件搜索（无部门 或 部门过滤回退）
+        results = store.query(
             COLLECTION_NAME,
-            query_text=full_text,
+            query_text=query,
             n_results=SEARCH_TOP_K,
         )
+        return _parse_query_results(results)
+
     except Exception as e:
         logger.error(f"Chroma 语义搜索失败: {e}")
+        return None
+
+
+def _parse_query_results(results: dict) -> list[dict]:
+    """解析 Chroma query 返回结果为统一格式"""
+    if not results or not results.get("documents") or not results["documents"][0]:
         return []
+
+    items = []
+    for i in range(len(results["documents"][0])):
+        meta = dict(results["metadatas"][0][i])
+        if results.get("distances"):
+            meta["_score"] = round(float(results["distances"][0][i]), 4)
+        meta["_match_type"] = "semantic"
+        meta["_content"] = results["documents"][0][i][:2000]
+        items.append(meta)
+    return items
 
     if not results or not results.get("documents") or not results["documents"][0]:
         return []
@@ -153,9 +204,12 @@ def format_standard_result(meta: dict) -> str:
     content = meta.get("_content", meta.get("section_text", ""))
     score = meta.get("_score")
 
+    department = meta.get("department", "")
+    dept_tag = f"（{get_center_name(department)}）" if department and department != "public" else ""
+
     lines = []
     lines.append(f"【标准编号】{std_id}")
-    lines.append(f"【标准名称】{std_title}")
+    lines.append(f"【标准名称】{std_title}{dept_tag}")
     lines.append(f"【章节】第{chapter}章{chapter_title}")
 
     if content:

@@ -90,7 +90,7 @@ class KnowledgeReviewServiceTests(unittest.TestCase):
         )
         self.submissions = []
 
-        def submitter(row, collection):
+        def submitter(row, collection, **kwargs):
             self.submissions.append((row["review_id"], collection))
             return "task-001"
 
@@ -168,7 +168,7 @@ class KnowledgeReviewServiceTests(unittest.TestCase):
     def test_submit_failure_restores_pending_for_retry(self):
         request = self._create_request()
 
-        def fail_submit(_row, _collection):
+        def fail_submit(_row, _collection, **kwargs):
             raise RuntimeError("queue unavailable")
 
         self.service.submitter = fail_submit
