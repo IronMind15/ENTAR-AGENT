@@ -82,16 +82,17 @@ def _exact_match_by_std_id(std_id: str) -> dict | None:
     return None
 
 
-def search_kb(query: str, department: str = "") -> list[dict]:
+def search_kb(query: str, department: str = "", centers: list[str] | None = None) -> list[dict]:
     """搜索标准知识库，返回结构化标准信息列表（JSON 格式，供 LLM 工具调用使用）
 
     查询策略：
       1. 先尝试精确标准编号匹配
-      2. 未命中则语义搜索（如有部门参数，按部门过滤 + 回退）
+      2. 未命中则语义搜索（如有 centers 参数，按用户归属中心过滤 + 回退）
 
     Args:
         query: 搜索关键词
-        department: 所属中心 ID，指定后只返回该部门 + 公共区的数据
+        department: （已废弃，保留兼容）单中心 ID
+        centers: 用户归属中心列表，只返回这些部门 + 公共区的数据
 
     Returns:
         list[dict]: 每个 dict 包含标准信息（std_id, std_title, chapter 等）
@@ -111,27 +112,34 @@ def search_kb(query: str, department: str = "") -> list[dict]:
             return [meta]
 
     # ===== 语义搜索 =====
-    results = _semantic_search(full_text, department=department)
+    # 兼容旧参数：若传了 department 但没传 centers，转成列表
+    if centers is None and department:
+        centers = [department]
+    results = _semantic_search(full_text, centers=centers)
     if results is None:
         return []
     return results
 
 
-def _semantic_search(query: str, department: str = "") -> list[dict] | None:
+def _semantic_search(query: str, centers: list[str] | None = None) -> list[dict] | None:
     """执行语义搜索，支持按部门过滤 + 旧数据回退
 
-    如果指定了部门，先尝试按部门过滤；结果不足时回退到不限制部门
-    （兼容早期未打 department 标签的旧数据）。
+    如果指定了归属中心列表，先尝试按用户中心 + public 过滤；
+    结果不足时回退到不限制部门（兼容早期未打 department 标签的旧数据）。
     """
     try:
         store = get_store()
 
-        # 1. 尝试按部门过滤
-        if department and department != "public":
+        # 1. 尝试按多中心过滤
+        if centers:
+            # 构建过滤条件：用户所有中心 + public（去重）
+            filters = list(centers)
+            if "public" not in filters:
+                filters.append("public")
             query_kwargs = {
                 "query_text": query,
                 "n_results": SEARCH_TOP_K,
-                "where": {"department": {"$in": [department, "public"]}},
+                "where": {"department": {"$in": filters}},
             }
             filtered = store.query(COLLECTION_NAME, **query_kwargs)
             items = _parse_query_results(filtered)
@@ -139,10 +147,10 @@ def _semantic_search(query: str, department: str = "") -> list[dict] | None:
                 return items
             # 结果不足，回退到无过滤（兼容旧数据）
             logger.info(
-                f"  部门过滤结果不足 ({len(items)}条)，回退到无条件搜索"
+                f"  多中心过滤结果不足 ({len(items)}条)，回退到无条件搜索"
             )
 
-        # 2. 无条件搜索（无部门 或 部门过滤回退）
+        # 2. 无条件搜索（无中心 或 过滤回退）
         results = store.query(
             COLLECTION_NAME,
             query_text=query,

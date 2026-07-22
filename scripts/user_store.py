@@ -89,6 +89,16 @@ class UserStore(ABC):
         ...
 
     @abstractmethod
+    def get_user_centers(self, user_id: str) -> list[str]:
+        """获取用户归属中心列表"""
+        ...
+
+    @abstractmethod
+    def set_user_centers(self, user_id: str, centers: list[str]) -> bool:
+        """设置用户归属中心列表"""
+        ...
+
+    @abstractmethod
     def list_users(self) -> list[dict]:
         """列出所有用户"""
         ...
@@ -163,6 +173,7 @@ class SQLiteUserStore(UserStore):
                 leader          INTEGER DEFAULT 0,
                 role            TEXT DEFAULT 'user',
                 center          TEXT DEFAULT 'public',
+                centers         TEXT DEFAULT '[]',
                 department_ids  TEXT DEFAULT '[]',
                 department_names TEXT DEFAULT '[]',
                 first_seen      TEXT,
@@ -200,6 +211,11 @@ class SQLiteUserStore(UserStore):
         try:
             conn.execute("ALTER TABLE users ADD COLUMN center TEXT DEFAULT 'public'")
             logger.info("[迁移] users 表新增列: center")
+        except sqlite3.OperationalError:
+            pass  # 列已存在
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN centers TEXT DEFAULT '[]'")
+            logger.info("[迁移] users 表新增列: centers")
         except sqlite3.OperationalError:
             pass  # 列已存在
         conn.commit()
@@ -362,6 +378,22 @@ class SQLiteUserStore(UserStore):
         except Exception as e:
             logger.warning(f"查询用户失败: {e}")
             return None
+
+    def get_user_centers(self, user_id: str) -> list[str]:
+        """获取用户归属中心列表"""
+        user = self.get_user(user_id)
+        if not user:
+            return []
+        raw = user.get("centers", "[]")
+        try:
+            centers = json.loads(raw) if isinstance(raw, str) else list(raw)
+            return [c for c in centers if c] if isinstance(centers, list) else []
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    def set_user_centers(self, user_id: str, centers: list[str]) -> bool:
+        """设置用户归属中心列表"""
+        return self.update_user(user_id, centers=json.dumps(centers, ensure_ascii=False))
 
     def list_users(self) -> list[dict]:
         """列出所有用户"""

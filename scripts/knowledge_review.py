@@ -130,7 +130,8 @@ class KnowledgeReviewService:
 
     def create_request(self, file_path: str, file_name: str, file_size: int,
                        uploader_user_id: str, uploader_name: str,
-                       suggested_department: str = "public") -> Optional[dict]:
+                       suggested_department: str = "public",
+                       uploader_centers: list[str] | None = None) -> Optional[dict]:
         """登记审核申请；未配置审核人或文件不支持时返回 None。
 
         Args:
@@ -160,6 +161,7 @@ class KnowledgeReviewService:
             "uploader_name": uploader_name or "未知用户",
             "target_collection": target,
             "suggested_department": suggested_department,
+            "uploader_centers": uploader_centers or [],
         }
 
     @staticmethod
@@ -171,10 +173,18 @@ class KnowledgeReviewService:
         dept_id = request.get("suggested_department", "public")
         dept_label = get_center_name(dept_id)
         review_id = request["review_id"]
+
+        # 上传人归属中心展示
+        centers = request.get("uploader_centers", [])
+        centers_display = _format_centers_display(centers)
+        uploader_info = request['uploader_name']
+        if centers_display and centers_display != "全公司公开":
+            uploader_info += f"（{centers_display}）"
+
         return (
             "### 知识库同步申请\n\n"
             f"- 申请编号：`{review_id}`\n"
-            f"- 上传人：{request['uploader_name']}\n"
+            f"- 上传人：{uploader_info}\n"
             f"- 文件名：{request['file_name']}\n"
             f"- 文件大小：{_format_size(int(request['file_size']))}\n"
             f"- 建议入库：{target_label}\n"
@@ -327,16 +337,33 @@ def get_review_service() -> KnowledgeReviewService:
     return _service
 
 
-def _get_user_department(user_id: str) -> str:
-    """从 user_store 查询用户的 center 字段，未设置时返回 public"""
+def _get_user_centers(user_id: str) -> list[str]:
+    """从 user_store 查询用户的归属中心列表
+
+    优先读取 centers 字段（JSON 数组），回退到单 center 字段，
+    再回退到 public。
+    """
     try:
         from user_store import get_store
-        user = get_store().get_user(user_id)
-        if user and user.get("center"):
-            return user["center"]
+        store = get_store()
+        centers = store.get_user_centers(user_id)
+        if centers:
+            return centers
+        # 回退：检查单 center 字段
+        user = store.get_user(user_id)
+        if user and user.get("center") and user["center"] != "public":
+            return [user["center"]]
     except Exception as e:
-        logger.debug(f"查询用户部门失败: {e}")
-    return "public"
+        logger.debug(f"查询用户中心失败: {e}")
+    return ["public"]
+
+
+def _format_centers_display(centers: list[str]) -> str:
+    """格式化中心列表为展示文本"""
+    names = [get_center_name(c) for c in centers if c and c != "public"]
+    if names:
+        return "、".join(names)
+    return "全公司公开"
 
 
 def queue_review_for_upload(result: dict, uploader_user_id: str,
@@ -345,7 +372,8 @@ def queue_review_for_upload(result: dict, uploader_user_id: str,
     if not result.get("success") or not result.get("file_path"):
         return None
     service = get_review_service()
-    suggested_dept = _get_user_department(uploader_user_id)
+    user_centers = _get_user_centers(uploader_user_id)
+    suggested_dept = user_centers[0] if user_centers else "public"
     request = service.create_request(
         file_path=result["file_path"],
         file_name=result["file_name"],
@@ -353,6 +381,7 @@ def queue_review_for_upload(result: dict, uploader_user_id: str,
         uploader_user_id=uploader_user_id,
         uploader_name=uploader_name,
         suggested_department=suggested_dept,
+        uploader_centers=user_centers,
     )
     if request:
         service.notify_async(request)

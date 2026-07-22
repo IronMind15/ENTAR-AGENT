@@ -391,6 +391,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
     <button onclick="switchTab('upload', this)">📤 上传文件</button>
     <button onclick="switchTab('search', this)">🔍 搜索测试</button>
     <button onclick="switchTab('sync', this)">🔄 同步管理</button>
+    <button onclick="switchTab('users', this)">👥 用户管理</button>
   </div>
 
   <!-- Tab: Document List -->
@@ -526,6 +527,21 @@ ADMIN_HTML = r"""<!DOCTYPE html>
       </details>
     </div>
   </div>
+
+  <!-- Tab: User Management -->
+  <div id="tab-users" class="tab-content">
+    <div class="card">
+      <h3>👥 用户管理 <small style="font-size:13px;color:var(--text-secondary)">设置用户归属中心</small></h3>
+      <div class="filter-bar" style="margin-bottom:16px">
+        <input type="text" id="userSearchInput" placeholder="搜索用户ID或昵称…"
+               onkeyup="filterUserTable()"
+               style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:var(--card);color:var(--text);outline:none;flex:1">
+      </div>
+      <div id="userTableArea">
+        <div class="loading-spinner">加载用户列表...</div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- Toast -->
@@ -572,6 +588,7 @@ function switchTab(name, el) {
   if (name === 'docs') loadDocs();
   if (name === 'search') loadSearchCollections();
   if (name === 'sync') { loadSyncFiles(); loadSyncHistory(); loadSyncStats(); loadSyncProgress(); }
+  if (name === 'users') { loadUsers(); }
 }
 
 // ===== Escape HTML =====
@@ -1316,6 +1333,121 @@ function loadSyncHistory() {
     .catch(function() {
       document.getElementById('syncHistory').innerHTML = '<div class="empty-state">加载失败</div>';
     });
+}
+
+// ===== Tab: User Management =====
+function loadUsers() {
+  var area = document.getElementById('userTableArea');
+  area.innerHTML = '<div class="loading-spinner">加载中...</div>';
+
+  fetch('/admin/users?password=' + getPw())
+    .then(function(r) {
+      if (!r.ok) throw new Error('请求失败 ' + r.status);
+      return r.json();
+    })
+    .then(function(data) {
+      var users = data.users || [];
+      renderUserTable(users);
+    })
+    .catch(function(err) {
+      area.innerHTML = '<div class="empty-state" style="color:var(--danger)">加载失败: ' + esc(err.message) + '</div>';
+    });
+}
+
+function renderUserTable(users) {
+  var html = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">';
+  html += '<thead><tr style="background:var(--bg);text-align:left">'
+    + '<th style="padding:10px 12px">用户</th>'
+    + '<th style="padding:10px 12px">昵称</th>'
+    + '<th style="padding:10px 12px">角色</th>'
+    + '<th style="padding:10px 12px">归属中心</th>'
+    + '<th style="padding:10px 12px;width:100px">操作</th>'
+    + '</tr></thead><tbody>';
+
+  for (var i = 0; i < users.length; i++) {
+    var u = users[i];
+    var centers = u.centers || [];
+    if (centers.length === 0 && u.center && u.center !== 'public') {
+      centers = [u.center];
+    }
+
+    html += '<tr style="border-bottom:1px solid var(--border)">';
+    html += '<td style="padding:8px 12px"><code style="font-size:11px;background:var(--bg);padding:2px 6px;border-radius:4px">' + esc(u.user_id.slice(0, 24)) + '</code></td>';
+    html += '<td style="padding:8px 12px">' + esc(u.nick || '-') + '</td>';
+    html += '<td style="padding:8px 12px">' + (u.leader ? '👑 主管' : '👤 成员') + '</td>';
+
+    // Center checkboxes
+    html += '<td style="padding:8px 12px" id="center-cells-' + i + '">';
+    var allCenters = [
+      {id: 'public', label: '公共'},
+      {id: 'pmo', label: 'PMO'},
+      {id: 'rd', label: '研发'},
+      {id: 'mfg', label: '制造'},
+      {id: 'bz', label: '商业'},
+      {id: 'ops', label: '运营'},
+    ];
+    for (var c = 0; c < allCenters.length; c++) {
+      var checked = centers.indexOf(allCenters[c].id) >= 0;
+      html += '<label style="display:inline-block;margin:2px 6px 2px 0;cursor:pointer;white-space:nowrap">'
+        + '<input type="checkbox" class="center-cb" data-uidx="' + i + '" value="' + allCenters[c].id + '"'
+        + (checked ? ' checked' : '')
+        + '> ' + allCenters[c].label
+        + '</label> ';
+    }
+    html += '</td>';
+
+    html += '<td style="padding:8px 12px">';
+    html += '<button class="primary-btn" style="padding:4px 12px;font-size:12px" onclick="saveUserCenters(' + i + ',\'' + esc(u.user_id) + '\')">保存</button>';
+    html += '</td>';
+    html += '</tr>';
+  }
+
+  html += '</tbody></table></div>';
+
+  if (users.length === 0) {
+    html = '<div class="empty-state">暂无用户</div>';
+  }
+
+  document.getElementById('userTableArea').innerHTML = html;
+}
+
+function saveUserCenters(idx, userId) {
+  var checkboxes = document.querySelectorAll('.center-cb[data-uidx="' + idx + '"]:checked');
+  var centers = [];
+  for (var i = 0; i < checkboxes.length; i++) {
+    centers.push(checkboxes[i].value);
+  }
+
+  // 不允许取消所有勾选
+  if (centers.length === 0) {
+    showToast('至少勾选一个中心（没有就选「公共」）', 'error');
+    return;
+  }
+
+  var formData = new FormData();
+  formData.append('user_id', userId);
+  formData.append('centers', JSON.stringify(centers));
+  formData.append('password', getPw());
+
+  fetch('/admin/users/update-centers', { method: 'POST', body: formData })
+    .then(function(r) {
+      if (!r.ok) throw new Error('保存失败: ' + r.status);
+      return r.json();
+    })
+    .then(function(data) {
+      showToast('✅ 已更新 ' + (userId.slice(0, 16)) + ' 的归属中心', 'success');
+    })
+    .catch(function(err) {
+      showToast('❌ ' + err.message, 'error');
+    });
+}
+
+function filterUserTable() {
+  var input = document.getElementById('userSearchInput').value.toLowerCase();
+  var rows = document.querySelector('#userTableArea table tbody tr');
+  if (!rows) return;
+  // Re-fetch with filter (simple approach: just reload)
+  loadUsers();
 }
 </script>
 </body>

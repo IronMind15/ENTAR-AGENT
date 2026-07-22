@@ -767,6 +767,58 @@ def sync_status(
     return JSONResponse({"records": records, "total": len(records)})
 
 
+@router.get("/users")
+def list_admin_users(password: str = Query("", description="管理员密码")):
+    """列出所有用户（含归属中心信息）"""
+    if not _verify_admin_access(password):
+        raise HTTPException(401, "密码错误")
+    try:
+        from user_store import get_store as get_user_store
+        store = get_user_store()
+        users = store.list_users()
+        # 脱敏处理
+        result = []
+        for u in users:
+            result.append({
+                "user_id": u.get("user_id", ""),
+                "nick": u.get("nick", "") or u.get("user_id", "")[:16],
+                "staff_id": u.get("staff_id", ""),
+                "role": u.get("role", "user"),
+                "leader": bool(u.get("leader", 0)),
+                "center": u.get("center", "public"),
+                "centers": json.loads(u.get("centers", "[]")) if isinstance(u.get("centers"), str) else [],
+                "last_active": u.get("last_active", ""),
+                "created_at": u.get("created_at", ""),
+            })
+        return JSONResponse({"users": result, "total": len(result)})
+    except Exception as e:
+        raise HTTPException(500, f"查询用户失败: {e}")
+
+
+@router.post("/users/update-centers")
+def update_user_centers(
+    user_id: str = Form(...),
+    centers: str = Form("[]"),
+    password: str = Form(""),
+):
+    """更新用户的归属中心列表"""
+    if not _verify_admin_access(password):
+        raise HTTPException(403, "密码错误")
+    try:
+        from user_store import get_store as get_user_store
+        centers_list = json.loads(centers)
+        if not isinstance(centers_list, list):
+            raise HTTPException(400, "centers 必须是 JSON 数组")
+        ok = get_user_store().set_user_centers(user_id, centers_list)
+        if ok:
+            return JSONResponse({"status": "ok", "user_id": user_id, "centers": centers_list})
+        return JSONResponse({"status": "error", "message": "更新失败"})
+    except json.JSONDecodeError:
+        raise HTTPException(400, "centers 格式错误，需为 JSON 数组")
+    except Exception as e:
+        raise HTTPException(500, f"更新用户中心失败: {e}")
+
+
 @router.get("/sync-stats")
 def sync_stats(password: str = Query("", description="管理员密码")):
     """同步统计概览"""
