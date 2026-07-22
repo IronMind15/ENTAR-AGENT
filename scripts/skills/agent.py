@@ -21,50 +21,15 @@ import httpx
 
 from config import DEEPSEEK_API_KEY
 from skills import BaseSkill, register
+from tools import get_tool_definitions, execute_tool as _execute_registered_tool
 
 logger = logging.getLogger("agent")
 
 # 共享 HTTP 客户端（复用连接，避免每次建新连接）
 _HTTP_CLIENT = httpx.Client(timeout=60)
 
-# ===== 工具定义 =====
-
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "search_knowledge_base",
-            "description": "搜索 PCS 故障知识库。当用户问 PCS 故障代码（d4-1 等格式）、告警、停机、不启动等设备异常现象时使用。包含故障代码的名称、原因、地址、位地址等详细信息。只含 PCS 产品故障数据，不含行业标准或技术规范。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "搜索关键词，使用用户问题中的核心词（故障代码、现象描述、文档标题等）。"
-                    }
-                },
-                "required": ["query"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_standards",
-            "description": "搜索储能变流器/光伏行业标准。包含国家标准(GB/T、GB)、行业标准、国际标准(IEC、EN)等，覆盖安全要求、并网要求、检测方法、电气性能、绝缘配合等技术规范内容。当用户询问国家标准、行业规范、技术要求或标准编号时使用。不包含 PCS 故障代码。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "搜索关键词，使用用户问题中的核心词（标准编号、术语、检测项目、技术指标等）。"
-                    }
-                },
-                "required": ["query"]
-            }
-        }
-    }
-]
+# ===== 工具定义（从注册中心自动获取，新增工具无需改本文件） =====
+TOOLS = get_tool_definitions()
 
 # ===== System Prompt（从文件加载） =====
 
@@ -145,6 +110,9 @@ def _call_deepseek(
 def _execute_tool(tool_call: dict) -> str:
     """执行工具调用，返回 JSON 字符串结果
 
+    通过工具注册中心路由到对应的处理函数，无需手动 if-elif 分派。
+    新增工具只需在 tools/ 下新建模块并用 @register 注册，无需改本文件。
+
     Args:
         tool_call: API 返回的 tool_call 对象
             { "id": "...", "type": "function", "function": { "name": "...", "arguments": "..." } }
@@ -159,64 +127,7 @@ def _execute_tool(tool_call: dict) -> str:
         logger.warning(f"工具参数解析失败: {tool_call.get('function', {}).get('arguments', '')}")
         return json.dumps({"error": "工具参数解析失败，请重试"}, ensure_ascii=False)
 
-    if fn_name == "search_knowledge_base":
-        query = args.get("query", "").strip()
-        if not query:
-            return json.dumps({"error": "搜索关键词为空，请提供要搜索的内容"}, ensure_ascii=False)
-
-        logger.info(f"  工具调用: search_knowledge_base(query={query})")
-
-        # 延迟导入 error_query（避免循环导入）
-        from skills.error_query import search_kb
-
-        results = search_kb(query)
-        if not results:
-            return json.dumps(
-                {"found": False, "results": [], "message": f"未找到与「{query}」相关的故障信息"},
-                ensure_ascii=False,
-            )
-
-        # 清理内部字段（_ 开头的供内部使用，不给 LLM 看）
-        clean_results = []
-        for r in results:
-            item = {k: v for k, v in r.items() if not k.startswith("_")}
-            clean_results.append(item)
-
-        return json.dumps({"found": True, "results": clean_results}, ensure_ascii=False)
-
-    if fn_name == "search_standards":
-        query = args.get("query", "").strip()
-        if not query:
-            return json.dumps({"error": "搜索关键词为空，请提供要搜索的内容"}, ensure_ascii=False)
-
-        logger.info(f"  工具调用: search_standards(query={query})")
-
-        # 延迟导入 standards_query
-        from skills.standards_query import search_kb as search_standards_kb
-
-        results = search_standards_kb(query)
-        if not results:
-            return json.dumps(
-                {"found": False, "results": [], "message": f"未找到与「{query}」相关的标准信息"},
-                ensure_ascii=False,
-            )
-
-        # 清理内部字段，保留 LLM 所需字段
-        clean_results = []
-        for r in results:
-            item = {
-                k: v for k, v in r.items()
-                if not k.startswith("_") or k == "_content"
-            }
-            # LLM 需要看到摘要内容来判断相关性
-            if "_content" in r:
-                item["content_summary"] = r["_content"]
-            clean_results.append(item)
-
-        return json.dumps({"found": True, "results": clean_results}, ensure_ascii=False)
-
-    logger.warning(f"未知工具调用: {fn_name}")
-    return json.dumps({"error": f"未知工具: {fn_name}"}, ensure_ascii=False)
+    return _execute_registered_tool(fn_name, args)
 
 
 def _handle_impl(query: str, user_id: str = "") -> dict:
