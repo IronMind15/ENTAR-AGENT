@@ -106,6 +106,10 @@ class ChromaStore(VectorStore):
     def _get_embedding(self):
         """懒加载 embedding 模型（首次调用时加载 ~30MB）"""
         if self._ef is None:
+            # 离线加载：模型已本地缓存，避免联网检查更新导致加载失败
+            # （国内访问 HF 不稳定，联网检查会抛异常导致检索全空）
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
             from chromadb.utils import embedding_functions
             logger.info("首次使用，加载 embedding 模型 BAAI/bge-small-zh-v1.5（~30MB）...")
             self._ef = embedding_functions.SentenceTransformerEmbeddingFunction(

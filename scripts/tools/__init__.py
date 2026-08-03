@@ -100,3 +100,4 @@ def execute_tool(name: str, args: dict) -> str:
 # ===== 自动导入工具模块（确保 @register 装饰器执行） =====
 from . import search_knowledge_base  # noqa: E402, F811
 from . import search_standards       # noqa: E402, F811
+from . import calc_pcb_trace         # noqa: E402, F811 — PCB 走线计算（IPC-2221）

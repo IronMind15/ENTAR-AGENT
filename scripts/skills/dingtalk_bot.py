@@ -34,6 +34,40 @@ from config import DINGTALK_CLIENT_ID, DINGTALK_CLIENT_SECRET
 
 logger = logging.getLogger("dingtalk_bot")
 
+# ===== 用户体验：处理中即时反馈 + 错误码 =====
+# 慢操作（走 Agent/LLM 或文件下载）先回一条提示，避免用户干等
+PENDING_HINT_TEXT = "⏳ 收到，正在处理中，请稍候..."
+PENDING_HINT_FILE = "📎 收到文件，正在处理，请稍候..."
+PENDING_HINT_IMAGE = "🖼️ 收到图片，正在保存，请稍候..."
+
+# 错误码体系（出现问题时返回，方便定位排查）
+ERROR_CODE_INTERNAL = 1000   # 内部错误
+ERROR_CODE_LLM = 1001        # LLM / DeepSeek 调用失败
+ERROR_MESSAGE = "❌ 处理出错了（错误码：{code}）。请稍后重试，或联系管理员排查。"
+
+# 高于此优先级的技能为"秒回"快速技能（纯本地，无需"正在处理"提示）
+# 故障查询(100)、PCB计算(90) 都是毫秒级；RAG Agent(50) 走 LLM 需要提示
+FAST_SKILL_PRIORITY = 50
+
+
+def _is_fast_operation(text: str) -> bool:
+    """判断是否为秒回操作（无需"正在处理"提示）
+
+    秒回 = 审核指令 / 审核口令 / 快速技能（故障精确匹配、PCB计算等纯本地毫秒级）
+    慢操作 = 走 RAG Agent（DeepSeek 判断 + 检索 + 生成）
+    """
+    t = (text or "").strip()
+    if t in ("查看我的审核ID", "我的审核ID", "查看我的钉钉ID"):
+        return True
+    if t.startswith(("同意同步", "拒绝同步")):
+        return True
+    try:
+        from skills import get_matched_skill
+        skill = get_matched_skill(t)
+        return bool(skill and getattr(skill, "priority", 0) > FAST_SKILL_PRIORITY)
+    except Exception:
+        return False
+
 
 class ErrorQueryHandler(ChatbotHandler):
     """处理钉钉机器人消息，支持文本/文件/图片"""
@@ -81,37 +115,49 @@ class ErrorQueryHandler(ChatbotHandler):
         if not text:
             return AckMessage.STATUS_OK, "ok"
 
-        # ---- 审核口令与普通技能路由 ----
-        if text in ("查看我的审核ID", "我的审核ID", "查看我的钉钉ID"):
-            answer = (
-                f"你的钉钉员工 ID：{staff_id}"
-                if staff_id else
-                "当前消息没有携带钉钉员工 ID，请确认应用已取得通讯录基础权限。"
-            )
-            result = {"answer": answer, "source": "review_identity"}
-        else:
-            from knowledge_review import handle_review_message
-            review_answer = handle_review_message(text, staff_id)
-            if review_answer is not None:
-                result = {"answer": review_answer, "source": "knowledge_review"}
-            else:
-                from skills import get_matched_skill
+        # ---- 判断是否为"秒回"操作（无需"正在处理"提示） ----
+        is_fast = _is_fast_operation(text)
 
-                skill_cls = get_matched_skill(text)
-                if skill_cls:
-                    logger.info(f"  → {skill_cls.name}: {text[:40]}")
-                    result = skill_cls.handle(text, user_id=user_id)
-                else:
-                    logger.info(f"  → 备用处理: {text[:40]}")
-                    result = {
-                        "answer": "抱歉，我暂时无法处理这个问题。",
-                        "source": "fallback",
-                    }
+        # 慢操作（走 Agent/LLM）先回提示，避免用户干等
+        if not is_fast:
+            try:
+                self.reply_text(PENDING_HINT_TEXT, bot_msg)
+                logger.info(f"已发送处理提示: {text[:40]}")
+            except Exception as hint_err:
+                logger.warning(f"发送处理提示失败: {hint_err}")
 
-        answer = result.get("answer", "") or "抱歉，我没有找到相关信息。"
-
-        # 回复 Markdown
+        # ---- 处理消息（整体捕获异常，返回错误码） ----
         try:
+            # 审核口令与普通技能路由
+            if text in ("查看我的审核ID", "我的审核ID", "查看我的钉钉ID"):
+                answer = (
+                    f"你的钉钉员工 ID：{staff_id}"
+                    if staff_id else
+                    "当前消息没有携带钉钉员工 ID，请确认应用已取得通讯录基础权限。"
+                )
+                result = {"answer": answer, "source": "review_identity"}
+            else:
+                from knowledge_review import handle_review_message
+                review_answer = handle_review_message(text, staff_id)
+                if review_answer is not None:
+                    result = {"answer": review_answer, "source": "knowledge_review"}
+                else:
+                    from skills import get_matched_skill
+
+                    skill_cls = get_matched_skill(text)
+                    if skill_cls:
+                        logger.info(f"  → {skill_cls.name}: {text[:40]}")
+                        result = skill_cls.handle(text, user_id=user_id)
+                    else:
+                        logger.info(f"  → 备用处理: {text[:40]}")
+                        result = {
+                            "answer": "抱歉，我暂时无法处理这个问题。",
+                            "source": "fallback",
+                        }
+
+            answer = result.get("answer", "") or "抱歉，我没有找到相关信息。"
+
+            # 回复 Markdown
             self.reply_markdown(
                 title="恩特小助手",
                 text=answer,
@@ -128,13 +174,26 @@ class ErrorQueryHandler(ChatbotHandler):
                 logger.warning(f"记录记忆失败: {mem_err}")
 
         except Exception as e:
-            logger.error(f"回复钉钉消息失败: {e}")
+            logger.exception(f"处理钉钉消息异常: {e}")
+            try:
+                self.reply_text(
+                    ERROR_MESSAGE.format(code=ERROR_CODE_INTERNAL),
+                    bot_msg,
+                )
+            except Exception:
+                pass
 
         return AckMessage.STATUS_OK, "ok"
 
     def _handle_file_message(self, bot_msg, user_id, sender):
         """处理文件消息"""
         try:
+            # 先回"收到文件"提示，下载需时间
+            try:
+                self.reply_text(PENDING_HINT_FILE, bot_msg)
+            except Exception:
+                pass
+
             # 获取文件信息（从 extensions 中提取）
             content = bot_msg.extensions.get("content", {})
             file_name = content.get("fileName", "unknown_file")
@@ -192,7 +251,9 @@ class ErrorQueryHandler(ChatbotHandler):
         except Exception as e:
             logger.error(f"处理文件消息失败: {e}")
             try:
-                self.reply_text("文件处理异常，请稍后重试", bot_msg)
+                self.reply_text(
+                    ERROR_MESSAGE.format(code=ERROR_CODE_INTERNAL), bot_msg
+                )
             except:
                 pass
 
@@ -201,6 +262,12 @@ class ErrorQueryHandler(ChatbotHandler):
     def _handle_image_message(self, bot_msg, user_id, sender):
         """处理图片消息"""
         try:
+            # 先回"收到图片"提示，保存需时间
+            try:
+                self.reply_text(PENDING_HINT_IMAGE, bot_msg)
+            except Exception:
+                pass
+
             # 获取图片下载码列表
             image_list = bot_msg.get_image_list()
             if not image_list:
@@ -246,7 +313,9 @@ class ErrorQueryHandler(ChatbotHandler):
         except Exception as e:
             logger.error(f"处理图片消息失败: {e}")
             try:
-                self.reply_text("图片处理异常，请稍后重试", bot_msg)
+                self.reply_text(
+                    ERROR_MESSAGE.format(code=ERROR_CODE_INTERNAL), bot_msg
+                )
             except:
                 pass
 

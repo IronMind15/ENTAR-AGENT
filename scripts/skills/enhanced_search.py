@@ -23,6 +23,9 @@ import threading
 
 # 国内 HuggingFace 镜像（首次加载 rerank 模型需要下载）
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+# 模型已本地缓存时离线加载，避免联网检查失败导致检索挂掉
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 logger = logging.getLogger("enhanced_search")
 
