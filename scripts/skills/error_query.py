@@ -9,6 +9,7 @@
 import os
 import re
 import sys
+import time
 import logging
 
 # Windows UTF-8
@@ -82,32 +83,51 @@ def call_deepseek(prompt: str, max_tokens: int = 200) -> str:
     if not DEEPSEEK_API_KEY:
         logger.warning("DEEPSEEK_API_KEY 未配置，跳过 LLM 提取")
         return ""
-    try:
-        r = _HTTP_CLIENT.post(
-            "https://api.deepseek.com/chat/completions",
-            headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
-            json={
-                "model": "deepseek-v4-flash",
-                "messages": [
-                    {"role": "system", "content": "你是一个只输出关键词的工具，不要解释，不要多余内容。"},
-                    {"role": "user", "content": prompt},
-                ],
-                "temperature": 0.1,
-                "max_tokens": max_tokens,
-            },
-        )
-        if r.status_code == 200:
-            body = r.json()
-            if body:
-                return body["choices"][0]["message"]["content"].strip()
-        else:
+
+    # ISP 偶发波动 / 服务端瞬断 / 限流时自动重试（指数退避）
+    _RETRYABLE_STATUS = (429, 500, 502, 503, 504)
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        try:
+            r = _HTTP_CLIENT.post(
+                "https://api.deepseek.com/chat/completions",
+                headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
+                json={
+                    "model": "deepseek-v4-flash",
+                    "messages": [
+                        {"role": "system", "content": "你是一个只输出关键词的工具，不要解释，不要多余内容。"},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "temperature": 0.1,
+                    "max_tokens": max_tokens,
+                },
+            )
+            if r.status_code == 200:
+                body = r.json()
+                if body:
+                    # content 可能为 None，兼容处理
+                    content = body["choices"][0]["message"].get("content") or ""
+                    return content.strip()
+            if r.status_code in _RETRYABLE_STATUS and attempt < max_attempts:
+                logger.warning(
+                    f"DeepSeek API 返回 {r.status_code}（第 {attempt}/{max_attempts} 次），稍后重试")
+                time.sleep(attempt)  # 1s → 2s 退避
+                continue
             logger.warning(f"DeepSeek API 返回非 200: {r.status_code}")
-    except httpx.TimeoutException:
-        logger.warning("DeepSeek API 超时")
-    except httpx.RequestError as e:
-        logger.warning(f"DeepSeek API 请求失败: {e}")
-    except Exception as e:
-        logger.warning(f"DeepSeek API 未知错误: {e}")
+        except httpx.TimeoutException:
+            logger.warning(f"DeepSeek API 超时（第 {attempt}/{max_attempts} 次）")
+            if attempt < max_attempts:
+                time.sleep(attempt)
+                continue
+        except httpx.RequestError as e:
+            logger.warning(
+                f"DeepSeek API 请求失败: {e}（第 {attempt}/{max_attempts} 次）")
+            if attempt < max_attempts:
+                time.sleep(attempt)
+                continue
+        except Exception as e:
+            logger.warning(f"DeepSeek API 未知错误: {e}")
+        break
     return ""
 
 

@@ -10,6 +10,7 @@
   - 钉钉端上传由 user_store.check_permission() 控制（基于 leader/role）
 """
 
+import html
 import json
 import os
 import uuid
@@ -39,6 +40,23 @@ FILE_DIRS = {
 
 # 钉钉上传目录（按用户/日期分类）
 UPLOAD_DIR = os.path.join(_PROJECT_ROOT, "data", "uploads")
+
+# 数据根目录：sync-delete / sync-trigger 等接受 file_path 的接口
+# 只能操作此目录内的文件，防止未授权删除/处理服务器任意路径
+_DATA_ROOT = os.path.join(_PROJECT_ROOT, "data")
+
+
+def _is_within_data_dir(path: str) -> bool:
+    """判断路径是否位于项目 data/ 目录内（防任意文件删除/入库）"""
+    if not path:
+        return False
+    try:
+        root = os.path.abspath(_DATA_ROOT)
+        candidate = os.path.abspath(os.path.normpath(path))
+        return (candidate == root
+                or candidate.startswith(root + os.sep))
+    except (OSError, ValueError):
+        return False
 
 
 def _get_admin_password() -> str:
@@ -93,8 +111,10 @@ def admin_home(request: Request):
 
 
 @router.get("/collections")
-def list_collections():
+def list_collections(password: str = Query("", description="管理员密码")):
     """列出所有 collection 及其统计数据"""
+    if not _verify_admin_access(password):
+        raise HTTPException(403, "密码错误，无权访问")
     store = get_store()
     collections = store.list_collections()
     result = {}
@@ -104,11 +124,14 @@ def list_collections():
 
 
 @router.get("/docs")
-def list_docs(collection: str = Query("", description="按 collection 过滤")):
+def list_docs(collection: str = Query("", description="按 collection 过滤"),
+              password: str = Query("", description="管理员密码")):
     """列出已入库文档，按 collection 分组
 
     从 Chroma 中读取 metadata，按 file_name 字段归组。
     """
+    if not _verify_admin_access(password):
+        raise HTTPException(403, "密码错误，无权访问")
     try:
         store = get_store()
         collections = store.list_collections()
@@ -230,7 +253,8 @@ async def upload_file(
 
 
 @router.get("/upload-status/{task_id}")
-def upload_status(task_id: str):
+def upload_status(task_id: str,
+                  password: str = Query("", description="管理员密码")):
     """查询异步上传任务的处理状态
 
     前端轮询此接口获取进度，status 取值:
@@ -305,11 +329,14 @@ def search_docs(
     q: str = Query(..., description="搜索关键词"),
     collection: str = Query("", description="要搜索的 collection（空则搜所有）"),
     limit: int = Query(5, ge=1, le=20, description="返回条数"),
+    password: str = Query("", description="管理员密码"),
 ):
     """在线搜索测试
 
     直接查询向量数据库，返回匹配结果及距离分数。
     """
+    if not _verify_admin_access(password):
+        raise HTTPException(403, "密码错误，无权访问")
     store = get_store()
 
     if collection:
@@ -367,18 +394,23 @@ def _build_stats_html(stats: dict, users: list[dict],
     """构建统计看板 HTML"""
     pw_param = f"?password={password}" if password else ""
 
-    # 用户表格行
+    # 用户表格行（所有用户可控字段统一转义，防存储型 XSS）
     user_rows = ""
     for u in users:
-        uid = u.get("user_id", "")[:24]
-        nick = u.get("nick", "") or "-"
-        title = u.get("title", "") or "-"
+        uid = html.escape(u.get("user_id", "")[:24])
+        nick = html.escape(u.get("nick", "") or "-")
+        title = html.escape(u.get("title", "") or "-")
         leader = "✅ 主管" if u.get("leader") else ""
-        dept = ", ".join(json.loads(u.get("department_names", "[]"))) or "-"
+        try:
+            dept = ", ".join(json.loads(u.get("department_names", "[]")))
+        except (ValueError, TypeError):
+            dept = ""
+        dept = html.escape(dept or "-")
         msg_count = per_user.get(u.get("user_id", ""), 0)
-        last_active = (u.get("last_active", "") or "")[:10]
+        last_active = html.escape((u.get("last_active", "") or "")[:10])
+        user_id_attr = html.escape(u.get("user_id", ""))
         user_rows += (
-            f"<tr><td title='{u.get('user_id','')}'>{uid}</td>"
+            f"<tr><td title='{user_id_attr}'>{uid}</td>"
             f"<td>{nick}</td>"
             f"<td>{title}</td>"
             f"<td>{leader}</td>"
@@ -394,7 +426,7 @@ def _build_stats_html(stats: dict, users: list[dict],
         pct = (d["count"] / max_count * 80) if max_count else 0
         trend_bars += (
             f"<div style='margin:4px 0'>"
-            f"<span style='display:inline-block;width:80px'>{d['date'][5:]}</span>"
+            f"<span style='display:inline-block;width:80px'>{html.escape(d['date'][5:])}</span>"
             f"<span style='display:inline-block;height:20px;"
             f"width:{pct}%;background:#4a90d9;border-radius:3px;"
             f"text-align:right;color:#fff;font-size:12px;"
@@ -405,10 +437,11 @@ def _build_stats_html(stats: dict, users: list[dict],
     # Top 用户
     top_rows = ""
     for i, u in enumerate(stats["top_users"][:10], 1):
+        uid = html.escape(u.get("user_id", ""))
         top_rows += (
             f"<tr><td>{i}</td>"
-            f"<td title='{u['user_id']}'>{u['user_id'][:24]}</td>"
-            f"<td>{u['count']}</td></tr>\n"
+            f"<td title='{uid}'>{uid[:24]}</td>"
+            f"<td>{u.get('count', 0)}</td></tr>\n"
         )
 
     return f"""<!DOCTYPE html>
@@ -599,6 +632,8 @@ def trigger_sync(
 
     if file_path:
         # 同步单个文件 — 异步后台处理，不阻塞 HTTP
+        if not _is_within_data_dir(file_path):
+            raise HTTPException(400, "只能同步 data/ 目录内的文件")
         if not os.path.isfile(file_path):
             raise HTTPException(400, f"文件不存在: {file_path}")
 
@@ -711,6 +746,10 @@ def sync_delete_file(
 
     if not file_path:
         raise HTTPException(400, "缺少 file_path")
+
+    # 路径白名单：只能删除 data/ 目录内的源文件
+    if not _is_within_data_dir(file_path):
+        raise HTTPException(400, "只能删除 data/ 目录内的源文件")
 
     if not os.path.isfile(file_path):
         raise HTTPException(404, f"文件不存在: {file_path}")

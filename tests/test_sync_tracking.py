@@ -33,6 +33,73 @@ class SyncTrackerTests(unittest.TestCase):
             self.assertEqual("上传员工", row["upload_user_name"])
             tracker.close()
 
+    def test_upsert_without_department_keeps_existing(self):
+        """同步路径不带 department 时，不能把已指定的部门覆盖为 public"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tracker = SyncTracker(str(Path(temp_dir) / "tracker.db"))
+            # 上传时指定研发中心
+            tracker.upsert_file(
+                "a.pdf", "a.pdf", 1, "hash-a", "standards",
+                suggested_department="rd",
+            )
+            # 同步处理时未携带 department（等同默认空串）
+            tracker.upsert_file("a.pdf", "a.pdf", 1, "hash-a", "standards")
+
+            row = tracker.get_status("a.pdf")
+            self.assertEqual("rd", row["suggested_department"])
+            tracker.close()
+
+    def test_upsert_without_department_first_insert_defaults_public(self):
+        """首次插入未指定部门时，落为 public"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tracker = SyncTracker(str(Path(temp_dir) / "tracker.db"))
+            tracker.upsert_file("a.pdf", "a.pdf", 1, "hash-a", "standards")
+
+            row = tracker.get_status("a.pdf")
+            self.assertEqual("public", row["suggested_department"])
+            tracker.close()
+
+    def test_update_department_writes_after_registration(self):
+        """审核申请创建时 update_department 应真正落库，供批准后读取"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tracker = SyncTracker(str(Path(temp_dir) / "tracker.db"))
+            tracker.upsert_file("a.pdf", "a.pdf", 1, "hash-a", "standards")
+            tracker.update_department("a.pdf", "rd")
+
+            row = tracker.get_status("a.pdf")
+            self.assertEqual("rd", row["suggested_department"])
+            tracker.close()
+
+    def test_scan_sync_passes_existing_department_to_process(self):
+        """批量/调度同步路径应从记录读取部门并传给 process_file"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            watched = Path(temp_dir) / "watched"
+            watched.mkdir()
+            file_path = watched / "dept.md"
+            file_path.write_text("content", encoding="utf-8")
+
+            tracker = Mock()
+            tracker.get_status.return_value = {
+                "sync_status": "error",       # 未 synced → 走处理分支
+                "file_hash": "old-hash",
+                "target_collection": "standards",
+                "suggested_department": "rd",
+            }
+            process = Mock(return_value=Document(
+                file_name="dept.md", collection="standards",
+                status="done", chunk_count=1, source="markdown",
+            ))
+            with patch.object(scheduler, "SCAN_DIRS", {"watched": "standards"}), \
+                    patch.object(scheduler, "_resolve", return_value=str(watched)), \
+                    patch.object(scheduler, "SyncTracker", return_value=tracker), \
+                    patch.object(scheduler, "check_chroma_has_file") as chroma_check, \
+                    patch.object(scheduler, "process_file", process):
+                scheduler._scan_and_sync()
+
+            process.assert_called_once()
+            self.assertEqual("rd", process.call_args.kwargs["department"])
+            tracker.close()
+
     def test_content_change_moves_synced_file_back_to_pending(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             tracker = SyncTracker(str(Path(temp_dir) / "tracker.db"))

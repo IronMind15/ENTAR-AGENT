@@ -604,7 +604,7 @@ function loadDocs() {
   loading.style.display = '';
   content.style.display = 'none';
 
-  fetch('/admin/docs')
+  fetch('/admin/docs?password=' + encodeURIComponent(getPw()))
     .then(function(r) {
       if (!r.ok) throw new Error('服务端返回 ' + r.status + ' ' + r.statusText);
       return r.json();
@@ -666,7 +666,7 @@ document.addEventListener('click', function(e) {
 function deleteDoc(collection, fileName) {
   if (!confirm('确定删除 "' + fileName + '" 吗？\n其所有切块将被清除。')) return;
 
-  fetch('/admin/docs?collection=' + encodeURIComponent(collection) + '&file_name=' + encodeURIComponent(fileName), {
+  fetch('/admin/docs?collection=' + encodeURIComponent(collection) + '&file_name=' + encodeURIComponent(fileName) + '&password=' + encodeURIComponent(getPw()), {
     method: 'DELETE',
   })
     .then(function(r) { return r.json(); })
@@ -741,6 +741,7 @@ function uploadFile(file) {
   formData.append('file', file);
   formData.append('collection', document.getElementById('uploadCollection').value);
   formData.append('department', document.getElementById('uploadDepartment').value);
+  formData.append('password', getPw());
 
   fetch('/admin/upload', { method: 'POST', body: formData })
     .then(function(r) {
@@ -770,7 +771,7 @@ function uploadFile(file) {
 
 function pollTaskStatus(taskId, fileName, fill, text, result) {
   var pollTimer = setInterval(function() {
-    fetch('/admin/upload-status/' + taskId)
+    fetch('/admin/upload-status/' + taskId + '?password=' + encodeURIComponent(getPw()))
       .then(function(r) {
         if (!r.ok) throw new Error('查询失败');
         return r.json();
@@ -840,7 +841,7 @@ function pollTaskStatus(taskId, fileName, fill, text, result) {
 
 // ===== Tab 3: Search =====
 function loadSearchCollections() {
-  fetch('/admin/collections')
+  fetch('/admin/collections?password=' + encodeURIComponent(getPw()))
     .then(function(r) { return r.json(); })
     .then(function(data) {
       var sel = document.getElementById('searchCollection');
@@ -871,7 +872,7 @@ function searchDocs() {
   var resultsEl = document.getElementById('searchResults');
   resultsEl.innerHTML = '<div class="loading-spinner">搜索中...</div>';
 
-  var url = '/admin/search?q=' + encodeURIComponent(q) + '&limit=10';
+  var url = '/admin/search?q=' + encodeURIComponent(q) + '&limit=10&password=' + encodeURIComponent(getPw());
   if (coll) url += '&collection=' + encodeURIComponent(coll);
 
   fetch(url)
@@ -1146,7 +1147,7 @@ function asyncSyncFile(filePath, collection, force, btn) {
 
 function pollSyncTask(taskId, btn) {
   var pollTimer = setInterval(function() {
-    fetch('/admin/upload-status/' + taskId)
+    fetch('/admin/upload-status/' + taskId + '?password=' + encodeURIComponent(getPw()))
       .then(function(r) { return r.json(); })
       .then(function(status) {
         loadSyncProgress();  // 刷新进度面板

@@ -122,11 +122,18 @@ def _scan_and_sync(force: bool = False):
                 # 记录待处理
                 tracker.upsert_file(fpath, fname, fsize, fhash, target)
 
-                # 执行同步
+                # 执行同步（沿用记录中已有的建议部门，避免批量/调度路径
+                # 把上传时指定的部门静默清成 public）
+                department = (
+                    existing.get("suggested_department") or "public"
+                    if existing else "public"
+                )
+
                 try:
                     doc = process_file(fpath, file_name=fname,
                                        target_collection=target,
-                                       force=force)
+                                       force=force,
+                                       department=department)
                     if doc.status in ("done", "skipped"):
                         tracker.mark_synced(fpath)
                         logger.info(f"  ✅ {fname} → {doc.chunk_count} 块（来源: {doc.source}）")

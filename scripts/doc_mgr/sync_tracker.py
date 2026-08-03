@@ -118,7 +118,7 @@ class SyncTracker:
     def upsert_file(self, file_path: str, file_name: str, file_size: int,
                     file_hash: str, target_collection: str = "",
                     upload_user_id: str = "", upload_user_name: str = "",
-                    suggested_department: str = "public") -> None:
+                    suggested_department: str = "") -> None:
         """插入或更新文件记录
 
         Args:
@@ -129,18 +129,24 @@ class SyncTracker:
             target_collection: 目标知识库
             upload_user_id: 上传者钉钉 user_id
             upload_user_name: 上传者昵称
-            suggested_department: 建议所属中心 ID
+            suggested_department: 建议所属中心 ID。空串表示未指定：
+                首次插入时落为 public，更新时保留原值（避免后续同步/记录
+                路径把已指定的部门静默覆盖为 public）。
         """
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with self._lock:
             conn = self._get_conn()
+            # 注意：INSERT 的 COALESCE 会把空串提前转成 'public'，所以
+            # ON CONFLICT 分支不能依赖 excluded.suggested_department 判断
+            # 「是否未指定」——必须直接引用参数（?）判断原始值。
             conn.execute("""
                 INSERT INTO sync_status
                     (file_path, file_name, file_size, file_hash,
                      target_collection, upload_user_id, upload_user_name,
                      suggested_department,
                      sync_status, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'public'),
+                        'pending', ?)
                 ON CONFLICT(file_path) DO UPDATE SET
                     file_name      = excluded.file_name,
                     file_size      = excluded.file_size,
@@ -152,7 +158,8 @@ class SyncTracker:
                     upload_user_name = CASE
                         WHEN excluded.upload_user_name <> ''
                         THEN excluded.upload_user_name ELSE upload_user_name END,
-                    suggested_department = excluded.suggested_department,
+                    suggested_department = CASE
+                        WHEN ? <> '' THEN ? ELSE suggested_department END,
                     updated_at     = excluded.updated_at,
                     sync_status    = CASE
                         WHEN sync_status = 'error'
@@ -163,7 +170,27 @@ class SyncTracker:
                     END
             """, (file_path, file_name, file_size, file_hash,
                   target_collection, upload_user_id, upload_user_name,
-                  suggested_department, now))
+                  suggested_department, now,
+                  suggested_department, suggested_department))
+            conn.commit()
+
+    def update_department(self, file_path: str, department: str) -> None:
+        """更新文件的建议所属中心（审核申请创建时写入）
+
+        部门写入必须在文件登记（upsert_file）之后调用，确保审批通过后
+        _submit_sync_task 能从记录读取真实部门，而非默认 public。
+        """
+        if not department or department == "public":
+            return
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock:
+            conn = self._get_conn()
+            conn.execute("""
+                UPDATE sync_status SET
+                    suggested_department = ?,
+                    updated_at = ?
+                WHERE file_path = ?
+            """, (department, now, file_path))
             conn.commit()
 
     def create_review(self, file_path: str, reviewer_staff_id: str) -> str:

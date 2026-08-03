@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import sys
+import time
 
 _PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PARENT not in sys.path:
@@ -81,30 +82,46 @@ def _call_deepseek(
         # V4 模型 thinking mode 仅支持 tool_choice="auto"
         body["tool_choice"] = "auto"
 
-    try:
-        r = _HTTP_CLIENT.post(
-            "https://api.deepseek.com/chat/completions",
-            headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
-            json=body,
-        )
-        if r.status_code == 200:
-            data = r.json()
-            if data.get("choices"):
-                return data["choices"][0]["message"]
-            logger.warning("DeepSeek 返回空 choices")
-            return None
-        else:
+    # ISP 偶发波动 / 服务端瞬断 / 限流时自动重试（指数退避），避免全量失效
+    _RETRYABLE_STATUS = (429, 500, 502, 503, 504)
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        try:
+            r = _HTTP_CLIENT.post(
+                "https://api.deepseek.com/chat/completions",
+                headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
+                json=body,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                if data.get("choices"):
+                    return data["choices"][0]["message"]
+                logger.warning("DeepSeek 返回空 choices")
+                return None
+            if r.status_code in _RETRYABLE_STATUS and attempt < max_attempts:
+                logger.warning(
+                    f"DeepSeek API 返回 {r.status_code}（第 {attempt}/{max_attempts} 次），稍后重试")
+                time.sleep(attempt)  # 1s → 2s 退避
+                continue
             logger.warning(f"DeepSeek API 返回 {r.status_code}: {r.text[:200]}")
             return None
-    except httpx.TimeoutException:
-        logger.warning("DeepSeek API 超时")
-        return None
-    except httpx.RequestError as e:
-        logger.warning(f"DeepSeek API 请求失败: {e}")
-        return None
-    except Exception as e:
-        logger.warning(f"DeepSeek API 未知错误: {e}")
-        return None
+        except httpx.TimeoutException:
+            logger.warning(f"DeepSeek API 超时（第 {attempt}/{max_attempts} 次）")
+            if attempt < max_attempts:
+                time.sleep(attempt)
+                continue
+            return None
+        except httpx.RequestError as e:
+            logger.warning(
+                f"DeepSeek API 请求失败: {e}（第 {attempt}/{max_attempts} 次）")
+            if attempt < max_attempts:
+                time.sleep(attempt)
+                continue
+            return None
+        except Exception as e:
+            logger.warning(f"DeepSeek API 未知错误: {e}")
+            return None
+    return None
 
 
 def _execute_tool(tool_call: dict) -> str:
@@ -272,7 +289,8 @@ def _handle_impl(query: str, user_id: str = "") -> dict:
 
         # 没有工具调用 → 这就是最终回答
         if not assistant_msg.get("tool_calls"):
-            content = assistant_msg.get("content", "").strip()
+            # content 可能为 None（LLM 只返回 thinking/拒绝回答），需兼容
+            content = (assistant_msg.get("content") or "").strip()
             if content:
                 final_answer = content
                 source_tag = "agent(chat)" if loop_i == 0 else "agent(RAG)"

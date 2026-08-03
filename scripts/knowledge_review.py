@@ -151,6 +151,12 @@ class KnowledgeReviewService:
         review_id = self.tracker.create_review(
             file_path, ",".join(reviewers)
         )
+        # 把建议部门真正落库（create_review 只登记申请），审批通过后
+        # _submit_sync_task 才能从记录读取真实部门而非默认 public。
+        try:
+            self.tracker.update_department(file_path, suggested_department)
+        except Exception as exc:
+            logger.warning(f"写入建议部门失败（不影响申请创建）: {exc}")
         return {
             "review_id": review_id,
             "reviewers": reviewers,
