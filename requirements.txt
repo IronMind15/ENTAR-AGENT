@@ -7,6 +7,11 @@ httpx==0.28.1
 dingtalk-stream==0.24.3
 requests>=2.28.0  # MinerU API 调用需要
 
+# ===== 增强检索（v1.3.0 混合检索 + 重排） =====
+jieba==0.42.1              # 中文分词（BM25 混合检索）
+rank_bm25==0.2.2           # BM25 稀疏检索
+# bge-reranker-base 重排模型：首次使用需下载（优先本地 models/，可改用 ModelScope 下载）
+
 # ===== PDF 处理（doc_mgr 模块） =====
 # PyMuPDF — PDF 文字提取 + 标准编号识别（fitz）
 PyMuPDF==1.25.2

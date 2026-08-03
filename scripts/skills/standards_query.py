@@ -18,6 +18,7 @@ if sys.platform == "win32":
 
 from center_config import get_center_name
 from doc_mgr.storage import get_store
+from skills.enhanced_search import enhanced_query
 
 logger = logging.getLogger("standards_query")
 
@@ -128,20 +129,16 @@ def _semantic_search(query: str, centers: list[str] | None = None) -> list[dict]
     结果不足时回退到不限制部门（兼容早期未打 department 标签的旧数据）。
     """
     try:
-        store = get_store()
-
         # 1. 尝试按多中心过滤
         if centers:
             # 构建过滤条件：用户所有中心 + public（去重）
             filters = list(centers)
             if "public" not in filters:
                 filters.append("public")
-            query_kwargs = {
-                "query_text": query,
-                "n_results": SEARCH_TOP_K,
-                "where": {"department": {"$in": filters}},
-            }
-            filtered = store.query(COLLECTION_NAME, **query_kwargs)
+            filtered = enhanced_query(
+                COLLECTION_NAME, query_text=query, n_results=SEARCH_TOP_K,
+                where={"department": {"$in": filters}},
+            )
             items = _parse_query_results(filtered)
             if len(items) >= MIN_RESULTS_THRESHOLD:
                 return items
@@ -151,10 +148,8 @@ def _semantic_search(query: str, centers: list[str] | None = None) -> list[dict]
             )
 
         # 2. 无条件搜索（无中心 或 过滤回退）
-        results = store.query(
-            COLLECTION_NAME,
-            query_text=query,
-            n_results=SEARCH_TOP_K,
+        results = enhanced_query(
+            COLLECTION_NAME, query_text=query, n_results=SEARCH_TOP_K,
         )
         return _parse_query_results(results)
 

@@ -30,6 +30,7 @@ _HTTP_CLIENT = httpx.Client(timeout=15)
 from config import DEEPSEEK_API_KEY
 from skills import BaseSkill, register
 from doc_mgr.storage import get_store
+from skills.enhanced_search import enhanced_query
 
 logger = logging.getLogger("error_query")
 
@@ -330,8 +331,8 @@ def _handle_impl(query: str) -> dict:
             "↙ 可根据此判断提取是否准确，结果不对可换种说法重新提问\n\n"
         )
 
-    # ===== 第 3 关：语义搜索 =====
-    results = get_store().query(
+    # ===== 第 3 关：语义搜索（增强：混合检索 + 重排）=====
+    results = enhanced_query(
         COLLECTION_NAME,
         query_text=search_query,
         n_results=SEMANTIC_SEARCH_TOP_K,
@@ -370,15 +371,15 @@ def search_kb(query: str) -> list[dict]:
             meta["_score"] = 0.0
             return [meta]
 
-    # 语义搜索
+    # 语义搜索（增强：混合检索 + 重排）
     try:
-        results = get_store().query(
+        results = enhanced_query(
             COLLECTION_NAME,
             query_text=query,
             n_results=SEMANTIC_SEARCH_TOP_K,
         )
     except Exception as e:
-        logger.error(f"Chroma 语义搜索失败: {e}")
+        logger.error(f"增强检索失败: {e}")
         return []
 
     if not results or not results.get("documents") or not results["documents"][0]:

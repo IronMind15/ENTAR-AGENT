@@ -40,3 +40,6 @@ data/standards/mineru_output/
 
 # ── 部署打包产物 ──
 *.tar.gz
+
+# ── 本地模型（可重新下载，不退版本） ──
+models/
