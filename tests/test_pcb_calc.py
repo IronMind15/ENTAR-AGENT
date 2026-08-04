@@ -265,5 +265,63 @@ class PCBExtraCalculatorTests(unittest.TestCase):
             self.assertTrue(r["source"].startswith("PCB计算"), q)
 
 
+class PCBFixedCalculatorsTests(unittest.TestCase):
+    """修复回归：IPC-2152 / 差分对 / 安规 / 波长（此前无测试覆盖，差分与波长曾整体崩溃）"""
+
+    def test_trace2152_reverse_width(self):
+        """IPC-2152 已知电流 → 最小线宽"""
+        r = pcb_calc._handle_impl("IPC-2152 5A 1oz 外层要多宽")
+        self.assertIn("IPC-2152 最小线宽", r["answer"])
+        self.assertTrue(r["source"].startswith("PCB计算(trace2152)"), r["source"])
+
+    def test_trace2152_width_to_current(self):
+        """IPC-2152 已知线宽 → 最大载流（对照 IPC-2221）"""
+        r = pcb_calc._handle_impl("0.5mm 1oz IPC-2152 能过多少安")
+        self.assertIn("IPC-2152 最大载流", r["answer"])
+
+    def test_differential_reverse_width(self):
+        """100Ω 差分微带 → 反推线宽（修复 re.compile + flags 冲突崩溃）"""
+        r = pcb_calc._handle_impl("100Ω 差分微带 FR4 介质 0.4mm 间距 0.3mm 要多宽")
+        self.assertIn("所需线宽", r["answer"])
+        self.assertTrue(r["source"].startswith("PCB计算(differential)"), r["source"])
+
+    def test_differential_forward(self):
+        """给定差分参数 → 差分阻抗"""
+        r = pcb_calc._handle_impl("0.1mm 线宽 0.1mm 间距 差分微带 FR4 介质 0.2mm 阻抗多少")
+        self.assertIn("差分阻抗 Zdiff", r["answer"])
+
+    def test_creepage_380v(self):
+        """380V 爬电距离（安规查表 + 插值）"""
+        r = pcb_calc._handle_impl("380V 爬电距离 PD2 材料组 II")
+        self.assertIn("爬电距离", r["answer"])
+        self.assertTrue(r["source"].startswith("PCB计算(creepage)"), r["source"])
+
+    def test_signal_wavelength(self):
+        """100MHz 波长（修复 _extract_length 元组误判崩溃）"""
+        r = pcb_calc._handle_impl("100MHz 波长")
+        self.assertIn("波长 λ", r["answer"])
+
+    def test_2152_no_false_positive(self):
+        """「0.2152 毫米」不应误路由到 IPC-2152 计算器"""
+        self.assertEqual(pcb_calc._detect_calc_type("0.2152 毫米 走线能过多少安"), "trace")
+
+    def test_creepage_2500v_full_table(self):
+        """2.5kV 命中扩展后的爬电表（材料组 II → 17.5mm），不再低估为 7.1"""
+        res = pcb_calc._calc_creepage("2.5kV 爬电距离 PD2 材料组 II")
+        rows = dict(res["rows"])
+        self.assertIn("17.5", rows["爬电距离"])
+
+    def test_creepage_overflow_warning(self):
+        """超出查表范围（如 10kV 峰值）输出警示"""
+        res = pcb_calc._calc_creepage("10kV 电气间隙 PD2")
+        rows = dict(res["rows"])
+        self.assertIn("超出表范围", rows["电气间隙"])
+
+    def test_signal_wavelength_khz(self):
+        """100kHz 波长（低频同样支持，不静默跳过）"""
+        r = pcb_calc._handle_impl("100kHz 波长")
+        self.assertIn("波长 λ", r["answer"])
+
+
 if __name__ == "__main__":
     unittest.main()
