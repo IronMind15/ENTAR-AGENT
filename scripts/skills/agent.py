@@ -320,7 +320,15 @@ def _handle_impl(query: str, user_id: str = "") -> dict:
     else:
         # 循环正常结束（达到 MAX_AGENT_LOOPS 还没出结果）
         if not final_answer:
-            final_answer = "抱歉，我没能查到相关信息，建议换个问法试试。"
+            # 轮数超限 ≠ 真没查到：保留原兜底文案，但末尾追加「可能不完整」提示；
+            # 并在日志显式标记轮数耗尽，避免排查时误判为检索无结果
+            logger.warning(
+                f"Agent 达到轮数上限 {MAX_AGENT_LOOPS} 仍无最终答案，返回兜底文案")
+            final_answer = (
+                "抱歉，我没能查到相关信息，建议换个问法试试。"
+                "（提示：本次处理因复杂度较高被截断，以上结果可能不完整、"
+                "不代表真实情况，仅供参考）"
+            )
 
     if final_answer:
         return {"answer": final_answer, "source": source_tag}

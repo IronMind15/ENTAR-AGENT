@@ -81,6 +81,46 @@ class ProcessFileCollectionTests(unittest.TestCase):
         self.assertIn("experience_kb", collections)
         self.assertEqual(doc.status, "done")
 
+    def test_reedit_experience_replaces_version(self):
+        """纠错链路：编辑经验 .md 重新同步 → 同一 doc_id 触发版本替换（旧版本下线）"""
+        from doc_mgr import engine
+
+        tmp = tempfile.mkdtemp()
+        md_path = os.path.join(tmp, "经验.md")
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(TEMPLATE)
+
+        calls = []
+
+        class FakeStore:
+            def replace_document(self, collection, doc_id, file_name,
+                                 ids, documents, metadatas, legacy_ids=None):
+                version_id = metadatas[0].get("version_id", "") if metadatas else ""
+                calls.append({
+                    "collection": collection,
+                    "doc_id": doc_id,
+                    "version": version_id,
+                })
+                return len(calls)
+
+            def get(self, collection, **kwargs):
+                return {"ids": [], "metadatas": []}
+
+        with mock.patch.object(engine, "get_store", return_value=FakeStore()), \
+             mock.patch.object(engine, "SyncTracker"):
+            engine.process_file(md_path, target_collection="experience_kb")
+            # 模拟纠错：修改内容后重新同步
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write(TEMPLATE + "\n\n## 验证结果补充\n纠错后重新验证通过，未复发。")
+            engine.process_file(md_path, target_collection="experience_kb")
+
+        self.assertEqual(len(calls), 2)
+        # doc_id 基于路径稳定 → 修改后同一 doc_id → replace_document 走版本替换
+        self.assertEqual(calls[0]["doc_id"], calls[1]["doc_id"])
+        # 内容变化 → content_hash 变化 → 新版本，触发换版
+        self.assertNotEqual(calls[0]["version"], calls[1]["version"])
+        self.assertTrue(all(c["collection"] == "experience_kb" for c in calls))
+
     def test_default_collection_for_md_is_standards(self):
         """无显式 target_collection 时 .md 默认落 standards（保持原行为）"""
         from doc_mgr import engine

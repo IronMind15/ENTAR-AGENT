@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<mxfile host="app.diagrams.net" agent="Claude Code" version="21.6.5">
-  <diagram name="恩特小助手架构图" id="diagram-1">
-    <mxGraphModel dx="0" dy="0" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1100" pageHeight="850" background="#ffffff" math="0" shadow="0">
+<mxfile host="app.diagrams.net" agent="Claude Code" version="24.0.0">
+  <diagram name="恩特小助手架构图" id="diagram-v150">
+    <mxGraphModel dx="0" dy="0" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1200" pageHeight="920" background="#ffffff" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
 
         <!-- ===== 标题 ===== -->
-        <mxCell id="title" value="&lt;b&gt;恩特小助手 — 系统架构图&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=20;fontColor=#1a1a2e;strokeColor=none;fillColor=none;" vertex="1" parent="1">
-          <mxGeometry x="200" y="10" width="700" height="36" as="geometry" />
+        <mxCell id="title" value="&lt;b&gt;恩特小助手 — 系统架构图（v1.5.0）&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=20;fontColor=#1a1a2e;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry x="200" y="10" width="800" height="36" as="geometry" />
         </mxCell>
 
         <!-- ===== Layer 1: 用户入口 ===== -->
@@ -17,107 +17,123 @@
         </mxCell>
 
         <mxCell id="dingtalk" value="&lt;b&gt;💬 钉钉「恩特小助手」&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px;&quot;&gt;单聊搜索即可使用 · Stream 模式&lt;br&gt;无需公网 IP / 域名 / SSL&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0f3ff;strokeColor=#4361ee;strokeWidth=2;fontSize=13;fontColor=#2d47b8;verticalAlign=middle;align=center;" vertex="1" parent="1">
-          <mxGeometry x="180" y="60" width="270" height="70" as="geometry" />
+          <mxGeometry x="140" y="60" width="260" height="70" as="geometry" />
         </mxCell>
 
-        <mxCell id="web" value="&lt;b&gt;🌐 Web 页面&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px;&quot;&gt;http://localhost:8000&lt;br&gt;局域网内同事均可访问&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0f3ff;strokeColor=#4361ee;strokeWidth=2;fontSize=13;fontColor=#2d47b8;verticalAlign=middle;align=center;" vertex="1" parent="1">
-          <mxGeometry x="540" y="60" width="270" height="70" as="geometry" />
+        <mxCell id="web" value="&lt;b&gt;🌐 Web 页面&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px;&quot;&gt;http://localhost:8000&lt;br&gt;问答接口 GET→POST（P1 安全收尾）&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0f3ff;strokeColor=#4361ee;strokeWidth=2;fontSize=13;fontColor=#2d47b8;verticalAlign=middle;align=center;" vertex="1" parent="1">
+          <mxGeometry x="470" y="60" width="260" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="admin" value="&lt;b&gt;🛠 管理后台 /admin&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px;&quot;&gt;上传 / 同步 / 搜索 / 删除 / 审核&lt;br&gt;密码 + 权限鉴权 · 上传 MIME 双重校验&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0f3ff;strokeColor=#4361ee;strokeWidth=2;fontSize=13;fontColor=#2d47b8;verticalAlign=middle;align=center;" vertex="1" parent="1">
+          <mxGeometry x="800" y="60" width="260" height="70" as="geometry" />
         </mxCell>
 
         <!-- 用户入口 → 路由 -->
-        <mxCell id="edge-dingtalk-router" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4361ee;strokeWidth=2;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.3;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="dingtalk" target="fastapi">
+        <mxCell id="edge-dingtalk-router" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4361ee;strokeWidth=2;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.25;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="dingtalk" target="fastapi">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-
-        <mxCell id="edge-web-router" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4361ee;strokeWidth=2;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.7;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="web" target="fastapi">
+        <mxCell id="edge-web-router" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4361ee;strokeWidth=2;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="web" target="fastapi">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-admin-router" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4361ee;strokeWidth=2;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.75;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="admin" target="fastapi">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
         <!-- ===== Layer 2: 路由层 ===== -->
         <mxCell id="layer2-label" value="&lt;b&gt;路由层&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=13;fontColor=#f72585;strokeColor=none;fillColor=none;" vertex="1" parent="1">
-          <mxGeometry x="30" y="210" width="80" height="24" as="geometry" />
+          <mxGeometry x="30" y="200" width="80" height="24" as="geometry" />
         </mxCell>
 
-        <mxCell id="fastapi" value="&lt;b&gt;🔀 FastAPI 统一入口&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px;&quot;&gt;技能注册中心路由&lt;br&gt;高优先级 → 故障查询 · 低优先级 → 通用聊天托底&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff0f6;strokeColor=#f72585;strokeWidth=2;fontSize=13;fontColor=#c9184a;verticalAlign=middle;align=center;" vertex="1" parent="1">
-          <mxGeometry x="330" y="190" width="330" height="65" as="geometry" />
+        <mxCell id="fastapi" value="&lt;b&gt;🔀 main.py 统一入口&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px;&quot;&gt;FastAPI + 钉钉 Stream · 挂载 /admin&lt;br&gt;启动时执行崩溃恢复（清理遗留 staging/retired）&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff0f6;strokeColor=#f72585;strokeWidth=2;fontSize=13;fontColor=#c9184a;verticalAlign=middle;align=center;" vertex="1" parent="1">
+          <mxGeometry x="250" y="180" width="700" height="65" as="geometry" />
         </mxCell>
 
-        <!-- 路由 → 处理层（分叉） -->
-        <mxCell id="edge-router-err" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#f72585;strokeWidth=2;exitX=0.3;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="fastapi" target="error-query">
+        <mxCell id="agent" value="&lt;b&gt;🧭 agent.py Agent 循环&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px;&quot;&gt;快速通道：精确故障码 / 标准编号 → 秒回（不调 LLM）&lt;br&gt;智能路径：DeepSeek Function Calling → 工具注册中心&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff0f6;strokeColor=#f72585;strokeWidth=2;fontSize=13;fontColor=#c9184a;verticalAlign=middle;align=center;" vertex="1" parent="1">
+          <mxGeometry x="250" y="275" width="700" height="65" as="geometry" />
+        </mxCell>
+
+        <mxCell id="edge-router-agent" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#f72585;strokeWidth=2;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="fastapi" target="agent">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
-        <mxCell id="edge-router-chat" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#f72585;strokeWidth=2;exitX=0.7;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="fastapi" target="chat">
+        <!-- ===== Layer 3: 工具 / 技能层 ===== -->
+        <mxCell id="layer3-label" value="&lt;b&gt;工具 / 技能层&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=13;fontColor=#06d6a0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry x="30" y="370" width="90" height="24" as="geometry" />
+        </mxCell>
+
+        <mxCell id="tools" value="&lt;b&gt;🔧 tools/ 工具注册中心&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px;&quot;&gt;@register 注册 · LLM 自动调用&lt;hr&gt;search_knowledge_base（故障）· search_standards（标准）&lt;br&gt;search_experience_kb（经验）· calc_pcb_trace（PCB 走线）&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ecfdf5;strokeColor=#06d6a0;strokeWidth=2;fontSize=13;fontColor=#057855;verticalAlign=middle;align=left;overflow=hidden;" vertex="1" parent="1">
+          <mxGeometry x="80" y="350" width="460" height="150" as="geometry" />
+        </mxCell>
+
+        <mxCell id="pcb-calc" value="&lt;b&gt;🧮 pcb_calc 技能&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px;&quot;&gt;13 类计算器（走线/2152/差分/安规/综合校验…）&lt;br&gt;全本地秒回 · 不调 LLM&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ecfdf5;strokeColor=#06d6a0;strokeWidth=2;fontSize=13;fontColor=#057855;verticalAlign=middle;align=center;" vertex="1" parent="1">
+          <mxGeometry x="580" y="350" width="460" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="enhanced-search" value="&lt;b&gt;🔍 enhanced_search 增强检索&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px;&quot;&gt;向量 + BM25 双路召回 → RRF 融合&lt;br&gt;bge-reranker 重排（本地 models/）&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ecfdf5;strokeColor=#06d6a0;strokeWidth=2;fontSize=13;fontColor=#057855;verticalAlign=middle;align=center;" vertex="1" parent="1">
+          <mxGeometry x="580" y="440" width="460" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- agent → 工具 / 技能 -->
+        <mxCell id="edge-agent-tools" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#06d6a0;strokeWidth=2;exitX=0.2;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="agent" target="tools">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-agent-pcb" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#06d6a0;strokeWidth=2;exitX=0.6;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="agent" target="pcb-calc">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-agent-enhanced" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#06d6a0;strokeWidth=2;exitX=0.85;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="agent" target="enhanced-search">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
-        <!-- ===== Layer 3: 处理层 ===== -->
-        <mxCell id="layer3-label" value="&lt;b&gt;处理层&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=13;fontColor=#06d6a0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
-          <mxGeometry x="30" y="360" width="80" height="24" as="geometry" />
+        <!-- ===== Layer 4: 文档管理层 ===== -->
+        <mxCell id="layer4-label" value="&lt;b&gt;文档管理&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=13;fontColor=#0284c7;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry x="30" y="530" width="80" height="24" as="geometry" />
         </mxCell>
 
-        <!-- 故障查询 -->
-        <mxCell id="error-query" value="&lt;b&gt;🔧 故障查询（高优先级）&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px;&quot;&gt;error_query.py&lt;/font&gt;&lt;hr&gt;&lt;font style=&quot;font-size:11px;&quot;&gt;✅ 精确匹配故障代码 → 毫秒级，不调 LLM&lt;br&gt;✅ 语义搜索名称/原因 → Chroma 检索&lt;br&gt;✅ 复杂自然语言 → DeepSeek 提取关键词&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ecfdf5;strokeColor=#06d6a0;strokeWidth=2;fontSize=13;fontColor=#057855;verticalAlign=middle;align=left;overflow=hidden;" vertex="1" parent="1">
-          <mxGeometry x="100" y="320" width="380" height="130" as="geometry" />
+        <mxCell id="doc-mgr" value="&lt;b&gt;📦 doc_mgr 文档管理子系统&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px;&quot;&gt;上传 → 切块（PyMuPDF / Markdown）→ 入库&lt;br&gt;SHA-256 内容指纹 · staging/active/retired 版本替换 · 崩溃恢复&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;strokeWidth=2;fontSize=13;fontColor=#075985;verticalAlign=middle;align=center;" vertex="1" parent="1">
+          <mxGeometry x="250" y="510" width="700" height="65" as="geometry" />
         </mxCell>
 
-        <!-- 通用聊天 -->
-        <mxCell id="chat" value="&lt;b&gt;💬 通用聊天（托底）&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px;&quot;&gt;chat.py&lt;/font&gt;&lt;hr&gt;&lt;font style=&quot;font-size:11px;&quot;&gt;✅ 非故障问题 → DeepSeek 直接对话&lt;br&gt;✅ 系统提示词限定助手身份&lt;br&gt;✅ 知道的说，不知道不瞎编&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff8f0;strokeColor=#fb8500;strokeWidth=2;fontSize=13;fontColor=#b96300;verticalAlign=middle;align=left;overflow=hidden;" vertex="1" parent="1">
-          <mxGeometry x="520" y="320" width="380" height="130" as="geometry" />
-        </mxCell>
-
-        <!-- 故障查询 → Chroma -->
-        <mxCell id="edge-err-chroma" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#06d6a0;strokeWidth=2;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="error-query" target="chroma">
+        <mxCell id="edge-agent-docmgr" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#0284c7;strokeWidth=2;strokeDashPattern=6 4;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="agent" target="doc-mgr">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
-        <!-- 聊天 → DeepSeek -->
-        <mxCell id="edge-chat-deepseek" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#fb8500;strokeWidth=2;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="chat" target="deepseek">
+        <!-- ===== Layer 5: 存储层 ===== -->
+        <mxCell id="layer5-label" value="&lt;b&gt;存储层&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=13;fontColor=#7209b7;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry x="30" y="640" width="80" height="24" as="geometry" />
+        </mxCell>
+
+        <mxCell id="chroma" value="&lt;b&gt;🗄️ Chroma 向量数据库&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px;&quot;&gt;error_codes（133 故障）· standards（标准）&lt;br&gt;experience_kb（经验）· bge-small-zh 嵌入&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8f0ff;strokeColor=#7209b7;strokeWidth=2;fontSize=13;fontColor=#5a0496;verticalAlign=middle;align=center;" vertex="1" parent="1">
+          <mxGeometry x="160" y="620" width="420" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="sqlite" value="&lt;b&gt;💾 SQLite&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px;&quot;&gt;用户 / 会话记忆 / 权限 / 同步状态&lt;br&gt;user_store.db&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8f0ff;strokeColor=#7209b7;strokeWidth=2;fontSize=13;fontColor=#5a0496;verticalAlign=middle;align=center;" vertex="1" parent="1">
+          <mxGeometry x="640" y="620" width="320" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- 工具/技能/文档 → Chroma -->
+        <mxCell id="edge-tools-chroma" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#7209b7;strokeWidth=2;exitX=0.3;exitY=1;exitDx=0;exitDy=0;entryX=0.35;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="enhanced-search" target="chroma">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-docmgr-chroma" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#7209b7;strokeWidth=2;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="doc-mgr" target="chroma">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
-        <!-- 提取关键词（虚线回流） -->
-        <mxCell id="edge-deepseek-err" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#fb8500;strokeWidth=1.5;strokeDashPattern=6 4;exitX=0.1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.9;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="deepseek" target="error-query">
-          <mxGeometry relative="1" as="geometry">
-            <mxPoint x="540" y="575" as="sourcePoint" />
-            <mxPoint x="480" y="385" as="targetPoint" />
-            <Array as="points">
-              <mxPoint x="540" y="385" />
-              <mxPoint x="480" y="385" />
-            </Array>
-          </mxGeometry>
+        <!-- ===== Layer 6: 数据源 ===== -->
+        <mxCell id="layer6-label" value="&lt;b&gt;数据源&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=13;fontColor=#1a1a2e;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry x="30" y="750" width="80" height="24" as="geometry" />
         </mxCell>
 
-        <!-- ===== Layer 4: 数据层 ===== -->
-        <mxCell id="layer4-label" value="&lt;b&gt;数据层&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=13;fontColor=#7209b7;strokeColor=none;fillColor=none;" vertex="1" parent="1">
-          <mxGeometry x="30" y="565" width="80" height="24" as="geometry" />
+        <mxCell id="datasource" value="&lt;b&gt;📊 数据源&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px;&quot;&gt;PCS参数表.xlsx（故障代码）· 标准 PDF（PyMuPDF / MinerU OCR）· 经验 Markdown（五段式模板）&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fafafa;strokeColor=#1a1a2e;strokeWidth=2;fontSize=13;fontColor=#1a1a2e;verticalAlign=middle;align=center;" vertex="1" parent="1">
+          <mxGeometry x="160" y="730" width="800" height="65" as="geometry" />
         </mxCell>
 
-        <mxCell id="chroma" value="&lt;b&gt;🗄️ Chroma 向量数据库&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px;&quot;&gt;133 条故障记录 · bge-small-zh 嵌入&lt;br&gt;数据来源：PCS参数表 → 遥信（DI）sheet&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8f0ff;strokeColor=#7209b7;strokeWidth=2;fontSize=13;fontColor=#5a0496;verticalAlign=middle;align=center;" vertex="1" parent="1">
-          <mxGeometry x="100" y="540" width="380" height="75" as="geometry" />
-        </mxCell>
-
-        <mxCell id="deepseek" value="&lt;b&gt;🤖 DeepSeek API&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px;&quot;&gt;deepseek-v4-flash&lt;br&gt;用于：关键词提取 + 聊天回复&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff8f0;strokeColor=#fb8500;strokeWidth=2;fontSize=13;fontColor=#b96300;verticalAlign=middle;align=center;" vertex="1" parent="1">
-          <mxGeometry x="520" y="540" width="380" height="75" as="geometry" />
-        </mxCell>
-
-        <!-- Chroma → PCS -->
-        <mxCell id="edge-chroma-pcs" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#7209b7;strokeWidth=2;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="chroma" target="pcs-excel">
+        <mxCell id="edge-chroma-datasource" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#1a1a2e;strokeWidth=1.5;strokeDashPattern=6 4;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="chroma" target="datasource">
           <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-
-        <!-- ===== Layer 5: 数据源 ===== -->
-        <mxCell id="layer5-label" value="&lt;b&gt;数据源&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=13;fontColor=#1a1a2e;strokeColor=none;fillColor=none;" vertex="1" parent="1">
-          <mxGeometry x="30" y="715" width="80" height="24" as="geometry" />
-        </mxCell>
-
-        <mxCell id="pcs-excel" value="&lt;b&gt;📊 PCS参数表 V1.6.2.xlsx&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px;&quot;&gt;sync_kb.py → 同步到 Chroma&lt;br&gt;当前：遥信（DI）133 条 &lt;span style=&quot;color:#b45309;background:#fef3c7;&quot;&gt;待补充：其他 sheet&lt;/span&gt;&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fafafa;strokeColor=#1a1a2e;strokeWidth=2;fontSize=13;fontColor=#1a1a2e;verticalAlign=middle;align=center;" vertex="1" parent="1">
-          <mxGeometry x="330" y="690" width="330" height="65" as="geometry" />
         </mxCell>
 
         <!-- ===== 图例 ===== -->
-        <mxCell id="legend" value="&lt;b&gt;图例&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px;&quot;&gt;🟦 用户入口 &amp;nbsp;&amp;nbsp; 🟪 路由层 &amp;nbsp;&amp;nbsp; 🟩 故障查询 &amp;nbsp;&amp;nbsp; 🟧 LLM 服务 &amp;nbsp;&amp;nbsp; 🔲 数据源&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=12;fontColor=#888;strokeColor=none;fillColor=none;" vertex="1" parent="1">
-          <mxGeometry x="200" y="780" width="700" height="24" as="geometry" />
+        <mxCell id="legend" value="&lt;b&gt;图例&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px;&quot;&gt;🟦 用户入口 &amp;nbsp;&amp;nbsp; 🟪 路由层 &amp;nbsp;&amp;nbsp; 🟩 工具/技能层 &amp;nbsp;&amp;nbsp; 🟦 文档管理 &amp;nbsp;&amp;nbsp; 🟪 存储层 &amp;nbsp;&amp;nbsp; 🔲 数据源&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=12;fontColor=#888;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry x="200" y="840" width="800" height="24" as="geometry" />
         </mxCell>
 
       </root>
