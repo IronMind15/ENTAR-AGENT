@@ -3,7 +3,7 @@
 > 📌 **本文档是项目唯一的待办清单（单一事实源）**——CLAUDE.md、README.md、PROGRESS.md 中的待办均指向本文件。
 > 更新待办请只改这里；进度看板见 [PROGRESS.md](PROGRESS.md)，版本记录见 [CHANGELOG.md](CHANGELOG.md)，项目规则见 [CLAUDE.md](CLAUDE.md)，功能说明见 [README.md](README.md)。
 
-> 生成时间：2026-07-24｜当前版本：v1.4.1（详见 [CHANGELOG.md](CHANGELOG.md)）｜总计：**36 项**
+> 生成时间：2026-07-24｜当前版本：v1.4.2（详见 [CHANGELOG.md](CHANGELOG.md)）｜总计：**36 项**
 
 ---
 

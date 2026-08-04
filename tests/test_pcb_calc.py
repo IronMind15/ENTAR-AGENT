@@ -18,6 +18,7 @@ from skills.pcb_calc import (
     _calc_impedance, _calc_via, _calc_skin, _calc_signal,
     _calc_thermal, _calc_led, _calc_divider, _calc_rc,
     _detect_calc_type, _microstrip_z, _solve_width,
+    _calc_layout_check, _build_answer,
 )
 
 
@@ -321,6 +322,48 @@ class PCBFixedCalculatorsTests(unittest.TestCase):
         """100kHz 波长（低频同样支持，不静默跳过）"""
         r = pcb_calc._handle_impl("100kHz 波长")
         self.assertIn("波长 λ", r["answer"])
+
+
+class PCBCompCheckTests(unittest.TestCase):
+    """布局综合校验模式（v1.4.2）：一次输入多参数 → 走线+安规+空间冲突判定"""
+
+    def test_detect_layout(self):
+        """综合校验关键词 → layout 计算器"""
+        self.assertEqual(pcb_calc._detect_calc_type("综合校验 3A 1oz 380V 材料组II 沟道5mm"), "layout")
+
+    def test_is_pcb_query_layout(self):
+        """综合校验类问题应被识别为 PCB 计算需求"""
+        self.assertTrue(_is_pcb_calc_query("综合校验 3A 1oz 380V 沟道5mm"))
+
+    def test_missing_params_hint(self):
+        """缺参数时给出缺项提示"""
+        res = _calc_layout_check("综合校验 3A 1oz")
+        self.assertIn("电压", res["rows"][0][1])
+        self.assertIn("可用宽度", res["rows"][0][1])
+
+    def test_ok_layout_no_conflict(self):
+        """沟道够宽 → ✅ 满足，有余量"""
+        res = _calc_layout_check("综合校验 3A 1oz 380V 材料组II 沟道15mm")
+        text = _build_answer(res["rows"], res["note"])
+        self.assertIn("✅ 满足", text)
+        self.assertIn("余量", text)
+
+    def test_conflict_layout_suggestions(self):
+        """沟道太窄 → ❌ 冲突，按优先级给出开槽/高CTI/三防漆建议"""
+        res = _calc_layout_check("综合校验 10A 1oz 2.5kV 材料组III 沟道3mm")
+        text = _build_answer(res["rows"], res["note"])
+        self.assertIn("❌ 冲突", text)
+        self.assertIn("开槽", text)
+        self.assertIn("高 CTI", text)
+        self.assertIn("三防漆", text)
+        self.assertIn("超出", text)
+
+    def test_handle_impl_routes_layout(self):
+        """端到端：_handle_impl 正确路由到 layout 并输出综合校验结果"""
+        r = pcb_calc._handle_impl("综合校验 3A 1oz 380V 材料组II 沟道15mm")
+        self.assertIn("layout", r["source"])
+        self.assertIn("综合校验", r["answer"])
+        self.assertIn("走线约束", r["answer"])
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@
 
 恩特能源（天津恩特能源科技有限公司，Tianjin Entar Energy Technology Co., Ltd.，品牌 ENTAR）AI Agent 项目。目标是搭建面向中小企业的 AI Agent 全生命周期管理平台。
 
-### 当前进度：三步走计划 — 第一步稳定化（v1.4.1）
+### 当前进度：三步走计划 — 第一步稳定化（v1.4.2）
 
 **第一步：智能查询 + 标准文档检索 + 通用聊天 + 多技能（故障/标准/PCB 计算）——核心能力已完成，正在做真实环境验收与安全收尾**
 - 基于 RAG（检索增强生成）架构的内部工具
@@ -32,10 +32,10 @@
 - ✅ Web 同步管理、强制重学和任务进度追踪（v1.2.5）
 - ✅ SHA-256 内容指纹、安全版本替换和 MinerU 安全加固（v1.2.6）
 - 🧪 固定审核人主动推送与审批口令已完成代码和离线测试，尚未真实发消息
-- ✅ 29 项文档处理、版本替换和上传审核回归测试（含未发布功能）
+- ✅ 84 项自动化回归测试（含 44 项 PCB 计算 + 文档处理/版本替换/上传审核）
 - ✅ 局域网共享（防火墙放行端口 8000）
 - ✅ 同事实测通过
-- ⚠️ v1.2.6 尚未在正式知识库、真实 MinerU 和钉钉生产环境完成端到端回归
+- ⚠️ v1.4.1 尚未在正式知识库、真实 MinerU 和钉钉生产环境完成端到端回归
 
 ## 项目结构
 
@@ -77,19 +77,27 @@ D:\ENTAR_AGENT\
 │   │   ├── engine.py, router.py, views.py       #    引擎 + API + 管理界面
 │   │   ├── scheduler.py, sync_tracker.py        #    同步调度 + 状态追踪
 │   │   ├── task_manager.py                      #    后台任务队列
+│   │   ├── recovery.py                          # 🆕 崩溃恢复（清理遗留 staging/retired）
 │   │   ├── chunkers/                            #    切块器（PyMuPDF 结构分析 + Markdown 标题层级）
 │   │   │   ├── pymupdf_chunker.py               #    PyMuPDF 结构分析切块
 │   │   │   ├── markdown_chunker.py              # 🆕 Markdown 标题层级切块（v1.2.2）
 │   │   │   ├── unstructured_chunk.py            #    Unstructured 备用
 │   │   │   └── fallback.py                      #    滑动窗口回退
 │   │   └── extractors/                          #    文本提取（Excel + PyMuPDF）
+│   ├── tools/                                   # 🆕 工具注册中心（v1.2.7）
+│   │   ├── __init__.py                          #    @register 注册 + 分发
+│   │   ├── search_knowledge_base.py             #    知识库检索工具
+│   │   ├── search_standards.py                  #    标准检索工具
+│   │   └── calc_pcb_trace.py                    #    PCB 走线计算工具（IPC-2221）
 │   └── skills/
 │       ├── __init__.py
 │       ├── agent.py                             # 🤖 Agent 循环路由（聊天托底）
 │       ├── dingtalk_bot.py                      # 🤖 钉钉 Stream 模式机器人
 │       ├── error_query.py                       # 🔧 故障查询（两级查询策略）
-│       ├── memory.py                            # 💭 会话记忆管理
-│       └── standards_query.py                   # 📋 标准文档查询
+│       ├── standards_query.py                   # 📋 标准文档查询
+│       ├── enhanced_search.py                   # 🆕 混合检索 + 重排（v1.3.0）
+│       ├── pcb_calc.py                          # 🆕 PCB 计算技能 13 类（v1.4.2）
+│       └── memory.py                            # 💭 会话记忆管理
 │
 ├── tests/                                       # 🧪 文档引擎/同步/安全/版本替换测试
 ├── docs/                                        # 📄 全部文档集中管理
@@ -120,15 +128,18 @@ D:\ENTAR_AGENT\
 浏览器 / 钉钉单聊
         │
         ▼
-FastAPI (main.py) → 技能注册中心
-        ├─ 精确故障代码 → error_query 快速通道（不调 LLM）
-        └─ 其他问题 → RAG Agent
-                       ├─ 精确标准编号快速通道（不调 LLM）
-                       ├─ DeepSeek Function Calling
-                       │     ├─ 故障知识库工具
-                       │     ├─ 标准知识库工具
-                       │     └─ 无需检索时直接回答
-                       └─ 注入 SQLite 最近对话
+FastAPI (main.py) → Agent 循环（agent.py）
+        ├─ 精确故障代码 / 标准编号 → 快速通道（不调 LLM）
+        └─ 其他问题 → DeepSeek Function Calling
+                       ├─ tools/ 工具注册中心
+                       │     ├─ search_knowledge_base（故障知识库）
+                       │     ├─ search_standards（标准知识库）
+                       │     └─ calc_pcb_trace（PCB 走线计算）
+                       ├─ 技能：pcb_calc（13 类 PCB 计算器）
+                       ├─ 增强检索 enhanced_search
+                       │     ├─ 向量 + BM25 双路召回 → RRF 融合
+                       │     └─ bge-reranker 重排
+                       └─ 无需检索时直接回答（聊天托底）
 
 查询工具 → doc_mgr.storage → Chroma
                            ├─ error_codes
@@ -206,10 +217,14 @@ FastAPI (main.py) → 技能注册中心
 | Web 框架 | FastAPI | Web 页面 + HTTP API 入口（/admin 挂载） |
 | 钉钉 SDK | dingtalk-stream | Stream 模式，WebSocket 长连接，无需公网 IP |
 | Agent 路由 | agent.py | 统一 Agent 循环：路由、聊天托底、记忆管理 |
+| 工具注册 | tools/ | @register 装饰器注册，新增工具无需改 agent.py（v1.2.7） |
 | 标准查询 | standards_query.py | 标准文档检索工具（含标准编号快速通道 v1.2.3） |
+| 增强检索 | enhanced_search.py | 向量 + BM25 双路召回 RRF 融合 + bge-reranker 重排（v1.3.0） |
+| PCB 计算 | pcb_calc.py + tools/calc_pcb_trace.py | 13 类 PCB 计算器，全本地秒回（v1.4.2 含布局综合校验） |
 | 文件接收 | file_handler.py | 钉钉文件/图片接收 → 自动下载保存到 data/uploads/ |
 | 上传审核 | knowledge_review.py + dingtalk_notifier.py | 固定审核人主动通知、一次性审批和后台同步 |
-| 自动化测试 | unittest | 20 项文档引擎、同步追踪、安全和版本替换测试 |
+| 崩溃恢复 | doc_mgr/recovery.py | 启动时清理/恢复遗留 staging/retired 版本数据 |
+| 自动化测试 | unittest | 84 项文档引擎、同步追踪、PCB 计算、安全和版本替换测试 |
 | 部署 | Docker + docker-compose | 可选容器化部署 |
 
 ## 运行方式

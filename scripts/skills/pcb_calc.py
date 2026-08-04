@@ -16,6 +16,7 @@ PCB 设计计算技能 — 走线 / 阻抗 / 过孔 / 热 / 通用电路计算
   10. divider    电阻分压：Vout = Vin × R2 / (R1 + R2)
   11. rc         RC 时间常数：τ = RC，截止频率 f = 1 / (2πRC)
   12. creepage   安规：IEC-60664-1 电气间隙 / 爬电距离（查表 + 线性插值）
+  13. layout     综合校验：一次输入电流+铜厚+电压+材料组+可用宽度，同时输出走线约束+安规间距+合计占用并判定冲突，冲突时给设计建议
 
 核心公式（走线）：
   I = k × ΔT^0.44 × A^0.725（IPC-2221）
@@ -110,6 +111,7 @@ _RE_H_LABEL = re.compile(r'(?:介质|层厚|h\s*=)\s*(\d+(?:\.\d+)?)\s*(mm|毫�
 _RE_B_LABEL = re.compile(r'(?:两平面间距|b\s*=)\s*(\d+(?:\.\d+)?)\s*(mm|毫米|mil)', re.IGNORECASE)
 _RE_CTI = re.compile(r'(?:CTI|cti)\s*(\d+)')
 _RE_ALT = re.compile(r'(?:海拔|高度)\s*(\d+)\s*m')
+_RE_AVAIL = re.compile(r'(?:可用宽度|可用空间|沟道宽度|沟道|净空|走线空间|空间宽度)\s*(?:约|为)?\s*(\d+(?:\.\d+)?)\s*(mm|毫米|mil)', re.IGNORECASE)
 
 
 def _is_pcb_calc_query(query: str) -> bool:
@@ -120,6 +122,8 @@ def _is_pcb_calc_query(query: str) -> bool:
         return False
     # 新增主题词直接命中（IPC-2152 带边界防 0.2152mm 误伤）
     if _RE_2152.search(q) or "ziff" in q:
+        return True
+    if any(w in q for w in ["综合校验", "布局校验", "组合校验", "沟道", "净空校验", "走线空间"]):
         return True
     if "差分" in q or any(w in q for w in ["爬电", "电气间隙", "creepage", "clearance", "安规间距", "绝缘间距"]):
         return True
@@ -900,10 +904,127 @@ def _calc_creepage(q: str) -> dict:
     return {"rows": rows, "note": note}
 
 
+# ===== 布局综合校验（走线载流 + 安规间距 + 空间冲突判定） =====
+
+def _extract_avail_width(query: str) -> tuple[float | None, str]:
+    """提取可用宽度 / 沟道宽度，(值, "mm"|"mil")"""
+    m = _RE_AVAIL.search(query)
+    if not m:
+        return None, "mm"
+    return float(m.group(1)), ("mil" if m.group(2) == "mil" else "mm")
+
+
+def _calc_layout_check(q: str) -> dict:
+    """综合校验：一次输入电流+铜厚+电压+材料组+可用宽度，同时输出走线约束+安规间距+合计占用并判定冲突
+
+    合计占用采用保守假设：走线占中线宽 + 两侧各留安规间距（w + 2×spacing）。
+    冲突时按「开槽 → 高 CTI 板材 → 三防漆 → 改铜厚/改布局」优先级给设计建议。
+    """
+    current = _extract_current(q)
+    oz = _extract_oz(q)
+    temp_rise = _extract_temp_rise(q)
+    is_internal = _extract_layer(q) == "internal"
+    v, unit = _extract_voltage(q)
+    pd = _extract_pd(q)
+    group, from_cti = _extract_material(q)
+    avail, avail_unit = _extract_avail_width(q)
+
+    missing = []
+    if current is None:
+        missing.append("电流（如 3A）")
+    if v is None:
+        missing.append("电压（如 380V / 2.5kV）")
+    if avail is None:
+        missing.append("可用宽度（如 沟道5mm）")
+    if missing:
+        return {"rows": [("提示", f"综合校验需要「电流 + 铜厚 + 电压 + 材料组 + 可用宽度」。"
+                                  f"缺：{'、'.join(missing)}。示例：「综合校验 3A 1oz 380V 材料组II 沟道5mm」")], "note": ""}
+
+    # ---- 走线约束：判定用 IPC-2221（保守），附 IPC-2152 参考 ----
+    w2221_mil = calc_min_width(current, oz, temp_rise, is_internal)
+    w2152_mil = _ipc2152_min_width(current, oz, temp_rise, is_internal)
+    w_mm = w2221_mil * MIL_TO_MM
+    w2152_mm = w2152_mil * MIL_TO_MM
+
+    # ---- 安规间距 ----
+    if unit == "kv":
+        v_peak_kv, v_rms = v, v * 1000
+        volt_desc = f"{v} kV"
+    else:
+        v_rms, v_peak_kv = v, v * 1.414 / 1000
+        volt_desc = f"{v} V（峰值 ≈ {_num(v_peak_kv, 3)} kV）"
+    clear, _ = _lookup_clearance(v_peak_kv, pd)
+    creep, _ = _lookup_creepage(v_rms, pd, group)
+    spacing = max(clear, creep)
+
+    # ---- 合计占用 + 判定 ----
+    occupy = w_mm + 2 * spacing
+    avail_mm = avail if avail_unit == "mm" else avail * MIL_TO_MM
+    ok = occupy <= avail_mm
+    margin = avail_mm - occupy
+
+    rows = [
+        ("计算目标", "高压走线布局综合校验（载流 + 安规 + 空间冲突判定）"),
+        ("电流 / 铜厚 / 温升", f"{current} A / {oz} oz（约 {oz * 35:.0f} μm）/ {temp_rise} ℃"),
+        ("所在层", _layer_note(is_internal)),
+        ("电压 / 污染等级 / 材料组", f"{volt_desc} / PD{pd} / {group}" + ("（由 CTI 推断）" if from_cti else "")),
+        ("走线约束（IPC-2221）", f"最小线宽 {_num(w2221_mil)} mil（≈ {_num(w_mm)} mm）"),
+        ("走线约束（IPC-2152）", f"最小线宽 {_num(w2152_mil)} mil（≈ {_num(w2152_mm)} mm，更窄可放宽）"),
+        ("安规间距", f"电气间隙 {_num(clear, 3)} mm / 爬电距离 {_num(creep, 3)} mm → 取 {_num(spacing, 3)} mm"),
+        ("合计占用（线宽 + 两侧间距）", f"{_num(w_mm)} + 2×{_num(spacing, 3)} = {_num(occupy)} mm"),
+        ("可用宽度", f"{avail} {avail_unit}（≈ {_num(avail_mm)} mm）"),
+    ]
+
+    if ok:
+        rows.append(("结论", f"✅ 满足：占用 {_num(occupy)} mm ≤ 可用 {_num(avail_mm)} mm，余量 {_num(margin)} mm"))
+        note = ("判定基于保守假设：走线占中线宽 + 两侧各留安规间距。IPC-2152 允许更窄线宽（见上），"
+                "实际布板若采用 IPC-2152 线宽可进一步释放空间")
+        return {"rows": rows, "note": note}
+
+    rows.append(("结论", f"❌ 冲突：占用 {_num(occupy)} mm > 可用 {_num(avail_mm)} mm，超出 {_num(-margin)} mm"))
+
+    # ---- 冲突 → 按优先级给设计建议（尽量定量） ----
+    suggestions = []
+    suggestions.append("① 开槽：高压走线与相邻导体间开槽，沿面路径 ≥ 爬电距离，等效释放间距需求")
+
+    if group != "I":
+        creep_hi, _ = _lookup_creepage(v_rms, pd, "II")
+        if creep_hi < creep:
+            new_occupy = w_mm + 2 * max(clear, creep_hi)
+            verdict = "可满足" if new_occupy <= avail_mm else "仍冲突"
+            suggestions.append(f"② 换高 CTI 板材（→材料组II，CTI≥400）：爬电 {_num(creep, 3)}→{_num(creep_hi, 3)} mm，"
+                               f"占用→{_num(new_occupy)} mm（{verdict}）")
+
+    if pd > 1:
+        creep_c, _ = _lookup_creepage(v_rms, pd - 1, group)
+        if creep_c < creep:
+            new_occupy = w_mm + 2 * max(clear, creep_c)
+            verdict = "可满足" if new_occupy <= avail_mm else "仍冲突"
+            suggestions.append(f"③ 三防漆涂覆（按 PD{pd}→PD{pd - 1} 评估）：爬电 {_num(creep, 3)}→{_num(creep_c, 3)} mm，"
+                               f"占用→{_num(new_occupy)} mm（{verdict}；需验证涂层质量与认证要求）")
+    else:
+        suggestions.append("③ 三防漆涂覆：涂层后爬电距离可进一步缩短（工程经验，需验证）")
+
+    if oz < 2.0:
+        w2oz_mm = calc_min_width(current, 2.0, temp_rise, is_internal) * MIL_TO_MM
+        new_occupy = w2oz_mm + 2 * spacing
+        verdict = "可满足" if new_occupy <= avail_mm else "仍冲突"
+        suggestions.append(f"④ 铜厚 {oz}→2oz：线宽 {_num(w_mm)}→{_num(w2oz_mm)} mm，"
+                           f"占用→{_num(new_occupy)} mm（{verdict}）")
+    suggestions.append("⑤ 调整布局：增大沟道宽度，或将高压走线移至更宽区域")
+
+    rows.append(("设计建议（按优先级）", "； ".join(suggestions)))
+    note = ("建议按「开槽 → 高 CTI 板材 → 三防漆 → 改铜厚/改布局」优先级尝试。"
+            "开槽 / 三防漆涉及制造工艺与安规认证，需与板厂及安规工程师确认；材料组与铜厚影响已按本表定量评估")
+    return {"rows": rows, "note": note}
+
+
 # ===== 计算类型路由 =====
 
 def _detect_calc_type(q: str) -> str:
     """判断用户需要哪个子计算器"""
+    if any(w in q for w in ["综合校验", "布局校验", "组合校验", "空间校验", "净空校验", "走线空间校验"]):
+        return "layout"
     if _RE_2152.search(q):
         return "trace2152"
     if any(w in q for w in ["差分阻抗", "差分对", "差分", "ziff"]):
@@ -1037,6 +1158,7 @@ def _handle_impl(query: str) -> dict:
             "trace2152": _calc_trace2152,
             "differential": _calc_differential,
             "creepage": _calc_creepage,
+            "layout": _calc_layout_check,
             "impedance": _calc_impedance,
             "via": _calc_via,
             "skin": _calc_skin,
@@ -1128,7 +1250,7 @@ class PCBCalcSkill(BaseSkill):
     """PCB 设计计算：走线/阻抗/过孔/热/通用电路（秒回）"""
     name = "PCB设计计算"
     description = ("PCB 设计计算：走线线宽/载流/压降（IPC-2221/2152）、阻抗（IPC-2141 微带/带状/差分对）、"
-                   "过孔载流、趋肤深度、走线延迟/波长、结温散热、安规爬电距离、LED限流/分压/RC，秒回")
+                   "过孔载流、趋肤深度、走线延迟/波长、结温散热、安规爬电距离、LED限流/分压/RC、布局综合校验，秒回")
     priority = 90  # 低于故障代码(100)，高于 RAG Agent(50)
 
     @classmethod
