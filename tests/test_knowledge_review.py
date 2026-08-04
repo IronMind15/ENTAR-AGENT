@@ -13,7 +13,9 @@ from dingtalk_notifier import DingTalkNotifier
 from doc_mgr.identity import file_sha256
 from doc_mgr.sync_tracker import SyncTracker
 from file_handler import sanitize_file_name
-from knowledge_review import KnowledgeReviewService
+from knowledge_review import (
+    KnowledgeReviewService, default_collection, _collection_from_text,
+)
 
 
 class _FakeResponse:
@@ -178,6 +180,41 @@ class KnowledgeReviewServiceTests(unittest.TestCase):
         self.assertIn("已恢复为待审核", answer)
         row = self.tracker.get_review(request["review_id"])
         self.assertEqual("pending", row["review_status"])
+
+    def test_experience_md_default_collection(self):
+        """经验 .md 文件默认落经验知识库（experience_kb），通知含库名"""
+        md_path = self.root / "经验排查.md"
+        md_path.write_text("# 经验条目：测试\n\n## 故障现象\n内容", encoding="utf-8")
+        self.tracker.upsert_file(
+            str(md_path), md_path.name, md_path.stat().st_size,
+            file_sha256(str(md_path)),
+            upload_user_id="uploader-union-id",
+            upload_user_name="测试员工",
+        )
+        request = self.service.create_request(
+            file_path=str(md_path), file_name=md_path.name,
+            file_size=md_path.stat().st_size,
+            uploader_user_id="uploader-union-id",
+            uploader_name="测试员工",
+        )
+        self.assertEqual("experience_kb", request["target_collection"])
+        message = self.service.build_notification(request)
+        self.assertIn("经验知识库", message)
+
+
+class ExperienceReviewRoutingTests(unittest.TestCase):
+    """经验知识库审核路由（第二步 experience_kb）"""
+
+    def test_default_collection_md_is_experience_kb(self):
+        self.assertEqual(default_collection("某经验.md"), "experience_kb")
+
+    def test_default_collection_pdf_standards(self):
+        self.assertEqual(default_collection("标准.pdf"), "standards")
+
+    def test_collection_from_text_experience_alias(self):
+        self.assertEqual(_collection_from_text("经验库", "某经验.md"), "experience_kb")
+        self.assertEqual(_collection_from_text("经验知识库", "某经验.md"), "experience_kb")
+        self.assertEqual(_collection_from_text("经验知识", "某经验.md"), "experience_kb")
 
 
 if __name__ == "__main__":

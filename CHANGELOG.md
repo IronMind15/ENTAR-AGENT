@@ -3,6 +3,30 @@
 > 📌 **本文档是项目唯一的版本记录（单一事实源）**——README.md、PROGRESS.md 的版本历史均指向本文件，发版时只在这里追加记录。
 > 相关：待办清单见 [TODO.md](TODO.md)，进度看板见 [PROGRESS.md](PROGRESS.md)。
 
+## v1.5.0（2026-08-04）
+
+**第二步「经验知识库」启动**——从「故障 + 标准」扩展到部门工程经验沉淀：
+
+### 新增
+
+- **`experience_kb` collection + 五段式经验模板**（`data/experience/`）：
+  - 模板「故障现象 → 排查步骤 → 根因 → 解决方案 → 验证结果」，一个条目一个 `.md`，MarkdownChunker 按标题切块入库
+  - 复用 `process_file` 的 `.md` 链路 + `target_collection="experience_kb"`，存储层自动建库零改动
+- **查询链路**：
+  - `skills/experience_query.py`：`search_kb()` 混合检索 + 格式化（【标题】【阶段】【内容】【来源】）
+  - `tools/search_experience_kb.py`：Agent 工具，LLM 判断「经验类」问题时自动调用；无独立技能避免与 RAGAgentSkill 双路由
+  - `system_prompt.txt` 增加经验库工具使用说明
+- **入库/审核链路**：
+  - `router.py`：`FILE_DIRS`/`_ALLOWED_EXT`(.md)/`_ALLOWED_COLLECTIONS` 加 `experience_kb`，`.md` MIME 签名校验，`list_sync_files`/`sync_stats` 纳入新目录
+  - `views.py`：上传/同步管理下拉框支持经验库
+  - `knowledge_review.py`：`.md` 默认入经验库，审批口令支持「经验库」别名，通知文案含「经验知识库」
+  - `sync_experiences.py`：CLI 批量灌库入口
+
+### 验证
+
+- 新增 18 项测试（查询 8 + 切块/入库 3 + 审核 4 + 路由 3），全套件 121 项通过
+- 实测：示例经验入库 5 块、`search_experience_kb` 命中返回五段内容
+
 ## v1.4.2（2026-08-04）
 
 PCB 计算技能新增布局综合校验模式（12 类 → 13 类）+ P1 安全收尾：

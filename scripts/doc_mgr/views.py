@@ -413,6 +413,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
         <select id="uploadCollection" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;background:var(--card);color:var(--text);outline:none">
           <option value="standards" data-exts="pdf">📋 标准文档（PDF → 标准查询用）</option>
           <option value="error_codes" data-exts="xlsx,xls">🔧 故障代码（Excel → 故障查询用）</option>
+          <option value="experience_kb" data-exts="md">💡 经验知识（Markdown → 经验查询用）</option>
         </select>
         <p id="uploadTypeHint" style="font-size:12px;color:var(--text-secondary);margin-top:4px">📋 标准文档：上传 PDF 文件，自动切块入库到标准知识库</p>
       </div>
@@ -433,7 +434,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
         <div class="icon">📄</div>
         <p><strong>点击选择</strong> 或拖拽文件到此处</p>
         <p style="font-size:12px;margin-top:4px" id="uploadFileTypes">支持 .pdf</p>
-        <input type="file" id="fileInput" accept=".pdf,.xlsx,.xls" style="display:none">
+        <input type="file" id="fileInput" accept=".pdf,.xlsx,.xls,.md" style="display:none">
       </div>
       <div class="upload-progress" id="uploadProgress">
         <div class="progress-bar"><div class="fill" id="progressFill"></div></div>
@@ -493,6 +494,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
           <option value="uploads">📁 data/uploads/（钉钉上传）</option>
           <option value="standards">📁 data/standards/（标准文档）</option>
           <option value="fault_codes">📁 data/fault_codes/（故障代码）</option>
+          <option value="experience">📁 data/experience/（经验知识）</option>
         </select>
         <select id="syncStatusFilter" onchange="loadSyncFiles()">
           <option value="">所有状态</option>
@@ -1025,6 +1027,7 @@ function loadSyncFiles() {
             collHtml = '目标库: <select class="coll-select" data-path="' + esc(f.file_path) + '">'
               + '<option value="standards"' + (curColl === 'standards' ? ' selected' : '') + '>📋 标准文档 (standards)</option>'
               + '<option value="error_codes"' + (curColl === 'error_codes' ? ' selected' : '') + '>🔧 故障代码 (error_codes)</option>'
+              + '<option value="experience_kb"' + (curColl === 'experience_kb' ? ' selected' : '') + '>💡 经验知识 (experience_kb)</option>'
               + '</select>';
           } else {
             collHtml = '目标: ' + esc(curColl);

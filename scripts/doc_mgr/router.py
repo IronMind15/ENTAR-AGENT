@@ -37,6 +37,7 @@ _PROJECT_ROOT = os.path.normpath(os.path.join(_SCRIPT_DIR, "..", ".."))
 FILE_DIRS = {
     "standards":  os.path.join(_PROJECT_ROOT, "data", "standards"),
     "error_codes": os.path.join(_PROJECT_ROOT, "data", "fault_codes"),
+    "experience_kb": os.path.join(_PROJECT_ROOT, "data", "experience"),
 }
 
 # 钉钉上传目录（按用户/日期分类）
@@ -45,8 +46,8 @@ UPLOAD_DIR = os.path.join(_PROJECT_ROOT, "data", "uploads")
 # ===== 上传安全（P1 安全收尾） =====
 MAX_UPLOAD_MB = 50
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
-_ALLOWED_EXT = {".pdf", ".xlsx", ".xls"}
-_ALLOWED_COLLECTIONS = {"standards", "error_codes"}
+_ALLOWED_EXT = {".pdf", ".xlsx", ".xls", ".md"}
+_ALLOWED_COLLECTIONS = {"standards", "error_codes", "experience_kb"}
 
 # 数据根目录：sync-delete / sync-trigger 等接受 file_path 的接口
 # 只能操作此目录内的文件，防止未授权删除/处理服务器任意路径
@@ -81,6 +82,9 @@ def _check_file_signature(filename: str, content: bytes) -> bool:
         return sig.startswith(b"%PDF")
     if ext in (".xlsx", ".xls"):
         return sig.startswith(b"PK\x03\x04") or sig.startswith(b"\xd0\xcf\x11\xe0")
+    if ext == ".md":
+        # 纯文本 Markdown：无空字节 + 有内容（经验库用）
+        return b"\x00" not in content[:512] and bool(content.strip())
     return False
 
 
@@ -239,7 +243,7 @@ async def upload_file(
     original_name = _sanitize_filename(file.filename)
     ext = os.path.splitext(original_name)[1].lower()
     if ext not in _ALLOWED_EXT:
-        raise HTTPException(400, f"不支持的文件类型: {ext or '(无扩展名)'}（仅支持 PDF/Excel）")
+        raise HTTPException(400, f"不支持的文件类型: {ext or '(无扩展名)'}（仅支持 PDF/Excel/Markdown）")
 
     # 读取内容 + 大小限制
     content = await file.read()
@@ -597,6 +601,7 @@ def list_sync_files(password: str = Query("", description="管理员密码")):
         "uploads":     ("data/uploads", "standards"),
         "standards":   ("data/standards", "standards"),
         "fault_codes": ("data/fault_codes", "error_codes"),
+        "experience":  ("data/experience", "experience_kb"),
     }
     result: dict = {"directories": {}}
 
@@ -908,7 +913,8 @@ def sync_stats(password: str = Query("", description="管理员密码")):
     # 补充目录文件数
     for dir_key, rel_dir in [("files_in_uploads", "data/uploads"),
                               ("files_in_standards", "data/standards"),
-                              ("files_in_fault_codes", "data/fault_codes")]:
+                              ("files_in_fault_codes", "data/fault_codes"),
+                              ("files_in_experience", "data/experience")]:
         abs_dir = os.path.normpath(os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "..", "..", rel_dir
         ))

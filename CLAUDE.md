@@ -13,7 +13,7 @@
 
 恩特能源（天津恩特能源科技有限公司，Tianjin Entar Energy Technology Co., Ltd.，品牌 ENTAR）AI Agent 项目。目标是搭建面向中小企业的 AI Agent 全生命周期管理平台。
 
-### 当前进度：三步走计划 — 第一步稳定化（v1.4.2）
+### 当前进度：三步走计划 — 第一步稳定化 + 第二步经验知识库启动（v1.5.0）
 
 **第一步：智能查询 + 标准文档检索 + 通用聊天 + 多技能（故障/标准/PCB 计算）——核心能力已完成，正在做真实环境验收与安全收尾**
 - 基于 RAG（检索增强生成）架构的内部工具
@@ -88,7 +88,8 @@ D:\ENTAR_AGENT\
 │   │   ├── __init__.py                          #    @register 注册 + 分发
 │   │   ├── search_knowledge_base.py             #    知识库检索工具
 │   │   ├── search_standards.py                  #    标准检索工具
-│   │   └── calc_pcb_trace.py                    #    PCB 走线计算工具（IPC-2221）
+│   │   ├── calc_pcb_trace.py                    #    PCB 走线计算工具（IPC-2221）
+│   │   └── search_experience_kb.py              # 🆕 经验知识库检索工具（v1.4.2）
 │   └── skills/
 │       ├── __init__.py
 │       ├── agent.py                             # 🤖 Agent 循环路由（聊天托底）
@@ -97,6 +98,7 @@ D:\ENTAR_AGENT\
 │       ├── standards_query.py                   # 📋 标准文档查询
 │       ├── enhanced_search.py                   # 🆕 混合检索 + 重排（v1.3.0）
 │       ├── pcb_calc.py                          # 🆕 PCB 计算技能 13 类（v1.4.2）
+│       ├── experience_query.py                  # 🆕 经验知识库查询（v1.4.2）
 │       └── memory.py                            # 💭 会话记忆管理
 │
 ├── tests/                                       # 🧪 文档引擎/同步/安全/版本替换测试

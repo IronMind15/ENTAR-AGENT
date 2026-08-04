@@ -3,7 +3,7 @@
 > 📌 **本文档是项目唯一的待办清单（单一事实源）**——CLAUDE.md、README.md、PROGRESS.md 中的待办均指向本文件。
 > 更新待办请只改这里；进度看板见 [PROGRESS.md](PROGRESS.md)，版本记录见 [CHANGELOG.md](CHANGELOG.md)，项目规则见 [CLAUDE.md](CLAUDE.md)，功能说明见 [README.md](README.md)。
 
-> 生成时间：2026-07-24｜当前版本：v1.4.2（详见 [CHANGELOG.md](CHANGELOG.md)）｜总计：**36 项**
+> 生成时间：2026-07-24｜当前版本：v1.5.0（详见 [CHANGELOG.md](CHANGELOG.md)）｜总计：**36 项**
 
 ---
 
@@ -107,25 +107,28 @@
 
 ## 🎯 第二步 — 经验知识库（6 项）
 
-> 三步走第二步核心，第一步稳了立刻启动
+> 三步走第二步核心。v1.4.2 已完成「搭建 + 模板 + 提交/审核/发布」主链路，待真实环境验证 + 内容补充
 
-- [ ] **经验知识库搭建**
+- [x] **经验知识库搭建**（v1.4.2 ✅）
   - 复用 RAG 架构（Chroma + Embedding + LLM）
-  - 新增经验数据源和路由
+  - 新增 `experience_kb` collection + `search_experience_kb` Agent 工具 + 上传/同步/审核全链路
   - *来源：CLAUDE.md / PROGRESS.md / memory*
 
-- [ ] **设计经验知识模板**："故障现象 → 排查步骤 → 根因 → 解决方案 → 验证结果"
+- [x] **设计经验知识模板**："故障现象 → 排查步骤 → 根因 → 解决方案 → 验证结果"
+  - `data/experience/` 五段式 Markdown 模板 + 示例条目（IGBT 过温排查）
   - *来源：READNE*
 
-- [ ] **建立提交/审核/发布/纠错/失效流程**
-  - 先走通流程，再开放自动入库
+- [x] **建立提交/审核/发布流程**
+  - 复用 knowledge_review 审核：`.md` → experience_kb，`同意同步 id 经验库`（v1.4.2）
+  - [ ] 纠错/失效流程（编辑/下线已有经验条目）待补
   - *来源：README*
 
 - [ ] **补充排查/解决步骤**
-  - 数据源本身没有这些信息，需人工补充
+  - 数据源本身没有这些信息，需人工整理上传（用五段式模板）
   - *来源：memory*
 
 - [ ] **补充常见问题 + 维修记录导入**
+  - 批量导入脚本可参考 `sync_experiences.py`
   - *来源：介绍页.md*
 
 ---

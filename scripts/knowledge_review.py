@@ -19,7 +19,7 @@ logger = logging.getLogger("knowledge_review")
 
 _UPLOAD_ROOT = Path(__file__).parent.parent / "data" / "uploads"
 _SUPPORTED_EXTENSIONS = {".pdf", ".xlsx", ".xls", ".md"}
-_ALLOWED_COLLECTIONS = {"standards", "error_codes"}
+_ALLOWED_COLLECTIONS = {"standards", "error_codes", "experience_kb"}
 _COMMAND_RE = re.compile(
     r"^(同意同步|拒绝同步)\s+([A-Za-z0-9]{6,16})(?:\s+(.+?))?\s*$"
 )
@@ -46,7 +46,11 @@ def resolve_reviewer_staff_ids(_uploader_user_id: str = "",
 def default_collection(file_name: str) -> str:
     """给审核人提供默认目标库；仍可在批准口令中显式覆盖。"""
     ext = Path(file_name).suffix.lower()
-    return "error_codes" if ext in {".xlsx", ".xls"} else "standards"
+    if ext in {".xlsx", ".xls"}:
+        return "error_codes"
+    if ext == ".md":
+        return "experience_kb"
+    return "standards"
 
 
 def _collection_from_text(value: str, file_name: str) -> Optional[str]:
@@ -61,6 +65,11 @@ def _collection_from_text(value: str, file_name: str) -> Optional[str]:
         "故障": "error_codes",
         "故障库": "error_codes",
         "故障代码": "error_codes",
+        "experience_kb": "experience_kb",
+        "经验": "experience_kb",
+        "经验库": "experience_kb",
+        "经验知识": "experience_kb",
+        "经验知识库": "experience_kb",
     }
     return aliases.get(value.strip().lower())
 
@@ -172,10 +181,10 @@ class KnowledgeReviewService:
 
     @staticmethod
     def build_notification(request: dict) -> str:
-        target_label = (
-            "故障代码库" if request["target_collection"] == "error_codes"
-            else "标准文档库"
-        )
+        target_label = {
+            "error_codes": "故障代码库",
+            "experience_kb": "经验知识库",
+        }.get(request["target_collection"], "标准文档库")
         dept_id = request.get("suggested_department", "public")
         dept_label = get_center_name(dept_id)
         review_id = request["review_id"]
@@ -199,7 +208,7 @@ class KnowledgeReviewService:
             f"🔄 改部门或库：`同意同步 {review_id} 新部门` 或 `同意同步 {review_id} 新部门 新库`\n"
             f"❌ 拒绝：`拒绝同步 {review_id} 原因`\n\n"
             "部门可选：公共 / PMO / 研发 / 制造 / 商业 / 运营\n"
-            "库可选：标准库 / 故障库"
+            "库可选：标准库 / 故障库 / 经验库"
         )
 
     def notify(self, request: dict) -> dict:
@@ -264,7 +273,7 @@ class KnowledgeReviewService:
             extra or "", row["file_name"]
         )
         if collection not in _ALLOWED_COLLECTIONS:
-            return "目标库不正确，请使用“标准库”或“故障库”。"
+            return "目标库不正确，请使用“标准库”“故障库”或“经验库”。"
         if not self._is_safe_upload_file(row["file_path"]):
             logger.error(f"审核文件路径越界或不存在: {row['file_path']}")
             return "该申请对应的文件不存在或路径不安全，已停止同步。"
@@ -287,7 +296,10 @@ class KnowledgeReviewService:
         except Exception as exc:
             logger.error(f"记录审核任务编号失败 {review_id}: {exc}")
 
-        target_label = "故障代码库" if collection == "error_codes" else "标准文档库"
+        target_label = {
+            "error_codes": "故障代码库",
+            "experience_kb": "经验知识库",
+        }.get(collection, "标准文档库")
         return (
             f"已批准申请 {review_id}，正在后台同步到{target_label}。\n\n"
             f"任务编号：{task_id}"
