@@ -363,6 +363,27 @@ class ChromaStore(VectorStore):
             logger.exception(f"Chroma delete 失败: {e}")
             return 0
 
+    def get_raw(self, collection: str,
+                where: Optional[dict] = None) -> dict:
+        """读取原始块数据（含 staging/retired），崩溃恢复用，不做可见性过滤。"""
+        coll = self._get_collection(collection)
+        kwargs: dict = {}
+        if where:
+            kwargs["where"] = where
+        try:
+            with self._visibility_lock:
+                return coll.get(**kwargs)
+        except Exception as e:
+            logger.exception(f"Chroma get_raw 失败: {e}")
+            return {"ids": [], "documents": [], "metadatas": []}
+
+    def update_metadata(self, collection: str, ids: list[str],
+                        metadatas: list[dict]) -> None:
+        """批量更新 metadata（崩溃恢复用，需传完整 metadata，Chroma 为覆盖式）。"""
+        coll = self._get_collection(collection)
+        with self._visibility_lock:
+            coll.update(ids=ids, metadatas=metadatas)
+
     def count(self, collection: str) -> int:
         coll = self._get_collection(collection)
         with self._visibility_lock:

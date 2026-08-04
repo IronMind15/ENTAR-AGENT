@@ -50,6 +50,30 @@ app = FastAPI(title="恩特小助手")
 app.include_router(admin_router)
 
 
+@app.on_event("startup")
+def _startup_recovery():
+    """启动时执行崩溃恢复：清理/恢复遗留的 staging/retired 版本数据。
+
+    两阶段换版若在写入或切换中途崩溃，会在 Chroma 留下残留块
+    （staging 半成品、重复 active、未清理的 retired）。这里统一修复，
+    失败不阻塞服务启动，仅记录日志。
+    """
+    try:
+        from doc_mgr.recovery import recover_crashed_data
+        from doc_mgr.storage import get_store
+        recovered = recover_crashed_data(get_store())
+        changed = sum(
+            1 for s in recovered.values()
+            if s.get("deleted") or s.get("restored")
+        )
+        if changed:
+            logger.info(f"  [恢复] 崩溃恢复完成: {recovered}")
+        else:
+            logger.info("  [恢复] 无遗留 staging/retired 数据")
+    except Exception:
+        logger.exception("  [恢复] 崩溃恢复失败（不影响启动）")
+
+
 @app.get("/", response_class=HTMLResponse)
 def home():
     """返回聊天风格 Web 页面（HTML/JS 定义在 web_page.py 中）"""
