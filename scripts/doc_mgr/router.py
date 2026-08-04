@@ -13,6 +13,7 @@
 import html
 import json
 import os
+import re
 import uuid
 import logging
 from datetime import datetime as dt
@@ -41,6 +42,12 @@ FILE_DIRS = {
 # 钉钉上传目录（按用户/日期分类）
 UPLOAD_DIR = os.path.join(_PROJECT_ROOT, "data", "uploads")
 
+# ===== 上传安全（P1 安全收尾） =====
+MAX_UPLOAD_MB = 50
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
+_ALLOWED_EXT = {".pdf", ".xlsx", ".xls"}
+_ALLOWED_COLLECTIONS = {"standards", "error_codes"}
+
 # 数据根目录：sync-delete / sync-trigger 等接受 file_path 的接口
 # 只能操作此目录内的文件，防止未授权删除/处理服务器任意路径
 _DATA_ROOT = os.path.join(_PROJECT_ROOT, "data")
@@ -57,6 +64,24 @@ def _is_within_data_dir(path: str) -> bool:
                 or candidate.startswith(root + os.sep))
     except (OSError, ValueError):
         return False
+
+
+def _sanitize_filename(name: str) -> str:
+    """净化文件名：去路径、去危险字符、限长，保留中文字符"""
+    base = os.path.basename(name.replace("\\", "/"))
+    base = re.sub(r"[^\w.\-一-鿿（）() ]+", "_", base)
+    return (base.strip(" .") or "unnamed")[:120]
+
+
+def _check_file_signature(filename: str, content: bytes) -> bool:
+    """MIME 内容签名校验（双重校验，防伪造扩展名）"""
+    ext = os.path.splitext(filename)[1].lower()
+    sig = content[:8]
+    if ext == ".pdf":
+        return sig.startswith(b"%PDF")
+    if ext in (".xlsx", ".xls"):
+        return sig.startswith(b"PK\x03\x04") or sig.startswith(b"\xd0\xcf\x11\xe0")
+    return False
 
 
 def _get_admin_password() -> str:
@@ -210,23 +235,35 @@ async def upload_file(
     else:
         raise HTTPException(403, "未授权，请提供 password 或 user_id")
 
-    ext = os.path.splitext(file.filename)[1].lower()
-    if ext not in (".pdf", ".xlsx", ".xls"):
-        raise HTTPException(400, f"不支持的文件类型: {ext}（仅支持 PDF/Excel）")
+    # 文件名净化（去路径、去危险字符、限长）
+    original_name = _sanitize_filename(file.filename)
+    ext = os.path.splitext(original_name)[1].lower()
+    if ext not in _ALLOWED_EXT:
+        raise HTTPException(400, f"不支持的文件类型: {ext or '(无扩展名)'}（仅支持 PDF/Excel）")
 
-    # 按 collection 保存到对应目录（standards/ 或 fault_codes/）
+    # 读取内容 + 大小限制
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, f"文件过大：{len(content) / 1024 / 1024:.1f} MB 超过上限 {MAX_UPLOAD_MB} MB")
+
+    # MIME 内容签名双重校验（防伪造扩展名）
+    if not _check_file_signature(original_name, content):
+        raise HTTPException(400, f"文件内容与扩展名不符（伪造 {ext}？），已拒绝")
+
+    # collection 白名单（防任意字符串注入路径）
+    if collection and collection not in _ALLOWED_COLLECTIONS:
+        raise HTTPException(400, f"未知的 collection: {collection}")
     _collection = collection or "standards"
-    target_dir = FILE_DIRS.get(_collection, UPLOAD_DIR)
+    target_dir = FILE_DIRS[_collection]
     os.makedirs(target_dir, exist_ok=True)
-    safe_name = f"{uuid.uuid4().hex}_{file.filename}"
+    safe_name = f"{uuid.uuid4().hex}_{original_name}"
     save_path = os.path.join(target_dir, safe_name)
 
-    content = await file.read()
     with open(save_path, "wb") as f:
         f.write(content)
 
     # 记录到 sync_tracker（标记 pending，等待管理员手动同步）
-    _filename = file.filename
+    _filename = original_name
     try:
         from .sync_tracker import SyncTracker
         tracker = SyncTracker()

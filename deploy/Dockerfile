@@ -27,6 +27,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 复制项目文件（data/ 和 knowledge_base/ 由 docker-compose volumes 挂载，不打进镜像）
 COPY scripts/ ./scripts/
 
+# 非 root 运行（P1 安全收尾）
+# 挂载的 data/、knowledge_base/ 目录需在宿主侧 chown 为 1000:1000，
+# 否则容器内 appuser（uid 1000）无写权限，详见部署文档
+RUN useradd --create-home --uid 1000 appuser \
+    && mkdir -p /app/logs \
+    && chown -R appuser:appuser /app
+USER appuser
+
 # 暴露端口
 EXPOSE 8000
 

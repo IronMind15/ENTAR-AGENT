@@ -285,7 +285,7 @@ docker-compose -f deploy/docker-compose.yml up -d
 - v1.2.6 的版本替换锁只保证单进程一致性，多 worker/多容器前需共享锁或活动版本指针
 - 旧数据缺少 `doc_id` 时按文件名兼容匹配，同名文件可能产生歧义
 - retired 旧版本若物理删除失败会继续占空间，需要后台清理任务
-- 管理 API、Web 身份、上传校验和 XSS 防护尚未形成完整安全闭环
+- 上传校验（路径/大小/MIME）、XSS 转义与 Docker 非 root 已补齐（v1.4.2）；Web 登录/SSO 可信身份识别仍待 v2.0 与多中心权限一起做
 - `dingtalk_stream.ChatbotHandler.process()` 是 async 方法，但 SDK 内的 reply_* 方法是同步的，不要对它们用 `await`
 - 当前使用方式为钉钉单聊（搜索机器人），群聊功能暂未开放
 - 固定审核人主动推送尚未做真实钉钉端到端验证，需先配置 staff_id 并在副本知识库测试

@@ -561,9 +561,15 @@ function send() {
   // Add loading bubble
   var loadingId = addLoading();
 
-  // Fetch
-  var url = '/ask?q=' + encodeURIComponent(q) + '&user=' + encodeURIComponent(user);
-  fetch(url)
+  // Fetch（POST，避免问题内容进 URL/浏览器历史）
+  var body = new URLSearchParams();
+  body.append('q', q);
+  body.append('user', user);
+  fetch('/ask', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body
+  })
     .then(function(res) { return res.json(); })
     .then(function(data) {
       removeLoading(loadingId);

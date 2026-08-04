@@ -36,7 +36,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("main")
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse, JSONResponse
 import uvicorn
 
@@ -80,9 +80,14 @@ def home():
     return HOME_HTML
 
 
-@app.get("/ask")
-def ask(q: str = Query("", description="用户问题"), user: str = Query("", description="用户名")):
-    """统一问答接口 — 通过技能注册中心路由"""
+@app.post("/ask")
+def ask(q: str = Form("", description="用户问题"), user: str = Form("", description="用户名（仅记忆归属，不做权限依据）")):
+    """统一问答接口 — 通过技能注册中心路由
+
+    P1 安全收尾：GET → POST，避免问题内容进入 URL、浏览器历史和代理日志。
+    Web 的 user 参数仅用于会话记忆归属，不作为任何权限依据；
+    敏感操作（上传/删除/同步）一律走 /admin 接口的 password 或 user_store 鉴权。
+    """
     if not q:
         return JSONResponse({"answer": "请输入问题"})
 
