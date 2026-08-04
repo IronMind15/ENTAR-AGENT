@@ -175,12 +175,13 @@ class SyncTracker:
             conn.commit()
 
     def update_department(self, file_path: str, department: str) -> None:
-        """更新文件的建议所属中心（审核申请创建时写入）
+        """更新文件的建议所属中心（审核申请创建 / 后台改归属时写入）
 
         部门写入必须在文件登记（upsert_file）之后调用，确保审批通过后
         _submit_sync_task 能从记录读取真实部门，而非默认 public。
+        允许显式写回 "public"（改归属为全公司公开时需要）。
         """
-        if not department or department == "public":
+        if not department:
             return
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with self._lock:

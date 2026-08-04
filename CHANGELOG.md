@@ -3,6 +3,29 @@
 > 📌 **本文档是项目唯一的版本记录（单一事实源）**——README.md、PROGRESS.md 的版本历史均指向本文件，发版时只在这里追加记录。
 > 相关：待办清单见 [TODO.md](TODO.md)，进度看板见 [PROGRESS.md](PROGRESS.md)。
 
+## v1.5.2（2026-08-04）
+
+**修改文件归属 + 修复 bge-reranker 重排静默失效**：
+
+### 新增
+
+- **管理后台支持修改文件归属**（上传后 / 入库后）：
+  - 同步管理页每个文件行新增「归属中心」下拉（🌐公开 / 📋PMO / 🔬研发 / 🏭制造 / 💼商业 / ⚙️运营），默认显示当前归属
+  - `sync-trigger` 新增 `department` 参数：已入库文件改归属后点「强制重学」即用新归属重写 Chroma metadata（版本替换）；未入库文件点「同步」用新归属入库
+  - `sync-files` 返回 `suggested_department`；`update_department` 支持显式写回 `public`（改归属为全公司公开时需要）
+
+### 修复
+
+- **bge-reranker 重排静默失效**（`skills/enhanced_search.py`）：
+  - 根因：BM25 混合检索对全库打分，RRF 融合后的候选 id 混入不在向量候选池（candidates）里的块，重排段访问 `candidates[cid]` 抛 `KeyError`，被降级保护吞掉——**重排模型自 v1.3.0 起一直未真正生效**
+  - 修复：重排前过滤掉不在 `candidates` 里的 id，重排正常执行；实测开关重排，Top-5 排序结果明显变化
+
+### 验证
+
+- 128 项自动化测试全绿
+- 隔离测试验证「改归属 → 强制重学 → Chroma metadata 更新 → 旧归属不再命中」链路
+- 真实检索复现并确认 KeyError 消失、重排生效（1.1GB 模型正常参与打分）
+
 ## v1.5.1（2026-08-04）
 
 **Web 端 UI 改版**——三块页面视觉统一 + 补上 RAG 助手关键体验（Markdown 渲染 + 来源展示）。纯前端改动，后端逻辑零变更：

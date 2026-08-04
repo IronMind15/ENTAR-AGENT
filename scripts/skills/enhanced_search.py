@@ -235,9 +235,16 @@ def enhanced_query(collection: str, query_text: str, n_results: int = 5,
         reranker = _get_reranker()
         if reranker:
             try:
-                # 取融合后 Top-TOP_FOR_RERANK 的候选文本送重排
+                # 取融合后 Top-TOP_FOR_RERANK 的候选文本送重排。
+                # BM25 是对整个 collection 打分，RRF 融合可能引入不在向量候选池
+                # （candidates）里的 id；这些块没有 doc/meta 可供重排，
+                # 先过滤避免 KeyError 导致整段重排降级（此前一直静默失效）。
+                rerankable = {
+                    cid: score for cid, score in relevance.items()
+                    if cid in candidates
+                }
                 top_ids = sorted(
-                    relevance, key=relevance.get, reverse=True)[:_TOP_FOR_RERANK]
+                    rerankable, key=rerankable.get, reverse=True)[:_TOP_FOR_RERANK]
                 if top_ids:
                     pairs = [
                         [query_text, candidates[cid]["doc"]] for cid in top_ids

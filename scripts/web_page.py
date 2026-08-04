@@ -489,7 +489,7 @@ HOME_HTML = r"""<!DOCTYPE html>
     <div class="brand">
       <div class="brand-logo">🤖</div>
       <h1>恩特小助手</h1>
-      <span class="badge">v1.5.1</span>
+      <span class="badge">v1.5.2</span>
     </div>
     <div class="header-actions">
       <button onclick="location.href='/admin'" title="文档管理（上传/管理知识库）">📂</button>

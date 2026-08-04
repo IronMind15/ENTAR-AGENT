@@ -1100,6 +1100,22 @@ function loadSyncFiles() {
             collHtml = '目标: ' + esc(curColl);
           }
 
+          // 归属中心选择（所有状态可改；已入库文件改后需点「强制重学」重写 Chroma）
+          var deptOptions = [
+            {v: 'public', label: '🌐 全公司公开'},
+            {v: 'pmo', label: '📋 PMO'},
+            {v: 'rd', label: '🔬 研发'},
+            {v: 'mfg', label: '🏭 制造'},
+            {v: 'bz', label: '💼 商业'},
+            {v: 'ops', label: '⚙️ 运营'}
+          ];
+          var curDept = f.suggested_department || 'public';
+          var deptHtml = '归属: <select class="coll-select dept-select" data-path="' + esc(f.file_path) + '" title="修改归属后点「同步」或「强制重学」生效">';
+          for (var d = 0; d < deptOptions.length; d++) {
+            deptHtml += '<option value="' + deptOptions[d].v + '"' + (curDept === deptOptions[d].v ? ' selected' : '') + '>' + deptOptions[d].label + '</option>';
+          }
+          deptHtml += '</select>';
+
           html += '<div class="sync-file-item">';
           html += '<div class="file-info">';
           html += '<div class="file-name">📄 ' + esc(f.file_name) + '</div>';
@@ -1107,7 +1123,7 @@ function loadSyncFiles() {
           html += userHtml;
           html += '<span class="status-badge ' + f.sync_status + '">' + label + '</span>';
           html += ' · ' + (f.file_size / 1024).toFixed(1) + 'KB';
-          html += ' · ' + collHtml;
+          html += ' · ' + collHtml + ' · ' + deptHtml;
           if (f.error_message) html += ' · ❌ ' + esc(f.error_message);
           if (f.last_synced_at) html += ' · ' + esc(f.last_synced_at).slice(0, 16);
           html += '</div></div>';
@@ -1134,12 +1150,14 @@ document.addEventListener('click', function(e) {
     var path = btn.getAttribute('data-path');
     var force = btn.getAttribute('data-force') === 'true';
 
-    // 从同文件项的下拉框读取目标库
+    // 从同文件项的下拉框读取目标库 + 归属中心
     var fileItem = btn.closest('.sync-file-item');
-    var collSelect = fileItem ? fileItem.querySelector('.coll-select') : null;
+    var collSelect = fileItem ? fileItem.querySelector('.coll-select:not(.dept-select)') : null;
+    var deptSelect = fileItem ? fileItem.querySelector('.dept-select') : null;
     var coll = collSelect ? collSelect.value : '';
+    var dept = deptSelect ? deptSelect.value : '';
 
-    asyncSyncFile(path, coll, force, btn);
+    asyncSyncFile(path, coll, dept, force, btn);
     return;
   }
 
@@ -1175,13 +1193,14 @@ function deleteSyncFile(filePath) {
     });
 }
 
-function asyncSyncFile(filePath, collection, force, btn) {
+function asyncSyncFile(filePath, collection, department, force, btn) {
   btn.disabled = true;
   btn.textContent = '⏳ 提交中...';
 
   var formData = new FormData();
   formData.append('file_path', filePath);
   formData.append('collection', collection);
+  formData.append('department', department || '');
   formData.append('force', force ? 'true' : '');
   formData.append('password', getPw());
 

@@ -691,6 +691,7 @@ def list_sync_files(password: str = Query("", description="管理员密码")):
                         "modified": dt.fromtimestamp(st.st_mtime).isoformat(),
                         "sync_status": status.get("sync_status", "new"),
                         "target_collection": status.get("target_collection", default_coll),
+                        "suggested_department": status.get("suggested_department") or "public",
                         "upload_user_id": status.get("upload_user_id", ""),
                         "upload_user_name": upload_user_name,
                         "error_message": status.get("error_message", ""),
@@ -709,6 +710,7 @@ def list_sync_files(password: str = Query("", description="管理员密码")):
 def trigger_sync(
     file_path: str = Form(""),
     collection: str = Form(""),
+    department: str = Form(""),
     sync_all: bool = Form(False),
     force: bool = Form(False),
     password: str = Form(""),
@@ -716,6 +718,7 @@ def trigger_sync(
     """手动触发文件同步
 
     - file_path 指定单个文件
+    - collection 目标库；department 所属中心（空串 = 保持现有/默认 public）
     - sync_all=True 同步所有待处理/失败文件
     - force=True 跳过 Chroma 预检查，强制重新入库
     """
@@ -743,7 +746,7 @@ def trigger_sync(
             file_name=fname,
             collection=target,
             process_fn=lambda: _run_sync_task(
-                file_path, fname, target, force,
+                file_path, fname, target, force, department,
             ),
         )
 
@@ -768,11 +771,12 @@ def trigger_sync(
 
 
 def _run_sync_task(file_path: str, fname: str,
-                   target: str, force: bool) -> object:
+                   target: str, force: bool,
+                   department: str = "") -> object:
     """后台执行同步任务（被 task_manager 调用）
 
     独立的模块级函数，在后台线程中执行，自动关联进度上报。
-    从 sync_tracker 读取 suggested_department 传给 process_file。
+    归属优先级：显式传入 department（改归属）> 从 sync_tracker 读取。
     """
     from .engine import process_file
     from .sync_tracker import SyncTracker
@@ -789,10 +793,13 @@ def _run_sync_task(file_path: str, fname: str,
     from .task_manager import report_progress as _rp
     _rp("syncing", 10, "开始同步处理...")
 
-    # 读取部门信息
-    status = tracker.get_status(file_path)
-    department = (status.get("suggested_department", "public")
-                  if status else "public")
+    # 归属：显式传入优先（先落库到 tracker 保持一致）；否则从 tracker 读取
+    if department:
+        tracker.update_department(file_path, department)
+    else:
+        status = tracker.get_status(file_path)
+        department = (status.get("suggested_department", "public")
+                      if status else "public")
 
     doc = process_file(file_path, file_name=fname,
                        target_collection=target, force=force,
