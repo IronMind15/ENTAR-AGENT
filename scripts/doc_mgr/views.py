@@ -13,61 +13,92 @@ ADMIN_HTML = r"""<!DOCTYPE html>
 <title>恩特小助手 - 文档管理</title>
 <style>
   :root {
-    --bg: #f0f4f8; --card: #ffffff; --text: #1e293b;
-    --text-secondary: #64748b; --primary: #2563eb;
-    --primary-light: #eff6ff; --primary-dark: #1d4ed8;
-    --border: #e2e8f0; --shadow: 0 1px 3px rgba(0,0,0,0.08);
-    --shadow-lg: 0 4px 20px rgba(0,0,0,0.08);
-    --success: #10b981; --warning: #f59e0b; --danger: #ef4444;
-    --hover: #f1f5f8; --scrollbar: #cbd5e1;
+    --brand: #4361ee; --pink: #f72585;
+    --bg: #f8fafc; --card: #ffffff; --text: #1a1a2e;
+    --text-secondary: #64748b; --primary: #4361ee;
+    --primary-light: #eef1ff; --primary-dark: #3a56d4;
+    --border: #eef2f6; --shadow: 0 2px 8px rgba(0,0,0,0.05);
+    --shadow-lg: 0 8px 40px rgba(0,0,0,0.10);
+    --success: #06d6a0; --warning: #fb8500; --danger: #ef4444;
+    --hover: #f1f5f9; --scrollbar: #cbd5e1;
+    --radius: 14px;
   }
   [data-theme="dark"] {
+    --brand: #6c8cff;
     --bg: #0f172a; --card: #1e293b; --text: #e2e8f0;
-    --text-secondary: #94a3b8; --primary: #3b82f6;
-    --primary-light: #1e293b; --primary-dark: #2563eb;
-    --border: #334155; --shadow: 0 1px 3px rgba(0,0,0,0.3);
-    --shadow-lg: 0 4px 20px rgba(0,0,0,0.4);
+    --text-secondary: #94a3b8; --primary: #6c8cff;
+    --primary-light: #1e293b; --primary-dark: #5a7bff;
+    --border: #334155; --shadow: 0 2px 8px rgba(0,0,0,0.3);
+    --shadow-lg: 0 8px 40px rgba(0,0,0,0.45);
     --success: #34d399; --warning: #fbbf24; --danger: #f87171;
     --hover: #334155; --scrollbar: #475569;
+    --radius: 14px;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
     font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
     background: var(--bg); color: var(--text);
-    min-height: 100vh; padding: 20px;
+    min-height: 100vh;
     transition: background .3s, color .3s;
   }
-  .container { max-width: 1000px; margin: 0 auto; }
-  .header {
+  .layout { display: flex; min-height: 100vh; }
+
+  /* ===== Sidebar ===== */
+  .sidebar {
+    width: 232px; flex-shrink: 0;
+    background: var(--card);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    padding: 20px 14px;
+    position: sticky; top: 0; height: 100vh;
+    transition: background .3s;
+  }
+  .side-brand {
+    display: flex; align-items: center; gap: 10px;
+    padding: 4px 10px 20px; border-bottom: 1px solid var(--border);
+    margin-bottom: 16px;
+  }
+  .side-logo {
+    width: 38px; height: 38px; border-radius: 11px;
+    background: linear-gradient(135deg, #4361ee, #f72585);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 19px;
+    box-shadow: 0 4px 12px rgba(67,97,238,.25);
+  }
+  .side-title { font-size: 15px; font-weight: 800; letter-spacing: .3px; }
+  .side-sub { font-size: 11px; color: var(--text-secondary); margin-top: 1px; }
+  .side-nav { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+  .side-nav .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px; border: none; background: transparent;
+    color: var(--text-secondary); font-size: 14px; font-weight: 500;
+    cursor: pointer; border-radius: 10px; text-align: left;
+    transition: all .2s; font-family: inherit;
+  }
+  .side-nav .nav-item:hover { background: var(--hover); color: var(--text); }
+  .side-nav .nav-item.active { background: var(--primary-light); color: var(--primary); font-weight: 600; }
+  .side-nav .nav-icon { font-size: 16px; width: 22px; text-align: center; }
+  .side-footer {
+    display: flex; gap: 8px; padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+  .side-footer button {
+    flex: 1; padding: 9px 0; border: none; border-radius: 10px;
+    background: var(--hover); color: var(--text-secondary);
+    cursor: pointer; font-size: 13px; transition: all .2s;
+  }
+  .side-footer button:hover { background: var(--border); color: var(--text); }
+  .side-footer .side-back { background: var(--primary); color: #fff; }
+  .side-footer .side-back:hover { background: var(--primary-dark); color: #fff; }
+
+  /* ===== Main ===== */
+  .main { flex: 1; padding: 24px 28px; min-width: 0; }
+  .page-header {
     display: flex; justify-content: space-between; align-items: center;
-    margin-bottom: 20px;
+    margin-bottom: 24px;
   }
-  .header h1 { font-size: 22px; font-weight: 700; }
-  .header h1 small { font-size: 13px; font-weight: 400; color: var(--text-secondary); }
-  .header-actions { display: flex; gap: 8px; }
-  .header-actions button {
-    padding: 8px 16px; border: none; border-radius: 8px;
-    background: var(--card); color: var(--text-secondary);
-    cursor: pointer; font-size: 13px; box-shadow: var(--shadow);
-    transition: all .2s;
-  }
-  .header-actions button:hover { background: var(--hover); color: var(--text); }
-  .header-actions .back-btn {
-    background: var(--primary); color: #fff;
-  }
-  .header-actions .back-btn:hover { background: var(--primary-dark); }
-  .tabs {
-    display: flex; gap: 2px; margin-bottom: 20px;
-    background: var(--card); border-radius: 12px; overflow: hidden;
-    box-shadow: var(--shadow);
-  }
-  .tabs button {
-    flex: 1; padding: 12px 16px; border: none; background: transparent;
-    color: var(--text-secondary); cursor: pointer; font-size: 14px;
-    font-weight: 500; transition: all .2s;
-  }
-  .tabs button:hover { background: var(--hover); }
-  .tabs button.active { background: var(--primary); color: #fff; }
+  .page-header h1 { font-size: 20px; font-weight: 800; letter-spacing: .3px; }
+  .menu-toggle { display: none; }
   .tab-content { display: none; }
   .tab-content.active { display: block; }
   .card {
@@ -224,9 +255,21 @@ ADMIN_HTML = r"""<!DOCTYPE html>
   .toast.success { background: #065f46; color: #fff; }
   .toast.error { background: #991b1b; color: #fff; }
 
-  @media (max-width: 640px) {
-    body { padding: 12px; }
-    .tabs button { font-size: 12px; padding: 10px 8px; }
+  @media (max-width: 768px) {
+    .sidebar {
+      position: fixed; left: 0; top: 0; z-index: 100;
+      transform: translateX(-100%);
+      transition: transform .25s ease;
+      box-shadow: var(--shadow-lg);
+    }
+    .sidebar.open { transform: translateX(0); }
+    .main { padding: 16px; }
+    .menu-toggle {
+      display: flex; align-items: center; justify-content: center;
+      width: 36px; height: 36px; border: none;
+      background: var(--card); border-radius: 10px; box-shadow: var(--shadow);
+      cursor: pointer; font-size: 17px; color: var(--text);
+    }
     .search-bar { flex-wrap: wrap; }
     .search-bar select { min-width: 100%; }
     .doc-item { flex-direction: column; align-items: flex-start; }
@@ -373,26 +416,36 @@ ADMIN_HTML = r"""<!DOCTYPE html>
 </head>
 <body>
 
-<div class="container">
-  <!-- Header -->
-  <div class="header">
-    <div>
-      <h1>恩特小助手 <small>文档管理</small></h1>
+<div class="layout">
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="side-brand">
+      <div class="side-logo">🤖</div>
+      <div>
+        <div class="side-title">恩特小助手</div>
+        <div class="side-sub">文档管理</div>
+      </div>
     </div>
-    <div class="header-actions">
+    <nav class="side-nav">
+      <button class="nav-item active" onclick="switchTab('docs', this)"><span class="nav-icon">📚</span>文档列表</button>
+      <button class="nav-item" onclick="switchTab('upload', this)"><span class="nav-icon">📤</span>上传文件</button>
+      <button class="nav-item" onclick="switchTab('search', this)"><span class="nav-icon">🔍</span>搜索测试</button>
+      <button class="nav-item" onclick="switchTab('sync', this)"><span class="nav-icon">🔄</span>同步管理</button>
+      <button class="nav-item" onclick="switchTab('users', this)"><span class="nav-icon">👥</span>用户管理</button>
+    </nav>
+    <div class="side-footer">
+      <button onclick="location.href='/'" class="side-back">← 返回聊天</button>
       <button onclick="toggleTheme()" id="themeBtn" title="切换暗黑模式">🌙</button>
-      <button onclick="location.href='/'" class="back-btn">← 返回聊天</button>
     </div>
-  </div>
+  </aside>
 
-  <!-- Tabs -->
-  <div class="tabs">
-    <button class="active" onclick="switchTab('docs', this)">📚 文档列表</button>
-    <button onclick="switchTab('upload', this)">📤 上传文件</button>
-    <button onclick="switchTab('search', this)">🔍 搜索测试</button>
-    <button onclick="switchTab('sync', this)">🔄 同步管理</button>
-    <button onclick="switchTab('users', this)">👥 用户管理</button>
-  </div>
+  <!-- Main -->
+  <main class="main">
+    <header class="page-header">
+      <button class="menu-toggle" id="menuToggle" onclick="toggleSidebar()" title="菜单">☰</button>
+      <h1 id="pageTitle">📚 文档列表</h1>
+      <div style="width:36px"></div>
+    </header>
 
   <!-- Tab: Document List -->
   <div id="tab-docs" class="tab-content active">
@@ -544,6 +597,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
       </div>
     </div>
   </div>
+  </main>
 </div>
 
 <!-- Toast -->
@@ -577,9 +631,10 @@ function showToast(msg, type) {
   setTimeout(function() { t.classList.remove('show'); }, 3000);
 }
 
-// ===== Tabs =====
+// ===== Tabs（侧边栏导航） =====
+var TAB_TITLES = { docs: '📚 文档列表', upload: '📤 上传文件', search: '🔍 搜索测试', sync: '🔄 同步管理', users: '👥 用户管理' };
 function switchTab(name, el) {
-  document.querySelectorAll('.tabs button').forEach(function(b) {
+  document.querySelectorAll('.side-nav .nav-item').forEach(function(b) {
     b.classList.remove('active');
   });
   (el || event.target).classList.add('active');
@@ -587,10 +642,22 @@ function switchTab(name, el) {
     t.classList.remove('active');
   });
   document.getElementById('tab-' + name).classList.add('active');
+  var t = document.getElementById('pageTitle');
+  if (t) t.textContent = TAB_TITLES[name] || name;
   if (name === 'docs') loadDocs();
   if (name === 'search') loadSearchCollections();
   if (name === 'sync') { loadSyncFiles(); loadSyncHistory(); loadSyncStats(); loadSyncProgress(); }
   if (name === 'users') { loadUsers(); }
+  // 移动端切换后收起侧边栏
+  if (window.innerWidth <= 768) {
+    var sb = document.getElementById('sidebar');
+    if (sb) sb.classList.remove('open');
+  }
+}
+
+// ===== 移动端侧边栏开合 =====
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
 }
 
 // ===== Escape HTML =====
@@ -758,7 +825,7 @@ function uploadFile(file) {
       result.innerHTML = '✅ 文件已上传成功！<br>'
         + '文件: ' + esc(data.file_name) + '<br>'
         + '预选库: ' + esc(data.collection) + '<br><br>'
-        + '👉 请到「<a href="#" onclick="switchTab(\'sync\', document.querySelector(\'.tabs button:nth-child(4)\'));return false" style="color:var(--primary)">🔄 同步管理</a>」Tab 选库后手动同步入库';
+        + '👉 请到「<a href="#" onclick="switchTab(\'sync\', document.querySelector(\'.side-nav .nav-item:nth-child(4)\'));return false" style="color:var(--primary)">🔄 同步管理</a>」侧边栏选库后手动同步入库';
       showToast('上传完成，请到同步管理处理', 'success');
       loadDocs();
       loadSearchCollections();

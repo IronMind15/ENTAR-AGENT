@@ -466,12 +466,9 @@ def _build_stats_html(stats: dict, users: list[dict],
     for d in stats["daily_trend"]:
         pct = (d["count"] / max_count * 80) if max_count else 0
         trend_bars += (
-            f"<div style='margin:4px 0'>"
-            f"<span style='display:inline-block;width:80px'>{html.escape(d['date'][5:])}</span>"
-            f"<span style='display:inline-block;height:20px;"
-            f"width:{pct}%;background:#4a90d9;border-radius:3px;"
-            f"text-align:right;color:#fff;font-size:12px;"
-            f"padding-right:4px'>{d['count']}</span>"
+            f"<div class='trend-row'>"
+            f"<span class='trend-date'>{html.escape(d['date'][5:])}</span>"
+            f"<span class='trend-bar' style='width:{pct}%'>{d['count']}</span>"
             f"</div>\n"
         )
 
@@ -486,79 +483,136 @@ def _build_stats_html(stats: dict, users: list[dict],
         )
 
     return f"""<!DOCTYPE html>
-<html lang='zh-CN'>
+<html lang='zh-CN' data-theme='light'>
 <head><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1.0'>
 <title>恩特小助手 - 使用统计</title>
 <style>
-body {{ font-family: -apple-system, 'Microsoft YaHei', sans-serif;
-       margin: 20px; background: #f5f5f5; color: #333; }}
-h1 {{ color: #2c3e50; }}
-.card {{ background: #fff; border-radius: 8px; padding: 20px; margin: 16px 0;
-         box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
-.grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-         gap: 16px; }}
-.stat-box {{ text-align: center; padding: 20px; }}
-.stat-num {{ font-size: 36px; font-weight: bold; color: #4a90d9; }}
-.stat-label {{ font-size: 14px; color: #888; margin-top: 4px; }}
-table {{ width: 100%; border-collapse: collapse; margin-top: 8px; }}
-th, td {{ padding: 8px 12px; text-align: left; border-bottom: 1px solid #eee; }}
-th {{ background: #f8f9fa; font-weight: 600; }}
-tr:hover {{ background: #f0f7ff; }}
-.nav {{ margin-bottom: 16px; }}
-.nav a {{ color: #4a90d9; text-decoration: none; margin-right: 16px; }}
-.nav a:hover {{ text-decoration: underline; }}
+:root {{
+  --brand: #4361ee; --pink: #f72585;
+  --bg: #f8fafc; --card: #ffffff; --text: #1a1a2e;
+  --text-secondary: #64748b; --border: #eef2f6;
+  --shadow: 0 2px 8px rgba(0,0,0,0.05);
+  --shadow-lg: 0 8px 40px rgba(0,0,0,0.10);
+  --hover: #f1f5f9;
+}}
+[data-theme='dark'] {{
+  --brand: #6c8cff; --bg: #0f172a; --card: #1e293b;
+  --text: #e2e8f0; --text-secondary: #94a3b8; --border: #334155;
+  --shadow: 0 2px 8px rgba(0,0,0,0.3);
+  --shadow-lg: 0 8px 40px rgba(0,0,0,0.45);
+  --hover: #334155;
+}}
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+body {{ font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+       background: var(--bg); color: var(--text); min-height: 100vh;
+       transition: background .3s, color .3s; }}
+.page {{ max-width: 1000px; margin: 0 auto; padding: 24px 28px; }}
+.topbar {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }}
+.brand {{ display: flex; align-items: center; gap: 10px; }}
+.logo {{ width: 38px; height: 38px; border-radius: 11px;
+         background: linear-gradient(135deg, #4361ee, #f72585);
+         display: flex; align-items: center; justify-content: center; font-size: 19px;
+         box-shadow: 0 4px 12px rgba(67,97,238,.25); }}
+.brand h1 {{ font-size: 19px; font-weight: 800; letter-spacing: .3px;
+            background: linear-gradient(135deg, var(--brand), var(--pink));
+            -webkit-background-clip: text; background-clip: text;
+            -webkit-text-fill-color: transparent; }}
+.nav {{ display: flex; align-items: center; gap: 8px; }}
+.nav a, .nav button {{
+  color: var(--text-secondary); text-decoration: none; font-size: 13px;
+  padding: 7px 14px; border-radius: 9px; background: var(--card);
+  border: 1px solid var(--border); transition: all .2s; cursor: pointer;
+  font-family: inherit;
+}}
+.nav a:hover, .nav button:hover {{ color: var(--text); border-color: var(--brand); }}
+.nav a.primary {{ background: var(--brand); color: #fff; border-color: var(--brand); }}
+.nav a.primary:hover {{ background: #3a56d4; }}
+.card {{ background: var(--card); border-radius: 16px; padding: 24px;
+        box-shadow: var(--shadow); border: 1px solid var(--border);
+        margin-bottom: 16px; transition: background .3s; }}
+.card h2 {{ font-size: 15px; font-weight: 700; margin-bottom: 14px; }}
+.grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }}
+.stat-box {{ text-align: center; padding: 22px 16px; }}
+.stat-num {{ font-size: 34px; font-weight: 800;
+            background: linear-gradient(135deg, var(--brand), var(--pink));
+            -webkit-background-clip: text; background-clip: text;
+            -webkit-text-fill-color: transparent; }}
+.stat-label {{ font-size: 13px; color: var(--text-secondary); margin-top: 6px; }}
+table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+th, td {{ padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--border); }}
+th {{ color: var(--text-secondary); font-weight: 600; background: var(--hover); }}
+tr:hover td {{ background: var(--hover); }}
+.trend-row {{ margin: 5px 0; }}
+.trend-date {{ display: inline-block; width: 80px; font-size: 12px; color: var(--text-secondary); }}
+.trend-bar {{ display: inline-block; height: 20px; border-radius: 5px;
+              background: linear-gradient(90deg, var(--brand), #5a7bff);
+              text-align: right; color: #fff; font-size: 11px;
+              padding-right: 6px; line-height: 20px; min-width: 2px; }}
+.foot {{ color: var(--text-secondary); font-size: 12px; margin-top: 20px; }}
+@media (max-width: 768px) {{ .page {{ padding: 16px; }} }}
 </style></head>
 <body>
-<div class='nav'>
-    <a href='/admin{pw_param}'>📂 管理页面</a>
-    <a href='/admin/stats{pw_param}'>📊 使用统计</a>
-</div>
-<h1>📊 使用统计</h1>
+<div class='page'>
+  <div class='topbar'>
+    <div class='brand'>
+      <div class='logo'>🤖</div>
+      <h1>恩特小助手 · 使用统计</h1>
+    </div>
+    <div class='nav'>
+      <a href='/admin{pw_param}' class='primary'>← 返回管理</a>
+      <a href='/'>💬 返回聊天</a>
+      <button class='theme-btn' onclick='toggleTheme(this)'>🌙</button>
+    </div>
+  </div>
 
-<div class='grid'>
-    <div class='card stat-box'>
-        <div class='stat-num'>{stats['total_users']}</div>
-        <div class='stat-label'>累计用户</div>
-    </div>
-    <div class='card stat-box'>
-        <div class='stat-num'>{stats['active_today']}</div>
-        <div class='stat-label'>今日活跃</div>
-    </div>
-    <div class='card stat-box'>
-        <div class='stat-num'>{stats['total_messages']}</div>
-        <div class='stat-label'>累计消息数</div>
-    </div>
-    <div class='card stat-box'>
-        <div class='stat-num'>{len(users)}</div>
-        <div class='stat-label'>注册用户</div>
-    </div>
-</div>
+  <div class='grid'>
+    <div class='card stat-box'><div class='stat-num'>{stats['total_users']}</div><div class='stat-label'>累计用户</div></div>
+    <div class='card stat-box'><div class='stat-num'>{stats['active_today']}</div><div class='stat-label'>今日活跃</div></div>
+    <div class='card stat-box'><div class='stat-num'>{stats['total_messages']}</div><div class='stat-label'>累计消息数</div></div>
+    <div class='card stat-box'><div class='stat-num'>{len(users)}</div><div class='stat-label'>注册用户</div></div>
+  </div>
 
-<div class='card'>
+  <div class='card'>
     <h2>📈 每日消息趋势（近 7 天）</h2>
-    {'<p>暂无数据</p>' if not stats['daily_trend'] else trend_bars}
-</div>
+    {'<p style="color:var(--text-secondary)">暂无数据</p>' if not stats['daily_trend'] else trend_bars}
+  </div>
 
-<div class='card'>
+  <div class='card'>
     <h2>👤 对话量 Top 10</h2>
     <table>
-        <tr><th>#</th><th>用户</th><th>消息数</th></tr>
-        {'<tr><td colspan="3">暂无数据</td></tr>' if not stats['top_users'] else top_rows}
+      <tr><th>#</th><th>用户</th><th>消息数</th></tr>
+      {'<tr><td colspan="3" style="color:var(--text-secondary)">暂无数据</td></tr>' if not stats['top_users'] else top_rows}
     </table>
-</div>
+  </div>
 
-<div class='card'>
+  <div class='card'>
     <h2>👥 所有用户</h2>
     <table>
-        <tr><th>用户ID</th><th>昵称</th><th>职位</th><th>身份</th>
-            <th>部门</th><th>消息数</th><th>最后活跃</th></tr>
-        {user_rows if user_rows else '<tr><td colspan="7">暂无用户</td></tr>'}
+      <tr><th>用户ID</th><th>昵称</th><th>职位</th><th>身份</th>
+        <th>部门</th><th>消息数</th><th>最后活跃</th></tr>
+      {user_rows if user_rows else '<tr><td colspan="7" style="color:var(--text-secondary)">暂无用户</td></tr>'}
     </table>
-</div>
+  </div>
 
-<p style='color:#888;font-size:12px;margin-top:24px'>
-    数据来源：user_store.db SQLite · 更新时间：{stats.get('_generated_at', '')}
-</p>
+  <p class='foot'>数据来源：user_store.db SQLite · 更新时间：{stats.get('_generated_at', '')}</p>
+</div>
+<script>
+function toggleTheme(btn) {{
+  var h = document.documentElement;
+  var cur = h.getAttribute('data-theme') || 'light';
+  var next = cur === 'dark' ? 'light' : 'dark';
+  h.setAttribute('data-theme', next);
+  localStorage.setItem('stats_theme', next);
+  btn.textContent = next === 'dark' ? '☀️' : '🌙';
+}}
+(function() {{
+  var saved = localStorage.getItem('stats_theme') || 'light';
+  document.documentElement.setAttribute('data-theme', saved);
+  var b = document.querySelector('.theme-btn');
+  if (b) b.textContent = saved === 'dark' ? '☀️' : '🌙';
+}})();
+</script>
 </body></html>"""
 
 

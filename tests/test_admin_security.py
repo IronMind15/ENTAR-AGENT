@@ -139,7 +139,9 @@ class XSSTests(unittest.TestCase):
             "last_active": malicious,
         }]
         html = _build_stats_html(stats, users, {"x": 1}, "")
-        self.assertNotIn("<script>", html)
+        # 页面自身含一个合法的深色模式 JS 块，故只允许出现 1 个未转义的 <script> 标签；
+        # 用户注入的 <script>/<img> 必须被转义为 &lt;script&gt;/&lt;img
+        self.assertEqual(html.count("<script>"), 1)
         self.assertNotIn("<img", html)
         self.assertIn("&lt;script&gt;", html)
         self.assertIn("&lt;img", html)
