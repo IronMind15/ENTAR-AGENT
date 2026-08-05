@@ -45,6 +45,9 @@ def _get_config(key: str) -> str:
 # DeepSeek API
 DEEPSEEK_API_KEY: str = _get_config("DEEPSEEK_API_KEY")
 
+# DeepSeek 并发请求上限（多人同时问 LLM 时限制并发，防费用失控 / 429）
+MAX_CONCURRENT_LLM: int = 20
+
 # 钉钉 Stream 模式机器人凭证
 DINGTALK_CLIENT_ID: str = _get_config("DINGTALK_CLIENT_ID")
 DINGTALK_CLIENT_SECRET: str = _get_config("DINGTALK_CLIENT_SECRET")

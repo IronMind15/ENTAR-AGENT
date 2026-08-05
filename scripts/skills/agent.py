@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 
 _PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -20,7 +21,7 @@ if _PARENT not in sys.path:
 
 import httpx
 
-from config import DEEPSEEK_API_KEY
+from config import DEEPSEEK_API_KEY, MAX_CONCURRENT_LLM
 from skills import BaseSkill, register
 from tools import get_tool_definitions, execute_tool as _execute_registered_tool
 
@@ -28,6 +29,11 @@ logger = logging.getLogger("agent")
 
 # 共享 HTTP 客户端（复用连接，避免每次建新连接）
 _HTTP_CLIENT = httpx.Client(timeout=60, trust_env=False)
+
+# DeepSeek 并发限流：最多 MAX_CONCURRENT_LLM 个请求同时进行
+# （多人并发时防费用失控 / API 429；acquire 阻塞发生在 to_thread 线程，
+#   不阻塞 asyncio 事件循环）
+_LLM_SEMAPHORE = threading.BoundedSemaphore(MAX_CONCURRENT_LLM)
 
 # ===== 工具定义（从注册中心自动获取，新增工具无需改本文件） =====
 TOOLS = get_tool_definitions()
@@ -89,11 +95,13 @@ def _call_deepseek(
     max_attempts = 3
     for attempt in range(1, max_attempts + 1):
         try:
-            r = _HTTP_CLIENT.post(
-                "https://api.deepseek.com/chat/completions",
-                headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
-                json=body,
-            )
+            # 并发限流：仅网络等待期间持有信号量，重试退避不占并发槽
+            with _LLM_SEMAPHORE:
+                r = _HTTP_CLIENT.post(
+                    "https://api.deepseek.com/chat/completions",
+                    headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
+                    json=body,
+                )
             if r.status_code == 200:
                 data = r.json()
                 if data.get("choices"):

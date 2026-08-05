@@ -11,6 +11,7 @@ Stream 模式说明：
   - 但 reply_markdown() / reply_text() 是同步方法，不可 await
 """
 
+import asyncio
 import os
 import sys
 import logging
@@ -69,6 +70,11 @@ def _is_fast_operation(text: str) -> bool:
         return False
 
 
+# 每用户处理锁：同一用户消息串行处理（回复不乱序），不同用户各自并行（v1.6.0）
+# 内部工具用户量小，锁字典不主动清理（单个 asyncio.Lock 内存可忽略）
+_user_locks: dict[str, asyncio.Lock] = {}
+
+
 class ErrorQueryHandler(ChatbotHandler):
     """处理钉钉机器人消息，支持文本/文件/图片"""
 
@@ -95,15 +101,19 @@ class ErrorQueryHandler(ChatbotHandler):
         except Exception as sync_err:
             logger.warning(f"同步用户信息异常（不影响主流程）: {sync_err}")
 
-        # ===== 处理文件消息 =====
+        # ===== 处理文件消息（下载/保存为慢操作，线程池放行不阻塞事件循环） =====
         if bot_msg.message_type == "file":
             logger.info(f"收到文件 [{conv_title}] {sender}")
-            return self._handle_file_message(bot_msg, user_id, sender)
+            async with self._get_user_lock(user_id):
+                return await asyncio.to_thread(
+                    self._handle_file_message, bot_msg, user_id, sender)
 
-        # ===== 处理图片消息 =====
+        # ===== 处理图片消息（同上，线程池放行） =====
         if bot_msg.message_type == "picture":
             logger.info(f"收到图片 [{conv_title}] {sender}")
-            return self._handle_image_message(bot_msg, user_id, sender)
+            async with self._get_user_lock(user_id):
+                return await asyncio.to_thread(
+                    self._handle_image_message, bot_msg, user_id, sender)
 
         # ===== 处理文本消息（原有逻辑） =====
         if bot_msg.message_type != "text" or not bot_msg.text or not bot_msg.text.content:
@@ -128,50 +138,31 @@ class ErrorQueryHandler(ChatbotHandler):
 
         # ---- 处理消息（整体捕获异常，返回错误码） ----
         try:
-            # 审核口令与普通技能路由
-            if text in ("查看我的审核ID", "我的审核ID", "查看我的钉钉ID"):
-                answer = (
-                    f"你的钉钉员工 ID：{staff_id}"
-                    if staff_id else
-                    "当前消息没有携带钉钉员工 ID，请确认应用已取得通讯录基础权限。"
+            # 同一用户串行、不同用户并行：在该用户处理锁内放行到线程池，
+            # 保证同一用户连发消息的回复不乱序，同时不影响其他用户并发。
+            async with self._get_user_lock(user_id):
+                # 慢操作（技能匹配 + LLM/检索/审核判断）在线程池执行，不阻塞事件循环。
+                # asyncio.to_thread 自动拷贝 contextvars，中心权限隔离依然有效。
+                result = await asyncio.to_thread(
+                    self._process_text, text, user_id, staff_id)
+
+                answer = result.get("answer", "") or "抱歉，我没有找到相关信息。"
+
+                # 回复 Markdown
+                self.reply_markdown(
+                    title="恩特小助手",
+                    text=answer,
+                    incoming_message=bot_msg,
                 )
-                result = {"answer": answer, "source": "review_identity"}
-            else:
-                from knowledge_review import handle_review_message
-                review_answer = handle_review_message(text, staff_id)
-                if review_answer is not None:
-                    result = {"answer": review_answer, "source": "knowledge_review"}
-                else:
-                    from skills import get_matched_skill
+                logger.info(f"回复成功: {answer[:50]}...")
 
-                    skill_cls = get_matched_skill(text)
-                    if skill_cls:
-                        logger.info(f"  → {skill_cls.name}: {text[:40]}")
-                        result = skill_cls.handle(text, user_id=user_id)
-                    else:
-                        logger.info(f"  → 备用处理: {text[:40]}")
-                        result = {
-                            "answer": "抱歉，我暂时无法处理这个问题。",
-                            "source": "fallback",
-                        }
-
-            answer = result.get("answer", "") or "抱歉，我没有找到相关信息。"
-
-            # 回复 Markdown
-            self.reply_markdown(
-                title="恩特小助手",
-                text=answer,
-                incoming_message=bot_msg,
-            )
-            logger.info(f"回复成功: {answer[:50]}...")
-
-            # 记录到会话记忆
-            try:
-                from skills import memory
-                memory.add(user_id, "user", text)
-                memory.add(user_id, "assistant", answer)
-            except Exception as mem_err:
-                logger.warning(f"记录记忆失败: {mem_err}")
+                # 记录到会话记忆
+                try:
+                    from skills import memory
+                    memory.add(user_id, "user", text)
+                    memory.add(user_id, "assistant", answer)
+                except Exception as mem_err:
+                    logger.warning(f"记录记忆失败: {mem_err}")
 
         except Exception as e:
             logger.exception(f"处理钉钉消息异常: {e}")
@@ -184,6 +175,49 @@ class ErrorQueryHandler(ChatbotHandler):
                 pass
 
         return AckMessage.STATUS_OK, "ok"
+
+    def _get_user_lock(self, user_id: str) -> asyncio.Lock:
+        """获取该用户的处理锁（懒创建）
+
+        同一用户消息串行处理（回复不乱序），不同用户各自独立（并行）。
+        锁在事件循环内使用，仅阻塞同用户后续消息，不影响其他用户并发。
+        """
+        lock = _user_locks.get(user_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            _user_locks[user_id] = lock
+        return lock
+
+    def _process_text(self, text: str, user_id: str, staff_id: str) -> dict:
+        """处理文本消息（同步方法，在 to_thread 线程中执行，不阻塞事件循环）
+
+        路由顺序：审核口令 → 审核消息 → 技能匹配 → 备用兜底。
+        调用方在 process() 中用 asyncio.to_thread 放行，因此本方法可包含
+        任意慢操作（DeepSeek 调用、Chroma 检索、审核判断等）。
+        """
+        # 审核口令与普通技能路由
+        if text in ("查看我的审核ID", "我的审核ID", "查看我的钉钉ID"):
+            answer = (
+                f"你的钉钉员工 ID：{staff_id}"
+                if staff_id else
+                "当前消息没有携带钉钉员工 ID，请确认应用已取得通讯录基础权限。"
+            )
+            return {"answer": answer, "source": "review_identity"}
+
+        from knowledge_review import handle_review_message
+        review_answer = handle_review_message(text, staff_id)
+        if review_answer is not None:
+            return {"answer": review_answer, "source": "knowledge_review"}
+
+        from skills import get_matched_skill
+
+        skill_cls = get_matched_skill(text)
+        if skill_cls:
+            logger.info(f"  → {skill_cls.name}: {text[:40]}")
+            return skill_cls.handle(text, user_id=user_id)
+
+        logger.info(f"  → 备用处理: {text[:40]}")
+        return {"answer": "抱歉，我暂时无法处理这个问题。", "source": "fallback"}
 
     def _handle_file_message(self, bot_msg, user_id, sender):
         """处理文件消息"""

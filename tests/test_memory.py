@@ -117,9 +117,11 @@ class TestSessionId(MemoryTestBase):
         )
         conn.commit()
         conn.close()
-        # 固定 now 为确定的新时间，避免秒级时间戳碰撞导致断言失效
+        # 用「当前时间 + 5 秒」而非硬编码日期：created_at 用 SQLite 真实当前时间
+        # 减 120 分钟生成，硬编码日期在每天较晚时段会导致超时判定不成立（时间依赖 bug）。
+        # +5s 同时保证与 add_memory 生成旧 id 的时刻错开，避免秒级碰撞。
         fake_dt = mock.MagicMock()
-        fake_dt.now.return_value = _dt.datetime(2026, 8, 5, 10, 0, 0)
+        fake_dt.now.return_value = _dt.datetime.now() + _dt.timedelta(seconds=5)
         fake_dt.strptime = user_store.datetime.strptime
         with mock.patch.object(user_store, "datetime", fake_dt):
             sid_new = self.store._resolve_session_id("u1")
@@ -128,8 +130,9 @@ class TestSessionId(MemoryTestBase):
             "SELECT session_id FROM conversations ORDER BY id DESC LIMIT 1"
         ).fetchone()[0]
         conn.close()
-        self.assertEqual(sid_new, "20260805100000")  # 超时 → 新会话 id
-        self.assertNotEqual(sid_new, sid_old)
+        self.assertEqual(len(sid_new), 14)  # YYYYMMDDHHMMSS 格式
+        self.assertTrue(sid_new.isdigit())
+        self.assertNotEqual(sid_new, sid_old)  # 超时 → 新会话 id
 
 
 class TestLongTerm(MemoryTestBase):
