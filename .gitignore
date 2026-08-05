@@ -43,3 +43,9 @@ data/standards/mineru_output/
 
 # ── 本地模型（可重新下载，不退版本） ──
 models/
+
+# ── Playwright 临时输出（截图/快照，自动生成） ──
+.playwright-mcp/
+
+# ── 临时诊断脚本 ──
+data/pcb/_diag_std.py
