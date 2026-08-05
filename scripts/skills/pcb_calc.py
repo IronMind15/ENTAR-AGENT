@@ -138,12 +138,12 @@ _CALC_TOPIC_WORDS = [
 
 _RE_CURRENT = re.compile(r'(\d+(?:\.\d+)?)\s*(?:[Aa]|安|安培)')
 _RE_OZ = re.compile(r'(\d+(?:\.\d+)?)\s*oz', re.IGNORECASE)
-_RE_TEMP = re.compile(r'温升\s*(\d+)')
+_RE_TEMP = re.compile(r'(?:温升|ΔT|δT|dT)\s*[=:]?\s*(\d+)', re.IGNORECASE)
 _RE_WIDTH = re.compile(r'(\d+(?:\.\d+)?)\s*(mm|毫米|mil)')
-_RE_LENGTH = re.compile(r'(\d+(?:\.\d+)?)\s*(cm|厘米|m\b|米|inch|英寸)')
+_RE_LENGTH = re.compile(r'(\d+(?:\.\d+)?)\s*(cm|厘米|mm|毫米|m\b|米|inch|英寸)')
 _RE_MM = re.compile(r'(\d+(?:\.\d+)?)\s*(?:mm|毫米)')            # 毫米值
 _RE_MIL = re.compile(r'(\d+(?:\.\d+)?)\s*mil')                    # mil 值
-_RE_VOLT = re.compile(r'(\d+(?:\.\d+)?)\s*V\b', re.IGNORECASE)
+_RE_VOLT = re.compile(r'(\d+(?:\.\d+)?)\s*[Vv](?![A-Za-z0-9])')  # 避免 \b：汉字也是 word 字符，V后接汉字会被 \b 判定无边界
 
 # ===== 新增计算器正则 =====
 _RE_2152 = re.compile(r'(?<![\d.])\s*2152\b|ipc\s*-?\s*2152', re.IGNORECASE)   # 防 0.2152mm / 0.2152 毫米 误伤
@@ -203,6 +203,8 @@ def _is_pcb_calc_query(query: str) -> bool:
 # ===== 通用工具 =====
 
 def _num(v: float, digits: int = 2) -> str:
+    if digits <= 0:
+        return f"{v:.0f}"   # 整数格式不 rstrip：_num(10,0) 必须 "10" 而非 "1"
     s = f"{v:.{digits}f}".rstrip("0").rstrip(".")
     return s if s not in ("", "-") else "0"
 
@@ -303,7 +305,14 @@ def _extract_s(q):
 
 
 def _extract_h(q):
-    return _extract_labeled(_RE_H_LABEL, q)
+    v, u = _extract_labeled(_RE_H_LABEL, q)
+    if v is not None:
+        return v, u
+    # "Xmm介质/层厚" 顺序变体（如"0.2mm介质"）
+    m = re.search(r'(\d+(?:\.\d+)?)\s*(mm|毫米|mil)\s*(?:介质|层厚)', q, re.IGNORECASE)
+    if m:
+        return float(m.group(1)), m.group(2)
+    return None, "mm"
 
 
 def _extract_b(q):
@@ -534,18 +543,23 @@ def _calc_impedance(q: str) -> dict:
     t_mm = oz * OZ_TO_MM
 
     if is_stripline:
-        b = _first([r'(?:两平面间距|间距|b\s*=)\s*(\d+(?:\.\d+)?)\s*(?:mm|毫米)'], q)
-        if b is None:
-            b = 1.0  # 默认 1mm
+        b = _first([r'(?:两平面间距|间距|b\s*=)\s*(\d+(?:\.\d+)?)\s*(?:mm|毫米)',
+                    r'(?:介质总厚度|总厚度|介质厚度|厚度)\s*(?:为|约)?\s*(\d+(?:\.\d+)?)\s*(?:mm|毫米)',
+                    r'(\d+(?:\.\d+)?)\s*(?:mm|毫米)\s*(?:介质|两平面|间距)'], q)
     else:
         h = _first([r'(?:介质|层厚|到地|到参考平面|h\s*=)\s*(\d+(?:\.\d+)?)\s*(?:mm|毫米)',
-                    r'(\d+(?:\.\d+)?)\s*(?:mm|毫米)\s*(?:介质|层高)'], q)
-        if h is None:
-            h = 1.0
+                    r'(?:板厚|厚度)\s*(?:为|约)?\s*(\d+(?:\.\d+)?)\s*(?:mm|毫米)',
+                    r'(\d+(?:\.\d+)?)\s*(?:mm|毫米)\s*(?:介质|层高|板厚|顶层|到地)'], q)
+    if (b if is_stripline else h) is None:
+        return {"rows": [("提示", "阻抗计算需要介质高度/两平面间距。如「50Ω 微带 FR4 介质 1mm 要多宽」；板厚可直接作为介质高度，如「1.6mm板厚 FR4 50Ω 微带要多宽」")], "note": ""}
 
     # 目标阻抗（反推线宽）
     target_z = _first([r'(?:目标|匹配)?\s*(\d+(?:\.\d+)?)\s*(?:Ω|欧|ohm)', r'(\d+(?:\.\d+)?)\s*欧姆'], q)
-    width_mm, width_unit = _extract_width(q)
+    w_lab, w_lab_unit = _extract_w_label(q)
+    if w_lab is not None:
+        width_mm, width_unit = w_lab, w_lab_unit
+    else:
+        width_mm, width_unit = _extract_width(q)
 
     if target_z is not None:
         w_solved = _solve_width(
@@ -603,12 +617,13 @@ def _calc_via(q: str) -> dict:
         return {"rows": [("提示", "过孔计算需要孔径（如「0.3mm 过孔」或「10mil 钻孔」）+ 孔壁铜厚")], "note": ""}
 
     # 孔壁铜厚：oz 或 μm，默认 0.7mil（约 18μm，板厂下限）
+    # 注：μm 优先于 oz——题目可能同时给"25μm（1oz）"，μm 是更精确的孔壁标称
     oz = _first([r'(\d+(?:\.\d+)?)\s*oz'], q)
     um = _first([r'(\d+(?:\.\d+)?)\s*(?:μm|um|微米)'], q)
-    if oz is not None:
-        wall_mil = oz * OZ_TO_MIL
-    elif um is not None:
+    if um is not None:
         wall_mil = um / 1000 / MIL_TO_MM
+    elif oz is not None:
+        wall_mil = oz * OZ_TO_MIL
     else:
         wall_mil = 0.7
 
@@ -662,13 +677,27 @@ def _calc_skin(q: str) -> dict:
     mult = {"GHZ": 1e9, "MHZ": 1e6, "KHZ": 1e3, "HZ": 1}[m.group(2).upper()]
     f_hz = f * mult
     delta_mm = 66 / math.sqrt(f_hz)
+    delta_um = delta_mm * 1000
     rows = [
         ("计算目标", "铜导体的趋肤深度（高频时电流集中在表面）"),
         ("频率", f"{f} {m.group(2)}"),
-        ("趋肤深度 δ", f"{delta_mm * 1000:.1f} μm（{_num(delta_mm, 4)} mm）"),
-        ("建议", "线宽/孔径 ≥ 2×δ 时高频电阻显著增大，大电流高频走线需加宽或并联"),
-        ("标准", "δ ≈ 66/√f mm（20℃ 铜）"),
+        ("趋肤深度 δ", f"{delta_um:.1f} μm（{_num(delta_mm, 4)} mm）"),
     ]
+    # 铜厚利用判断：题目给出铜厚（oz 或 μm）时判断走线是否被完全利用
+    m_th = re.search(r'(\d+(?:\.\d+)?)\s*(?:μm|um|微米)', q, re.IGNORECASE) \
+        or re.search(r'(\d+(?:\.\d+)?)\s*oz', q, re.IGNORECASE)
+    if m_th is not None:
+        h_um = float(m_th.group(1)) * 35 if "oz" in m_th.group(0).lower() else float(m_th.group(1))
+        ratio = h_um / delta_um
+        if ratio >= 2:
+            judge = "❌ 未被完全利用（厚度 ≥ 2δ，高频电阻显著增大）"
+        elif ratio >= 1:
+            judge = "⚠️ 部分利用（厚度 1~2δ，存在可感趋肤效应）"
+        else:
+            judge = "✅ 完全利用（厚度 < δ，趋肤效应可忽略）"
+        rows.append(("铜厚利用判断", f"铜厚 {_num(h_um, 0)} μm / δ={_num(delta_um, 1)} μm = {_num(ratio, 2)}×δ → {judge}"))
+    rows.append(("建议", "线宽/孔径 ≥ 2×δ 时高频电阻显著增大，大电流高频走线需加宽或并联"))
+    rows.append(("标准", "δ ≈ 66/√f mm（20℃ 铜）"))
     return {"rows": rows, "note": "趋肤深度指导高频走线：当截面尺寸接近 δ 时电阻明显上升，建议走线尺寸 >> δ"}
 
 
@@ -718,13 +747,29 @@ def _calc_signal(q: str) -> dict:
 # ===== 热设计（结温） =====
 
 def _calc_thermal(q: str) -> dict:
-    ta = _first([r'(?:环境温度|环境|TA|Ta|ta)\s*(\d+(?:\.\d+)?)', r'(\d+(?:\.\d+)?)\s*℃\s*(?:环境|室温)'], q)
-    power = _first([r'(\d+(?:\.\d+)?)\s*W\b'], q)
+    ta = _first([r'(?:环境温度|环境|TA|Ta|ta)\s*(?:[A-Za-z]*)\s*[=:]?\s*(\d+(?:\.\d+)?)',
+                 r'(\d+(?:\.\d+)?)\s*℃\s*(?:环境|室温)',
+                 r'(?:环境温度|环境|TA|Ta|ta)\s*[=:]?\s*(\d+(?:\.\d+)?)'], q)
+    power = _first([r'(\d+(?:\.\d+)?)\s*[Ww](?![A-Za-z0-9])'], q)
+    if power is None:
+        # LDO 场景：功耗 = (Vin − Vout) × Iout（如「输入15V、输出5V、负载电流60mA」）
+        m_vin = re.search(r'(?:输入|Vin)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*V', q, re.IGNORECASE)
+        m_vout = re.search(r'(?:输出|Vout)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*V', q, re.IGNORECASE)
+        m_iout = re.search(r'(?:负载电流|Iout|输出电流)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*(mA|A)', q, re.IGNORECASE)
+        if m_iout is None:
+            m_iout = re.search(r'电流\s*[=:]?\s*(\d+(?:\.\d+)?)\s*(mA|A)', q, re.IGNORECASE)
+        if m_vin and m_vout and m_iout:
+            iout_a = float(m_iout.group(1)) * (1e-3 if m_iout.group(2).lower().startswith("m") else 1.0)
+            power = (float(m_vin.group(1)) - float(m_vout.group(1))) * iout_a
     tj_max = _first([r'(?:结温上限|最大结温|Tjmax|Tj_max)\s*(\d+(?:\.\d+)?)'], q)
     rjc = _first([r'(?:Rjc|结到壳)\s*(\d+(?:\.\d+)?)'], q)
     rcs = _first([r'(?:Rcs|壳到散热片)\s*(\d+(?:\.\d+)?)'], q)
     rsa = _first([r'(?:Rsa|散热片到环境)\s*(\d+(?:\.\d+)?)'], q)
     theta = _first([r'(\d+(?:\.\d+)?)\s*(?:℃/W|K/W|°C/W)'], q)
+    # 铜箔面积缩放：datasheet RθJA 基于 1in²=6.45cm² 铜箔，实际面积不同按 ∝1/√A 近似修正
+    m_area = re.search(r'(\d+(?:\.\d+)?)\s*cm\s*[²2]', q)
+    if theta is not None and m_area and ("in²" in q or "平方英寸" in q or "6.45" in q):
+        theta = theta * math.sqrt(6.45 / float(m_area.group(1)))
 
     if ta is None:
         ta = 25.0
@@ -766,8 +811,8 @@ def _calc_thermal(q: str) -> dict:
 # ===== 通用小电路 =====
 
 def _calc_led(q: str) -> dict:
-    v = _first([r'(?:电源|供电|VCC)\s*(\d+(?:\.\d+)?)\s*V', r'(\d+(?:\.\d+)?)\s*V\b'], q)
-    vf = _first([r'(?:压降|Vf|vf)\s*(\d+(?:\.\d+)?)\s*V', r'(\d+(?:\.\d+)?)\s*V\s*(?:压降|Vf)'], q)
+    v = _first([r'(?:电源|供电|VCC)\s*(\d+(?:\.\d+)?)\s*V', r'(\d+(?:\.\d+)?)\s*[Vv](?![A-Za-z0-9])'], q)
+    vf = _first([r'(?:压降|Vf|vf)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*V', r'(\d+(?:\.\d+)?)\s*V\s*(?:压降|Vf)'], q)
     i_ma = _first([r'(\d+(?:\.\d+)?)\s*mA', r'(\d+(?:\.\d+)?)\s*(?:毫安|ma)'], q)
     n = _first([r'(\d+)\s*颗', r'(\d+)\s*个', r'(\d+)\s*只', r'(\d+)\s*盏',
                 r'串联\s*(\d+)'], q) or 1
@@ -795,13 +840,31 @@ def _calc_led(q: str) -> dict:
 
 
 def _calc_divider(q: str) -> dict:
-    vin = _first([r'(?:输入|Vin|vin)\s*(\d+(?:\.\d+)?)\s*V', r'(\d+(?:\.\d+)?)\s*V\s*(?:输入|分压)'], q)
+    vin = _first([r'(?:输入|Vin|vin)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*V',
+                  r'(\d+(?:\.\d+)?)\s*V\s*(?:输入|分压)',
+                  r'从\s*(\d+(?:\.\d+)?)\s*[Vv]'], q)
     v2 = _first([r'(?:偏置|V2|v2)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*V', r'(\d+(?:\.\d+)?)\s*V\s*(?:偏置|到\s*V2)'], q)
-    r1 = _first([r'r1\s*=\s*(\d+(?:\.\d+)?)', r'(\d+(?:\.\d+)?)\s*(?:kΩ|KΩ|k欧)'], q)
-    r2 = _first([r'r2\s*=\s*(\d+(?:\.\d+)?)', r'(\d+(?:\.\d+)?)\s*(?:Ω|欧|ohm)'], q)
-    if vin is None or r1 is None or r2 is None:
-        return {"rows": [("提示", "分压需要：输入电压 + R1 + R2。如「5V 分压 R1=10k R2=10k 输出多少」；双源「12V 分压 V2=3V R1=10k R2=10k」")], "note": ""}
+    r1 = _first([r'[Rr]1\s*(?:取|为|接|[=:]\s*)?\s*(\d+(?:\.\d+)?)'], q)
+    r2 = _first([r'[Rr]2\s*(?:取|为|接|[=:]\s*)?\s*(\d+(?:\.\d+)?)\s*(?:k?Ω)?',
+                 r'(\d+(?:\.\d+)?)\s*kΩ'], q)
+    vout_target = _first([r'(?:得到|输出|降到|变到|调出|需要)\s*(\d+(?:\.\d+)?)\s*[Vv]'], q)
+    if vin is None or r2 is None:
+        return {"rows": [("提示", "分压需要：输入电压 + R1 + R2。如「5V 分压 R1=10k R2=10k 输出多少」；反推 R1「从5V得到3.3V R2取10kΩ 求R1」")], "note": ""}
     v2 = v2 or 0.0
+    # 反推 R1：已知目标输出电压（接地分压 V2=0），vout_target 需 >0 防除零
+    if r1 is None and vout_target is not None and v2 == 0 and vout_target > 0:
+        r1 = r2 * (vin - vout_target) / vout_target
+        rows = [
+            ("计算目标", "电阻分压 → 反推 R1（已知 Vout）"),
+            ("输入 V1", f"{vin} V"),
+            ("目标输出", f"{vout_target} V"),
+            ("R2", f"{r2} kΩ"),
+            ("所需 R1", f"{_num(r1, 2)} kΩ（R2×(Vin−Vout)/Vout）"),
+            ("标准", "Vout=Vin×R2/(R1+R2) → R1=R2×(Vin−Vout)/Vout"),
+        ]
+        return {"rows": rows, "note": "用 E24/E96 就近标准值。R1+R2 并联于负载会拉低输出，阻值需远小于负载阻抗"}
+    if r1 is None:
+        return {"rows": [("提示", "反推 R1 需给目标输出电压（如「从5V得到3.3V R2取10kΩ 求R1」）")], "note": ""}
     vout = (vin - v2) * r2 / (r1 + r2) + v2
     i = (vin - v2) / (r1 + r2)
     rows = [
@@ -875,6 +938,27 @@ def _calc_differential(q: str) -> dict:
     target_z = _first([r'(?:目标|匹配)?\s*(\d+(?:\.\d+)?)\s*(?:Ω|欧|ohm)',
                        r'(\d+(?:\.\d+)?)\s*欧姆'], q)
 
+    # 变宽对比："线宽从 A 改为 B，差分阻抗怎么变化"
+    m_change = re.search(r'从\s*(\d+(?:\.\d+)?)\s*(mm|毫米|mil)\s*(?:改为|变成|变为|改成)\s*(\d+(?:\.\d+)?)\s*(mm|毫米|mil)', q, re.IGNORECASE)
+    if m_change is not None and hb_mm is not None:
+        w1_mm = _to_mm(float(m_change.group(1)), m_change.group(2))
+        w2_mm = _to_mm(float(m_change.group(3)), m_change.group(4))
+        s_used = s_mm if s_mm is not None else hb_mm * DEFAULT_DIFF_S_RATIO
+        z1 = _diff_z(w1_mm, s_used, hb_mm, t_mm, er, is_stripline)
+        z2 = _diff_z(w2_mm, s_used, hb_mm, t_mm, er, is_stripline)
+        trend = "阻抗升高" if z2 > z1 else "阻抗降低"
+        rows = [
+            ("计算目标", f"差分阻抗随线宽变化（{'差分带状线' if is_stripline else '差分微带线'}）"),
+            ("介质高度 h", f"{_num(hb_mm)} mm"),
+            ("线间距 s", f"{_num(s_used)} mm"),
+            ("介电常数 εr", str(er)),
+            ("铜厚", f"{oz} oz"),
+            (f"线宽 {_num(w1_mm * 1000, 0)}μm", f"差分阻抗 Zdiff = {_num(z1, 1)} Ω"),
+            (f"线宽 {_num(w2_mm * 1000, 0)}μm", f"差分阻抗 Zdiff = {_num(z2, 1)} Ω"),
+            ("变化趋势", f"{trend}（{_num((z2 - z1) / z1 * 100, 1)}%）"),
+            ("标准", "Zdiff=2Z0(1−0.48e^(−0.96s/h))；线宽越窄阻抗越高"),
+        ]
+        return {"rows": rows, "note": "线宽减小 → 差分阻抗升高（同 s/h），反之亦然。匹配容差通常 ±10%"}
     # 反推线宽模式
     if target_z is not None:
         if hb_mm is None:
@@ -1298,21 +1382,25 @@ def _calc_three_phase(q: str) -> dict:
 
 def _calc_snubber(q: str) -> dict:
     """双频法：Cp→Lp→R_snub→C_snub→功耗"""
-    m_f1 = re.search(r'(?:原始|无|F1|f1|第一)\s*(?:振铃|频率|振荡)?\s*[=:]?\s*(\d+(?:\.\d+)?)\s*(MHz|kHz)', q, re.IGNORECASE)
-    m_f2 = re.search(r'(?:加.*?后|F2|f2|第二)\s*(?:振铃|频率)?\s*[=:]?\s*(\d+(?:\.\d+)?)\s*(MHz|kHz)', q, re.IGNORECASE)
+    m_f1 = re.search(r'(?:原始|无|F1|f1|第一)\s*(?:振铃|频率|振荡)?\s*[=:]?\s*(\d+(?:\.\d+)?)\s*(MHz|kHz)'
+                     r'|(?:振铃|振荡|开关节点|SW)\s*(?:频率)?\s*[=:]?\s*(\d+(?:\.\d+)?)\s*(MHz|kHz)', q, re.IGNORECASE)
+    m_f2 = re.search(r'(?:加.*?后|F2|f2|第二)\s*(?:振铃|频率)?\s*[=:]?\s*(\d+(?:\.\d+)?)\s*(MHz|kHz)'
+                     r'|(?:频率|振铃)\s*(?:变|降|变为|降为)\s*(?:为|到|至)?\s*[=:]?\s*(\d+(?:\.\d+)?)\s*(MHz|kHz)', q, re.IGNORECASE)
     m_c = re.search(r'(?:测试电容|Ctest|C_test)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*(pF|nF|pf|nf)', q, re.IGNORECASE)
     if not m_c:
         m_c = re.search(r'(\d+(?:\.\d+)?)\s*(pF|nF|pf|nf)', q, re.IGNORECASE)
     if not (m_f1 and m_f2 and m_c):
         return {"rows": [("提示", "Snubber 双频法需要：原始振铃频率 + 加测试电容后频率 + 测试电容值。如「原始振铃100MHz 加220pF后60MHz 算吸收电路」")], "note": ""}
-    f1 = float(m_f1.group(1)) * (1e6 if m_f1.group(2)[0].lower() == "m" else 1e3)
-    f2 = float(m_f2.group(1)) * (1e6 if m_f2.group(2)[0].lower() == "m" else 1e3)
+    g1, g2 = m_f1.group(1) or m_f1.group(3), m_f1.group(2) or m_f1.group(4)
+    g3, g4 = m_f2.group(1) or m_f2.group(3), m_f2.group(2) or m_f2.group(4)
+    f1 = float(g1) * (1e6 if g2[0].lower() == "m" else 1e3)
+    f2 = float(g3) * (1e6 if g4[0].lower() == "m" else 1e3)
     ctest = float(m_c.group(1)) * (1e-12 if m_c.group(2)[0].lower() == "p" else 1e-9)
     x = (f1 / f2) ** 2 - 1
     cp = ctest / x
     lp = 1 / ((2 * math.pi * f1) ** 2 * cp)
     r_snub = math.sqrt(lp / cp)
-    c_snub = 2 * cp
+    c_snub = cp * (3 if ("3倍" in q or "三倍" in q or "3×" in q) else 2)   # Snubber 电容可取 2~3×Cp
     rows = [
         ("计算目标", "Snubber RC 吸收电路（双频法）"),
         ("振铃频率", f"{_num(f1 / 1e6)} MHz → 加 {_num(ctest * 1e12)}pF 后 {_num(f2 / 1e6)} MHz"),
@@ -1486,11 +1574,14 @@ def _calc_rated_current(q: str) -> dict:
 def _calc_via_parasitic(q: str) -> dict:
     """Cvia=1.41·εr·T·D1/(D2−D1)；Lvia=5.08·h·(ln(4h/d)+1)"""
     er = _first([r'介电常数\s*(\d+(?:\.\d+)?)', r'εr\s*[=:]?\s*(\d+(?:\.\d+)?)'], q) or 4.2
-    t = _first([r'(?:板厚|T)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*mm'], q)
+    t = _first([r'(?:板厚|T)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*mm',
+                r'(\d+(?:\.\d+)?)\s*mm\s*(?:板厚|厚度|厚)'], q)
     d1 = _first([r'(?:焊盘直径|D1|(?<!反)焊盘|pad)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*(?:mm)?'], q)
     d2 = _first([r'(?:反焊盘|D2|antipad|anti[\s-]?pad)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*(?:mm)?'], q)
-    h = _first([r'(?:过孔长度|h)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*mm'], q)
-    d = _first([r'(?:过孔直径|孔径|d)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*mm'], q)
+    h = _first([r'(?:过孔长度|h)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*mm',
+                r'(\d+(?:\.\d+)?)\s*mm\s*(?:过孔长度|板厚|厚度|长)'], q)
+    d = _first([r'(?:过孔直径|孔径|d)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*mm',
+                r'(\d+(?:\.\d+)?)\s*mm\s*(?:孔径|钻孔|通孔)'], q)
     if (t is not None and d1 is not None and d2 is not None) or (h is not None and d is not None):
         rows = [("计算目标", "过孔寄生电容 / 电感 / 截止频率"), ("介电常数 εr", f"{er}")]
         if t is not None and d1 is not None and d2 is not None:
@@ -1501,6 +1592,15 @@ def _calc_via_parasitic(q: str) -> dict:
         if h is not None and d is not None:
             lvia = 5.08 * h * (math.log(4 * h / d) + 1)
             rows.append(("寄生电感 Lvia", f"{_num(lvia, 3)} nH"))
+            if "感抗" in q or "阻抗" in q or "电抗" in q:
+                m_fr = re.search(r'(\d+(?:\.\d+)?)\s*(GHz|MHz|kHz)', q, re.IGNORECASE)
+                if m_fr is not None:
+                    fv = float(m_fr.group(1))
+                    fu_raw = m_fr.group(2)
+                    fhz = fv * {"ghz": 1e9, "mhz": 1e6, "khz": 1e3}[fu_raw.lower()]
+                    xl = 2 * math.pi * fhz * lvia * 1e-9
+                    # :g 显示频率，避免 _num 的 rstrip("0") 把 10 削成 1；单位跟随输入（GHz/MHz/kHz）
+                    rows.append(("感抗 XL", f"{_num(xl, 1)} Ω（2πfL @ {fv:g}{fu_raw}）"))
         rows.append(("标准", "Cvia=1.41εr·T·D1/(D2−D1)；Lvia=5.08h(ln(4h/d)+1)"))
         return {"rows": rows, "note": "高速信号注意过孔残桩（Stub），可用背钻/盲埋孔优化。示例：「板厚1.6mm 焊盘0.6 反焊盘1.0 过孔寄生」"}
     return {"rows": [("提示", "过孔寄生需要：板厚+焊盘+反焊盘（算 Cvia），或长度+孔径（算 Lvia）。如「板厚1.6mm 焊盘0.6 反焊盘1.0 寄生电容」")], "note": ""}
@@ -1683,15 +1783,23 @@ def _calc_battery_charging(q: str) -> dict:
 def _calc_iot_battery(q: str) -> dict:
     """Iavg = (Σ Ii·ti + Isleep·tsleep) / Tcycle；Life = Cbat / Iavg"""
     cap = _first([r'(?:容量|电池)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*mAh', r'(\d+(?:\.\d+)?)\s*mAh'], q)
-    itx = _first([r'(?:发射|TX)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*mA'], q)
+    itx = _first([r'(?:发射|TX)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*mA',
+                  r'(?:采样|工作|传感)\s*(?:一次|时)?\s*(?:电流|耗电)?\s*[=:]?\s*(\d+(?:\.\d+)?)\s*mA',
+                  r'电流\s*(\d+(?:\.\d+)?)\s*mA'], q)
     m_cy = re.search(r'(?:周期|cycle)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*(s|秒|min|分钟)', q, re.IGNORECASE)
+    if m_cy is None:
+        m_cy = re.search(r'每\s*(\d+(?:\.\d+)?)\s*(s|秒|min|分钟)', q, re.IGNORECASE)
     cycle = float(m_cy.group(1)) if m_cy else None
-    m_sleep = re.search(r'(?:睡眠|sleep)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*(uA|μA|mA)', q, re.IGNORECASE)
+    m_sleep = re.search(r'(?:睡眠|sleep|休眠)\s*(?:状态)?\s*[（(]?\s*[^）)]*?(?:电流|功耗)?\s*[=:]?\s*(\d+(?:\.\d+)?)\s*(uA|μA|mA)', q, re.IGNORECASE)
     if itx is None or cycle is None or cap is None:
-        return {"rows": [("提示", "IoT 电池寿命需要：发射电流 + 周期 + 容量（+ 睡眠电流）。如「LoRa 发射100mA 周期15分钟 睡眠5uA 2000mAh 寿命多久」")], "note": ""}
-    m_ttx = re.search(r'(?:发射时长|发包时长)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*(ms|s)', q, re.IGNORECASE)
-    ttx = (float(m_ttx.group(1)) / 1000) if (m_ttx and m_ttx.group(2) == "ms") else (float(m_ttx.group(1)) if m_ttx else 0.5)
-    isleep_ua = (float(m_sleep.group(1)) * (1000 if m_sleep.group(2)[0].lower() == "m" else 1)) if m_sleep else 0
+        return {"rows": [("提示", "IoT 电池寿命需要：发射电流 + 周期 + 容量（+ 睡眠电流）。如「LoRa 发射100mA 周期15分钟 睡眠5uA 2000mAh 寿命多久」；周期工作「每10秒采样50ms 电流30mA 休眠5uA」")], "note": ""}
+    m_ttx = re.search(r'(?:发射时长|发包时长|耗时|持续)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*(ms|s|毫秒)', q, re.IGNORECASE)
+    ttx = 0.5
+    if m_ttx:
+        ttx = float(m_ttx.group(1)) / 1000 if m_ttx.group(2) in ("ms", "毫秒") else float(m_ttx.group(1))
+    isleep_ua = 0.0
+    if m_sleep:
+        isleep_ua = float(m_sleep.group(1)) * (1000 if m_sleep.group(2)[0].lower() == "m" else 1)
     cycle_s = cycle * 60 if (m_cy and (m_cy.group(2) in ("min", "分钟"))) else cycle
     iavg_ua = (itx * ttx * 1000 + (cycle_s - ttx) * isleep_ua) / cycle_s
     life_days = cap / (iavg_ua / 1000) / 24
@@ -1762,7 +1870,7 @@ def _res_ohm(v, unit):
 def _calc_opamp(q: str) -> dict:
     """运放增益：Av=1+Rf/R1（同相）或 -Rf/R1（反相）；带宽 BW=GBW/(1+Rf/R1)"""
     rf_v, rf_u = _val_unit(q, r'(?:Rf|反馈电阻)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*(kΩ|KΩ|MΩ|k|Ω|欧)')
-    r1_v, r1_u = _val_unit(q, r'(?:R1|接地电阻)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*(kΩ|KΩ|MΩ|k|Ω|欧)')
+    r1_v, r1_u = _val_unit(q, r'(?:R1|Rg|接地电阻|增益电阻)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*(kΩ|KΩ|MΩ|k|Ω|欧)')
     gbw_v, gbw_u = _val_unit(q, r'(?:GBW|增益带宽积)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*(MHz|kHz)')
     if rf_v is None or r1_v is None:
         return {"rows": [("提示", "运放增益需要 Rf 和 R1。如「运放 Rf=10k R1=1k 同相增益多少」；加 GBW 可算带宽")], "note": ""}
@@ -1774,6 +1882,10 @@ def _calc_opamp(q: str) -> dict:
             ("Rf / R1", f"{_num(rf / 1e3 if rf >= 1000 else rf)} {'kΩ' if rf >= 1000 else 'Ω'} / {_num(r1 / 1e3 if r1 >= 1000 else r1)} {'kΩ' if r1 >= 1000 else 'Ω'}"),
             ("增益 Av", f"{_num(av, 2)}（{_num(20 * math.log10(abs(av)), 1)} dB）"),
             ("噪声增益", f"{_num(ng, 2)}（=1+Rf/R1，决定带宽）")]
+    m_sig = re.search(r'(?:输入信号|输入)\s*(\d+(?:\.\d+)?)\s*(mVpp|Vpp|mV|V)', q, re.IGNORECASE)
+    if m_sig is not None:
+        vin_amp = float(m_sig.group(1)) * (1e-3 if m_sig.group(2).lower().startswith("m") else 1.0)
+        rows.append(("输出幅度", f"{_num(abs(av) * vin_amp, 3)} V（Av×{_num(vin_amp, 3)}V）"))
     if gbw_v is not None:
         gbw = gbw_v * (1e6 if gbw_u[0].lower() == "m" else 1e3)
         bw = gbw / ng
@@ -1899,7 +2011,7 @@ def _calc_transistor_bias(q: str) -> dict:
 
 def _calc_zener(q: str) -> dict:
     """R=(Vs−Vz)/(Iz+IL)；功耗校核"""
-    vs = _first([r'(?:电源|Vs)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*V', r'(\d+(?:\.\d+)?)\s*V\b'], q)
+    vs = _first([r'(?:电源|Vs)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*V', r'(\d+(?:\.\d+)?)\s*[Vv](?![A-Za-z0-9])'], q)
     vz = _first([r'(?:稳压值|Vz)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*V', r'(\d+(?:\.\d+)?)\s*V\s*(?:稳压|齐纳)'], q)
     il = _first([r'(?:负载电流|IL)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*mA'], q)
     if vs is None or vz is None:
@@ -1977,8 +2089,23 @@ def _calc_mc34063(q: str) -> dict:
 
 def _calc_i2c_pullup(q: str) -> dict:
     """Rp_max=Tr/(0.8473·Cb)；Rp_min≈Vcc·0.1/Iol"""
-    vcc = _first([r'(?:电源|Vcc)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*V', r'(\d+(?:\.\d+)?)\s*V\s*(?:i2c|I2C|总线)'], q)
-    cb = _first([r'(?:总线电容|Cb)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*pF', r'(\d+(?:\.\d+)?)\s*pF'], q)
+    vcc = _first([r'(?:电源|Vcc|VDD|Vdd|vdd)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*V',
+                  r'(\d+(?:\.\d+)?)\s*V\s*(?:i2c|I2C|总线)'], q)
+    cb = _first([r'(?:总线电容|Cb)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*pF'], q)
+    if cb is None:
+        # 多器件/走线电容聚合：N 个器件 × Ci + 走线 pF/cm × cm（+ 走线电容 XpF）
+        cb_agg = 0.0
+        m_dev = re.search(r'(\d+)\s*个\s*器件\s*[（(]?\s*(?:每个|各)?\s*Ci\s*[=:]?\s*(\d+(?:\.\d+)?)\s*pF', q, re.IGNORECASE)
+        m_cm = re.search(r'(\d+(?:\.\d+)?)\s*(?:cm|厘米)\s*[，,]?\s*(?:约|大约)?\s*(\d+(?:\.\d+)?)\s*pF\s*/?\s*cm', q, re.IGNORECASE)
+        m_trace = re.search(r'走线电容\s*(?:约|为)?\s*(\d+(?:\.\d+)?)\s*pF', q, re.IGNORECASE)
+        if m_dev:
+            cb_agg += float(m_dev.group(1)) * float(m_dev.group(2))
+        if m_cm:
+            cb_agg += float(m_cm.group(1)) * float(m_cm.group(2))
+        if m_trace:
+            cb_agg += float(m_trace.group(1))
+        # 有明确聚合来源才用聚合值；否则退化为任意 pF 值（如 "总线100pF" 无标签）
+        cb = cb_agg if cb_agg > 0 else _first([r'(\d+(?:\.\d+)?)\s*pF'], q)
     if vcc is None or cb is None:
         return {"rows": [("提示", "I2C 上拉需要电源电压 + 总线电容（+ 速率）。如「3.3V I2C 总线电容100pF 上拉多少」")], "note": ""}
     mode = "Fast-Plus" if "fast-plus" in q.lower() or "1m" in q else ("Fast" if "fast" in q.lower() or "400k" in q else "Standard")
@@ -1992,6 +2119,12 @@ def _calc_i2c_pullup(q: str) -> dict:
             ("上拉最小值", f"{_num(rp_min, 0)} Ω（由驱动能力限制）"),
             ("推荐", f"{_num((rp_max + rp_min) / 2 / 1e3, 1)} kΩ（常用 2.2~10k）"),
             ("标准", "Rp_max=Tr/(0.8473·Cb)；Rp_min≈Vcc·0.1/Iol")]
+    # 给定上拉电阻 → 反推上升时间（盲用 4.7kΩ 是否满足 Tr 要求）
+    m_rp = _first([r'(\d+(?:\.\d+)?)\s*kΩ\s*(?:上拉|电阻)'], q)
+    if m_rp is not None and ("上升时间" in q or "满足" in q or "盲用" in q):
+        tr_actual = 0.8473 * m_rp * 1000 * cb_f
+        ok = "✅ 满足" if tr_actual <= tr else "❌ 不满足"
+        rows.append(("给定上拉上升时间", f"{_num(tr_actual * 1e9, 0)} ns（0.8473×{_num(m_rp, 1)}kΩ×{_num(cb)}pF，要求≤{_num(tr * 1e9, 0)}ns）{ok}"))
     return {"rows": rows, "note": "Standard 总线电容≤400pF，Fast≤400pF，Fast-Plus≤550pF。Rp 越小驱动越强但功耗越高；多节点需计算总 Cb"}
 
 
@@ -2036,7 +2169,7 @@ def _calc_series_capacitor(q: str) -> dict:
 
 def _calc_electric_power(q: str) -> dict:
     """P=VI；P=I²R；P=V²/R 互推"""
-    v = _first([r'(?:电压|V)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*V', r'(\d+(?:\.\d+)?)\s*V\b'], q)
+    v = _first([r'(?:电压|V)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*V', r'(\d+(?:\.\d+)?)\s*[Vv](?![A-Za-z0-9])'], q)
     i = _extract_current(q)
     r = _first([r'(?:电阻|R)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*(?:kΩ|KΩ|Ω|欧)'], q)
     p = _first([r'(?:功率|P)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*W'], q)
@@ -2110,19 +2243,31 @@ def _calc_rs485(q: str) -> dict:
 
 def _calc_crystal(q: str) -> dict:
     """CL=(C1+Cin)(C2+Cout)/(C1+Cin+C2+Cout)+Cstray；对称 C1=C2=2(CL−Cstray)−Cin"""
-    cl = _first([r'(?:负载电容|CL)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*pF'], q)
-    cstray = _first([r'(?:寄生|Cstray)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*pF'], q)
-    cin = _first([r'(?:引脚电容|Cin)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*pF'], q)
+    cl = _first([r'(?:负载电容|CL)\s*(?:约|估算|为)?\s*[=:]?\s*(\d+(?:\.\d+)?)\s*pF'], q)
+    cstray = _first([r'(?:寄生电容|Cstray|杂散|寄生)\s*(?:约|估算|为)?\s*[=:]?\s*(\d+(?:\.\d+)?)\s*pF'], q)
+    cin = _first([r'(?:引脚电容|Cin)\s*(?:约|估算|为)?\s*[=:]?\s*(\d+(?:\.\d+)?)\s*pF'], q)
     if cl is None:
         return {"rows": [("提示", "晶振匹配需要负载电容 CL。如「晶振 CL=12.5pF 寄生3pF 引脚2pF 匹配电容多少」」")], "note": ""}
     cstray = cstray or 3.0
     cin = cin or 2.0
-    c1 = 2 * (cl - cstray) - cin
+    c1 = 2 * (cl - cstray - cin)   # 杂散全部进括号：C1=C2=2(CL−Cstray−Cin)
     rows = [("计算目标", "晶振匹配电容（对称）"),
             ("负载电容 CL", f"{cl} pF"),
             ("寄生 / 引脚", f"Cstray {_num(cstray)} pF / Cin {_num(cin)} pF"),
             ("匹配电容 C1=C2", f"{_num(c1, 1)} pF（推荐 E24：{_num(round(c1 / 5) * 5, 0)}pF 或就近标准值）"),
-            ("标准", "C1=C2=2(CL−Cstray)−Cin")]
+            ("标准", "C1=C2=2(CL−Cstray−Cin)")]
+    # 频偏估算：给定实际 C1（或用户选定的 C1），相对标称 CL 的频率偏差
+    if any(w in q for w in ["频偏", "频率偏差", "偏差"]):
+        c1_actual = _first([r'(?:实际|实选|选用|取)\s*C1\s*=\s*C2\s*[=:]?\s*(\d+(?:\.\d+)?)\s*pF',
+                            r'C1\s*=\s*C2\s*选\s*为\s*(\d+(?:\.\d+)?)\s*pF'], q) or c1
+        # 实际负载电容 = C1/2 + 总杂散（Cstray 已含题目给的杂散总值；不重复加默认 Cin）
+        cl_actual = c1_actual / 2 + cstray
+        # 频偏近似：Δf/f ≈ (C_mot/2)·(1/(C0+CL_actual) − 1/(C0+CL标称))，C_mot=0.02pF、C0=7pF 为常见假设
+        c_mot, c0 = 0.02, 7.0
+        ppm = (c_mot / 2) * (1 / (c0 + cl_actual) - 1 / (c0 + cl)) * 1e6
+        rows.append(("频率偏差（估算）", f"{_num(ppm, 0)} ppm ≈ {_num(ppm / 1e4, 3)}%"
+                    + ("（CL 偏小→频率偏高）" if ppm > 0 else "（CL 偏大→频率偏低）")))
+        rows.append(("估算假设", "C_mot=0.02pF、C0=7pF（典型无源晶振），实际以 datasheet 为准"))
     return {"rows": rows, "note": "实测频率偏高→CL 偏小→调大 C1/C2；偏低→调小。良好布线 Cstray 2~5pF，STM32/ESP32 引脚电容典型 2~5pF"}
 
 
@@ -2327,14 +2472,22 @@ def _calc_lc_filter(q: str) -> dict:
     c = _u(c_v, c_u, {"uf": 1e-6, "μf": 1e-6, "nf": 1e-9, "pf": 1e-12})
     f0 = 1 / (2 * math.pi * math.sqrt(l * c))
     z0 = math.sqrt(l / c)
-    q = z0 / zl if zl else None
+    # 第二组 L/C（"若改用/换用 XμH 和 YnF"）——须在下方 q 被品质因数覆盖前使用原始入参 q
+    m2 = re.search(r'(?:若改用|改为|换用)\s*(\d+(?:\.\d+)?)\s*(μH|uH|mH)\s*(?:电感)?\s*(?:和|与|、)?\s*(\d+(?:\.\d+)?)\s*(μF|uF|nF|pF)', q, re.IGNORECASE)
+    q = z0 / zl if zl else None   # 注意：q 在此被重定义为品质因数，覆盖入参（历史遗留命名冲突）
     rows = [("计算目标", "LC 滤波器参数"),
             ("L / C", f"{_num(l_v)} {l_u} / {_num(c_v)} {c_u}"),
-            ("谐振/截止频率", f"{_num(f0 / 1e3, 2)} kHz（{_num(f0 / 1e6, 3)} MHz）"),
-            ("特征阻抗 Z0", f"{_num(z0, 1)} Ω"),
-            ("品质因数 Q", f"{_num(q, 2)}（=Z0/ZL）" if q else "-"),
-            ("响应", "巴特沃斯平坦" if q is not None and abs(q - 0.707) < 0.01 else ("出现过冲" if q and q > 1 else "常规")),
-            ("标准", "f0=1/(2π√LC)；Z0=√(L/C)")]
+            ("谐振/截止频率", f"{_num(f0 / 1e3, 2)} kHz（{_num(f0 / 1e6, 3)} MHz）")]
+    if m2 is not None:
+        l2 = _u(float(m2.group(1)), m2.group(2), {"uh": 1e-6, "μh": 1e-6, "mh": 1e-3, "h": 1})
+        c2 = _u(float(m2.group(3)), m2.group(4), {"uf": 1e-6, "μf": 1e-6, "nf": 1e-9, "pf": 1e-12})
+        f0_2 = 1 / (2 * math.pi * math.sqrt(l2 * c2))
+        rows.append(("第二组 L/C", f"{_num(float(m2.group(1)))} {m2.group(2)} / {_num(float(m2.group(3)))} {m2.group(4)}"))
+        rows.append(("第二组截止频率", f"{_num(f0_2 / 1e3, 2)} kHz（{_num(f0_2 / 1e6, 3)} MHz）"))
+    rows += [("特征阻抗 Z0", f"{_num(z0, 1)} Ω"),
+             ("品质因数 Q", f"{_num(q, 2)}（=Z0/ZL）" if q else "-"),
+             ("响应", "巴特沃斯平坦" if q is not None and abs(q - 0.707) < 0.01 else ("出现过冲" if q and q > 1 else "常规")),
+             ("标准", "f0=1/(2π√LC)；Z0=√(L/C)")]
     return {"rows": rows, "note": "Q≈0.707→巴特沃斯平坦；Q>1→截止频率附近过冲。实际电感存在 SRF，高于 SRF 时呈容性"}
 
 
@@ -2380,24 +2533,38 @@ def _detect_calc_type(q: str) -> str:
         return "lc_filter"
     if "谐振" in q:
         return "lc_resonance"
+    # 晶振/负载电容 优先于 via_parasitic（晶振匹配题也含"寄生电容"字样）
+    if "晶振" in q or "负载电容" in q:
+        return "crystal"
+    # Snubber 优先于 via_parasitic（双频法题含"寄生电容/参数"字样）
+    if any(w in q for w in ["吸收电路", "吸收电阻", "snubber", "Snubber", "振铃"]):
+        return "snubber"
+    # 过孔寄生：需过孔/板厚等语境，避免劫持晶振、Snubber 的"寄生电容"
+    if any(w in q for w in ["寄生电容", "寄生电感", "过孔寄生", "寄生参数", "via寄生"]) \
+            and any(w in q for w in ["过孔", "via", "VIA", "板厚", "焊盘", "反焊盘", "孔径", "钻孔"]):
+        return "via_parasitic"
     if any(w in q for w in ["感抗", "容抗", "电抗"]):
         return "reactance"
-    if any(w in q for w in ["寄生电容", "寄生电感", "过孔寄生", "寄生参数", "via寄生"]):
-        return "via_parasitic"
     if any(w in q for w in ["热过孔", "散热过孔", "过孔热阻", "过孔阵列"]):
         return "via_thermal"
     if any(w in q for w in ["铜排", "汇流条", "母线", "busbar", "Busbar"]):
         return "copper_busbar"
     if "三相" in q or "3相" in q or "three-phase" in q.lower():
         return "three_phase"
-    if any(w in q for w in ["吸收电路", "吸收电阻", "snubber", "Snubber", "振铃"]):
-        return "snubber"
+    # Buck 选型优先于 pdn 的"纹波"（Buck 题常含"输出/输入纹波"字样）。
+    # 注意：①不把"纹波电流"作为独立触发词（PDN 题会误伤）；②含"效率/损耗"的 Buck 题走 smps（拓扑名≠选型需求）
+    if any(w in q for w in ["buck", "Buck", "降压", "最小电感", "输出电容", "输入电容"]) \
+            and not any(w in q for w in ["效率", "损耗", "Rds", "Qg", "导通"]) \
+            or ("占空比" in q and any(w in q for w in ["输入", "fsw", "开关频率"])):
+        return "buck"
     if any(w in q for w in ["目标阻抗", "去耦", "pdn", "PDN", "电源完整性", "纹波"]):
         return "pdn"
+    # 开关电源：若仅为走线语境（"开关电源中走线承载多大电流"）且无损耗参数 → 不走 smps
     if any(w in q for w in ["开关电源", "效率", "导通损耗", "开关损耗", "mos损耗", "续流二极管损耗"]):
-        return "smps"
-    if any(w in q for w in ["buck", "Buck", "降压", "最小电感", "输出电容"]):
-        return "buck"
+        has_trace_ctx = any(w in q for w in ["走线", "线宽", "载流", "铜厚", "承载", "温升"])
+        has_smps_ctx = any(w in q for w in ["效率", "损耗", "Rds", "Qg", "导通", "续流", "开关频率"])
+        if not (has_trace_ctx and not has_smps_ctx):
+            return "smps"
     if any(w in q for w in ["额定电流", "变压器", "电机电流", "电流速算"]):
         return "rated_current"
     if _RE_2152.search(q):
@@ -2408,7 +2575,9 @@ def _detect_calc_type(q: str) -> str:
         return "creepage"
     if any(w in q for w in ["延迟", "传播时延", "走线时延", "1/4", "四分之一波长"]):
         return "signal"
-    if any(w in q for w in ["阻抗", "微带", "带状", "特征阻抗", "50欧", "50Ω", "欧姆匹配"]):
+    # 注意排除 RS-485 语境：RS-485 题也含"特征阻抗"，若命中 impedance 会算成微带阻抗
+    if any(w in q for w in ["阻抗", "微带", "带状", "特征阻抗", "50欧", "50Ω", "欧姆匹配"]) \
+            and "rs485" not in q.lower() and "rs-485" not in q.lower():
         return "impedance"
     if any(w in q for w in ["过孔", "via", "VIA", "孔径", "钻孔"]):
         return "via"
@@ -2416,11 +2585,11 @@ def _detect_calc_type(q: str) -> str:
         return "skin"
     if any(w in q for w in ["结温", "热阻", "θja", "θJA", "tj", "TJ", "散热"]):
         return "thermal"
-    if any(w in q for w in ["稳压管", "齐纳", "zener", "Zener"]):
+    if any(w in q for w in ["稳压管", "稳压二极管", "稳压值", "齐纳", "zener", "Zener"]):
         return "zener"
     if "限流" in q or ("led" in q.lower()) or "发光二极管" in q:
         return "led"
-    if "分压" in q:
+    if "分压" in q or re.search(r'从\s*\d+(?:\.\d+)?\s*[Vv].*?(?:得到|降到|变到|输出)\s*\d+(?:\.\d+)?\s*[Vv]', q):
         return "divider"
     if "时间常数" in q or re.search(r'\brc\b', q.lower()):
         return "rc"
@@ -2451,11 +2620,13 @@ def _detect_calc_type(q: str) -> str:
         return "supercapacitor"
     if "充电" in q and "电池" in q:
         return "battery_charging"
+    if "iot" in q.lower() or "低功耗" in q or "lora" in q.lower() or "发射" in q \
+            or ("采样" in q and any(w in q for w in ["电池", "休眠", "睡眠", "续航", "mA", "mAh"])) \
+            or ("周期" in q and "电池" in q):
+        return "iot_battery"
     if "电池" in q and any(w in q for w in ["续航", "寿命", "能用多久"]):
         return "battery_life"
-    if "iot" in q.lower() or "低功耗" in q or "lora" in q.lower() or "发射" in q:
-        return "iot_battery"
-    if "压降" in q and "线" in q:
+    if "压降" in q and "线" in q and not any(w in q for w in ["mil", "oz", "铜厚", "线宽", "内层", "外层", "走线"]):
         return "wire_drop"
     if "lc" in q.lower() and "滤" in q:
         return "lc_filter"
@@ -2475,11 +2646,12 @@ def _detect_calc_type(q: str) -> str:
         return "emc_convert"
     if any(w in q for w in ["3w", "3W", "串扰", "走线间距"]):
         return "crosstalk"
-    if any(w in q for w in ["运放", "opamp", "OpAmp"]):
+    if any(w in q for w in ["运放", "opamp", "OpAmp", "放大器"]):
         return "opamp"
     if "sallen" in q.lower() or "运放滤波" in q or "低通" in q or "截止频率" in q:
         return "opamp_filter"
-    if "adc" in q.lower() or "分辨率" in q or "位数" in q:
+    if ("adc" in q.lower() or "分辨率" in q or "位数" in q) \
+            and not any(w in q for w in ["分压", "R1", "R2", "接GND", "得到"]):
         return "adc"
     if "rs485" in q.lower() or "rs-485" in q.lower() or "485" in q:
         return "rs485"
@@ -2511,7 +2683,8 @@ def format_result(direction: str, **kw) -> str:
         add("温升", f"{kw['temp_rise']} ℃")
         add("所在层", _layer_note(kw["is_internal"]))
         add("最小线宽", f"{_num(kw['width_mil'])} mil（≈ {_num(kw['width_mm'])} mm）")
-        add("推荐线宽", f"{_num(kw['width_mil'] * SAFETY_MARGIN)} mil（留 20% 裕量）")
+        margin = kw.get("margin", SAFETY_MARGIN)
+        add("推荐线宽", f"{_num(kw['width_mil'] * margin)} mil（留 {_num((margin - 1) * 100, 0)}% 裕量）")
         add("标准", "IPC-2221 经验公式")
         if kw.get("length_m"):
             r, v, p = kw["resistance"]
@@ -2571,15 +2744,27 @@ def _extract_temp_rise(query: str) -> float:
     return float(m.group(1)) if m else DEFAULT_TEMP_RISE
 
 
+def _extract_margin(query: str) -> float:
+    """提取安全裕量百分比（如「裕量30%」→ 1.3），默认 1.2"""
+    m = re.search(r'(?:裕量|余量|安全系数)\s*(\d+(?:\.\d+)?)\s*%', query)
+    return 1 + float(m.group(1)) / 100 if m else SAFETY_MARGIN
+
+
 def _extract_layer(query: str) -> str:
     return "internal" if "内层" in query.lower() else "external"
 
 
 def _extract_width(query: str) -> tuple[float | None, str]:
-    m = _RE_WIDTH.search(query)
+    # 优先带"宽/线宽/宽度"标签的值，避免把"50mm长、0.5mm宽"里的 50mm 误当线宽
+    m = re.search(r'(?:线宽|宽度|宽)\s*(?:为|约|是)?\s*(\d+(?:\.\d+)?)\s*(mm|毫米|mil)'
+                  r'|(\d+(?:\.\d+)?)\s*(mm|毫米|mil)\s*(?:宽|线宽|宽度)', query, re.IGNORECASE)
+    if not m:
+        m = _RE_WIDTH.search(query)
     if not m:
         return None, "mm"
-    return float(m.group(1)), ("mil" if m.group(2) == "mil" else "mm")
+    if m.group(1) is not None:
+        return float(m.group(1)), ("mil" if m.group(2) == "mil" else "mm")
+    return float(m.group(3)), ("mil" if m.group(4) == "mil" else "mm")
 
 
 def _extract_length(query: str) -> tuple[float | None, str]:
@@ -2671,8 +2856,27 @@ def _handle_impl(query: str) -> dict:
     width, width_unit = _extract_width(q)
     length, length_unit = _extract_length(q)
 
+    # 温度对压降的影响（无需宽度/电流参数）：压降 + 从 A℃ 升到 B℃
+    m_dv0 = re.search(r'压降\s*(?:为|是|约)?\s*(\d+(?:\.\d+)?)\s*(mV|V)', q)
+    m_t0 = re.search(r'(\d+(?:\.\d+)?)\s*(?:℃|°\s*C|°)\s*时', q)
+    m_t1 = re.search(r'(?:升到|升至|升温到)\s*(\d+(?:\.\d+)?)\s*[℃°C]', q)
+    if m_dv0 and m_t0 and m_t1 and ("温度系数" in q or "%" in q):
+        dv0 = float(m_dv0.group(1)) * (1e-3 if m_dv0.group(2) == "mV" else 1.0)
+        t0, t1 = float(m_t0.group(1)), float(m_t1.group(1))
+        alpha = 0.004
+        dv1 = dv0 * (1 + alpha * (t1 - t0))
+        rows = [
+            ("计算目标", "温度对走线压降的影响"),
+            ("初始压降", f"{_num(dv0 * 1000, 1)} mV（{_num(t0, 0)}℃）"),
+            ("温度变化", f"{_num(t0, 0)}℃ → {_num(t1, 0)}℃，ΔT={_num(t1 - t0, 0)}℃"),
+            ("电阻倍率", f"{_num(1 + alpha * (t1 - t0), 3)}×（铜 α≈0.004/℃）"),
+            ("新压降", f"{_num(dv1 * 1000, 1)} mV（{_num(dv1, 3)} V）"),
+            ("标准", "R(T)=R₀(1+α·ΔT)，压降同比变化"),
+        ]
+        return {"answer": _build_answer(rows, "温度升高铜电阻增大，压降随温度线性增加。铜 α≈0.4%/℃"), "source": "PCB计算(trace温度压降)"}
+
     def _to_meters(v, unit):
-        return {"m": 1.0, "cm": 0.01, "厘米": 0.01,
+        return {"m": 1.0, "cm": 0.01, "厘米": 0.01, "mm": 0.001, "毫米": 0.001,
                 "inch": 0.0254, "英寸": 0.0254}.get(unit, 1.0) * v
 
     if current is not None and width is not None:
@@ -2704,7 +2908,8 @@ def _handle_impl(query: str) -> dict:
         width_mil = calc_min_width(current, oz, temp_rise, is_internal)
         kw = dict(direction="width", current=current, oz=oz,
                   temp_rise=temp_rise, is_internal=is_internal,
-                  width_mil=width_mil, width_mm=width_mil * MIL_TO_MM)
+                  width_mil=width_mil, width_mm=width_mil * MIL_TO_MM,
+                  margin=_extract_margin(q))
         if length is not None:
             kw["length_m"] = _to_meters(length, length_unit)
             kw["resistance"] = calc_resistance_drop(width_mil, oz, kw["length_m"], current)
