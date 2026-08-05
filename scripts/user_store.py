@@ -27,6 +27,10 @@ from typing import Optional
 
 import requests
 
+# 全局直连 Session：钉钉等国内 API 强制直连，不跟随系统/环境代理（避免 Clash 劫持导致 10054/10061）
+_NET_SESSION = requests.Session()
+_NET_SESSION.trust_env = False
+
 logger = logging.getLogger("user_store")
 
 # ===== 数据库路径 =====
@@ -51,8 +55,12 @@ class UserStore(ABC):
 
     @abstractmethod
     def format_context(self, user_id: str, max_rounds: int = 5,
-                       max_content: int = 200) -> str:
-        """格式化最近对话为文字（供拼进 system prompt）"""
+                       max_content: int = 200, total_max: int = 12000) -> str:
+        """格式化最近对话为文字（供拼进 system prompt）
+
+        max_content: 单条截断；None 不截断单条
+        total_max: 总字数预算，超出从最早丢弃
+        """
         ...
 
     @abstractmethod
@@ -328,18 +336,31 @@ class SQLiteUserStore(UserStore):
             return []
 
     def format_context(self, user_id: str, max_rounds: int = 5,
-                       max_content: int = 200) -> str:
-        """格式化最近对话为文字"""
+                       max_content: int = 200, total_max: int = 12000) -> str:
+        """格式化最近对话为文字（供拼进 system prompt）
+
+        max_content: 单条截断；None 不截断单条
+        total_max: 总字数预算，超出时从最早的对话开始丢弃（保护上下文窗口）
+        """
         context = self.get_context(user_id, max_rounds)
         if not context:
             return ""
 
         lines = ["\n\n## 最近的对话历史"]
-        for msg in context:
+        budget = total_max
+        picked = []
+        for msg in reversed(context):  # 从最近往旧选，超预算丢弃旧的
             speaker = "用户" if msg["role"] == "user" else "助手"
-            content = msg["content"][:max_content]
-            lines.append(f"{speaker}：{content}")
-        return "\n".join(lines)
+            content = msg["content"]
+            if max_content is not None:
+                content = content[:max_content]
+            if budget is not None and len(content) > budget:
+                break
+            if budget is not None:
+                budget -= len(content)
+            picked.append(f"{speaker}：{content}")
+        picked.reverse()
+        return "\n".join(lines + picked)
 
     # ── 双层记忆（短期窗口 + 长期记忆） ──────────────
 
@@ -795,7 +816,7 @@ class SQLiteUserStore(UserStore):
 
         try:
             url = f"{self._DINGTALK_OLD_API}/gettoken"
-            resp = requests.get(
+            resp = _NET_SESSION.get(
                 url,
                 params={"appkey": appkey, "appsecret": appsecret},
                 timeout=10,
@@ -842,7 +863,7 @@ class SQLiteUserStore(UserStore):
             # 2. 查用户详情
             url = f"{self._DINGTALK_OLD_API}/topapi/v2/user/get"
             logger.info(f"钉钉同步用户: staff_id={staff_id}")
-            resp = requests.post(
+            resp = _NET_SESSION.post(
                 url, headers=headers, params=params,
                 json={"userid": staff_id}, timeout=10,
             )
@@ -870,7 +891,7 @@ class SQLiteUserStore(UserStore):
             for dept_id in dept_ids[:5]:
                 try:
                     dept_url = f"{self._DINGTALK_OLD_API}/topapi/v2/department/get"
-                    dept_resp = requests.post(
+                    dept_resp = _NET_SESSION.post(
                         dept_url, headers=headers, params=params,
                         json={"dept_id": dept_id}, timeout=10,
                     )
@@ -1051,9 +1072,9 @@ def get_context(user_id: str, max_rounds: int = 5) -> list[dict]:
 
 
 def format_context(user_id: str, max_rounds: int = 5,
-                   max_content: int = 200) -> str:
+                   max_content: int = 200, total_max: int = 12000) -> str:
     """兼容 memory.format_context() 接口"""
-    return get_store().format_context(user_id, max_rounds, max_content)
+    return get_store().format_context(user_id, max_rounds, max_content, total_max)
 
 
 def count_uncompressed(user_id: str) -> int:

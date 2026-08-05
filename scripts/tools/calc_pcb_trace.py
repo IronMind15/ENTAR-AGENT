@@ -21,6 +21,7 @@ DEFINITION = {
         "计算 PCB 走线设计参数（IPC-2221）："
         "已知电流求最小线宽，已知线宽求最大载流，以及电阻/压降/功率损耗。"
         "当用户问 PCB 走线多宽、能过多少电流、铜厚与载流关系、压降多少时使用。"
+        "注意：铜排/紫铜/母线/汇流条属于铜排载流计算，不属于走线，切勿用本工具。"
     ),
     "parameters": {
         "type": "object",
@@ -59,10 +60,38 @@ def _fmt(v: float, digits: int = 3) -> float:
     return round(v, digits)
 
 
+def _validate_args(args: dict) -> str | None:
+    """参数范围校验。LLM 提取参数可能幻觉（如把尺寸当 oz），非法时返回错误提示。"""
+    try:
+        oz = args.get("oz")
+        if oz is not None and not (0.2 <= float(oz) <= 10):
+            return (f"铜厚 oz 取值异常（{oz}），常见 0.5~3 oz。"
+                    "请确认是否误把其他尺寸当成了铜厚")
+        temp_rise = args.get("temp_rise")
+        if temp_rise is not None and not (1 <= float(temp_rise) <= 200):
+            return f"温升取值异常（{temp_rise}℃），应在 1~200℃ 之间"
+        current_a = args.get("current_a")
+        if current_a is not None and float(current_a) <= 0:
+            return "电流应为正值（A）"
+        width_mil = args.get("width_mil")
+        if width_mil is not None and float(width_mil) <= 0:
+            return "线宽应为正值（mil）"
+    except (TypeError, ValueError):
+        return "参数必须是数字，请检查后重试"
+    return None
+
+
 @register("calc_pcb_trace", DEFINITION)
 def execute(args: dict) -> str:
     """执行 PCB 走线计算"""
     logger.info(f"  工具调用: calc_pcb_trace({args})")
+
+    err = _validate_args(args)
+    if err:
+        return json.dumps({
+            "error": err,
+            "hint": "请核对参数后重试。铜排/紫铜/母线/汇流条是铜排载流计算，不要用走线工具。",
+        }, ensure_ascii=False)
 
     from skills.pcb_calc import (
         calc_min_width, calc_max_current, calc_resistance_drop,
@@ -73,7 +102,8 @@ def execute(args: dict) -> str:
     width_mil = args.get("width_mil")
     oz = float(args.get("oz") or 1)
     temp_rise = float(args.get("temp_rise") or 10)
-    is_internal = bool(args.get("is_internal") or False)
+    # is_internal 可能是 JSON 布尔或字符串，统一转 bool（防 "false" 字符串真值陷阱）
+    is_internal = str(args.get("is_internal")).lower() in ("true", "1")
     length_m = args.get("length_m")
 
     try:

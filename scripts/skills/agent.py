@@ -27,7 +27,7 @@ from tools import get_tool_definitions, execute_tool as _execute_registered_tool
 logger = logging.getLogger("agent")
 
 # 共享 HTTP 客户端（复用连接，避免每次建新连接）
-_HTTP_CLIENT = httpx.Client(timeout=60)
+_HTTP_CLIENT = httpx.Client(timeout=60, trust_env=False)
 
 # ===== 工具定义（从注册中心自动获取，新增工具无需改本文件） =====
 TOOLS = get_tool_definitions()
@@ -69,6 +69,8 @@ def _call_deepseek(
         logger.warning("DEEPSEEK_API_KEY 未配置")
         return None
 
+    _t0 = time.time()
+
     body = {
         "model": "deepseek-v4-flash",
         "messages": messages,
@@ -95,6 +97,7 @@ def _call_deepseek(
             if r.status_code == 200:
                 data = r.json()
                 if data.get("choices"):
+                    logger.info(f"    DeepSeek 响应 {time.time() - _t0:.1f}s（本轮回合）")
                     return data["choices"][0]["message"]
                 logger.warning("DeepSeek 返回空 choices")
                 return None
@@ -257,7 +260,7 @@ def _handle_impl(query: str, user_id: str = "") -> dict:
     if user_id:
         try:
             from skills import memory
-            context = memory.format_context(user_id, max_content=500)
+            context = memory.format_context(user_id, max_content=None, total_max=12000)
             if context:
                 system_content += (
                     "\n\n【最近对话记录 - 请仔细参考】\n"

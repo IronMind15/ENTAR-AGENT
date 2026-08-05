@@ -17,6 +17,11 @@ import time
 import argparse
 import logging
 import requests
+
+# 全局直连 Session：MinerU 是国内 API，强制直连，不跟随系统/环境代理（避免 Clash 劫持）
+_NET_SESSION = requests.Session()
+_NET_SESSION.trust_env = False
+
 from pathlib import Path
 
 # 修复 Windows 控制台编码
@@ -92,7 +97,7 @@ def get_upload_urls(files: list, model_version: str = "vlm") -> dict:
         "model_version": model_version
     }
 
-    resp = requests.post(url, headers=headers, json=data)
+    resp = _NET_SESSION.post(url, headers=headers, json=data)
     resp.raise_for_status()
     result = resp.json()
 
@@ -107,7 +112,7 @@ def upload_file(upload_url: str, file_path: str) -> None:
     注意：不传 Content-Type，否则 OSS 签名会校验失败。
     """
     with open(file_path, 'rb') as f:
-        resp = requests.put(upload_url, data=f)
+        resp = _NET_SESSION.put(upload_url, data=f)
     if resp.status_code == 200:
         logger.info(f"  ✅ 上传成功")
     else:
@@ -119,7 +124,7 @@ def get_task_status(batch_id: str) -> dict:
     url = f"{MINERU_API_BASE}/extract-results/batch/{batch_id}"
     headers = {"Authorization": f"Bearer {MINERU_TOKEN}"}
 
-    resp = requests.get(url, headers=headers)
+    resp = _NET_SESSION.get(url, headers=headers)
     resp.raise_for_status()
     result = resp.json()
 
@@ -130,7 +135,7 @@ def get_task_status(batch_id: str) -> dict:
 
 def download_result(download_url: str, output_path: str) -> None:
     """下载提取结果（ZIP 或 Markdown）"""
-    resp = requests.get(download_url, stream=True)
+    resp = _NET_SESSION.get(download_url, stream=True)
     resp.raise_for_status()
 
     with open(output_path, "wb") as f:

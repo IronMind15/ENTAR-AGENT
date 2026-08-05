@@ -168,8 +168,8 @@ class ErrorQueryHandler(ChatbotHandler):
             # 记录到会话记忆
             try:
                 from skills import memory
-                memory.add(user_id, "user", text[:500])
-                memory.add(user_id, "assistant", answer[:500])
+                memory.add(user_id, "user", text)
+                memory.add(user_id, "assistant", answer)
             except Exception as mem_err:
                 logger.warning(f"记录记忆失败: {mem_err}")
 

@@ -15,6 +15,11 @@ import os
 import logging
 import re
 import requests
+
+# 全局直连 Session：钉钉文件下载走国内地址，强制直连，不跟随系统/环境代理（避免 Clash 劫持）
+_NET_SESSION = requests.Session()
+_NET_SESSION.trust_env = False
+
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -133,7 +138,7 @@ def download_and_save_file(
 
         # 2. 下载文件
         logger.info(f"下载文件: {file_name}")
-        response = requests.get(download_url, timeout=120, stream=True)
+        response = _NET_SESSION.get(download_url, timeout=120, stream=True)
         response.raise_for_status()
 
         file_size = len(response.content)

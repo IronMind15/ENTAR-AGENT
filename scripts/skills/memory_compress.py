@@ -85,7 +85,7 @@ def _call_llm(messages: list[dict], max_tokens: int = 600) -> str | None:
         }
         for attempt in range(2):
             try:
-                with httpx.Client(timeout=60) as client:
+                with httpx.Client(timeout=60, trust_env=False) as client:
                     resp = client.post(url, json=body, headers=headers)
                     resp.raise_for_status()
                     data = resp.json()

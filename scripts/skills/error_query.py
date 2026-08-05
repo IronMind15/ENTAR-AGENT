@@ -25,7 +25,7 @@ if _PARENT_DIR not in sys.path:
 import httpx
 
 # 共享 HTTP 客户端（复用连接，避免每次建新连接）
-_HTTP_CLIENT = httpx.Client(timeout=15)
+_HTTP_CLIENT = httpx.Client(timeout=15, trust_env=False)
 
 from config import DEEPSEEK_API_KEY
 from skills import BaseSkill, register

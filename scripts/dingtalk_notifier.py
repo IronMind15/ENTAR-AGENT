@@ -31,7 +31,12 @@ class DingTalkNotifier:
         self.client_id = client_id
         self.client_secret = client_secret
         self.api_base = api_base.rstrip("/")
-        self._session = session or requests
+        if session is not None:
+            self._session = session
+        else:
+            # 默认直连 Session：钉钉是国内服务，强制直连，不跟随系统/环境代理（避免 Clash 劫持）
+            self._session = requests.Session()
+            self._session.trust_env = False
         self._token = ""
         self._token_expires_at = 0.0
         self._lock = threading.Lock()

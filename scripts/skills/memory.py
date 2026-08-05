@@ -93,13 +93,17 @@ def get_context(user_id: str) -> list[dict]:
     return _memories.get(user_id, [])
 
 
-def format_context(user_id: str, max_content: int = 200) -> str:
-    """格式化最近对话为文字（供拼进 system prompt）"""
+def format_context(user_id: str, max_content: int = 200, total_max: int = 12000) -> str:
+    """格式化最近对话为文字（供拼进 system prompt）
+
+    max_content: 单条截断长度；None 表示单条不截断（存储已完整，注入按总预算压缩）
+    total_max: 总字数预算，超出时从最早的对话开始丢弃（保护上下文窗口）
+    """
     if _get_backend() == "sqlite":
         try:
             store = _get_sqlite_store()
             max_rounds = _get_max_rounds()
-            return store.format_context(user_id, max_rounds, max_content)
+            return store.format_context(user_id, max_rounds, max_content, total_max)
         except Exception as e:
             logger.warning(f"SQLite 格式化失败，回退 JSON: {e}")
 
@@ -108,11 +112,20 @@ def format_context(user_id: str, max_content: int = 200) -> str:
     if not context:
         return ""
     lines = ["\n\n## 最近的对话历史"]
-    for msg in context:
+    budget = total_max
+    picked = []
+    for msg in reversed(context):  # 从最近往旧选，超预算丢弃旧的
         speaker = "用户" if msg["role"] == "user" else "助手"
-        content = msg["content"][:max_content]
-        lines.append(f"{speaker}：{content}")
-    return "\n".join(lines)
+        content = msg["content"]
+        if max_content is not None:
+            content = content[:max_content]
+        if budget is not None and len(content) > budget:
+            break
+        if budget is not None:
+            budget -= len(content)
+        picked.append(f"{speaker}：{content}")
+    picked.reverse()
+    return "\n".join(lines + picked)
 
 
 # ===== 双层记忆（长期记忆） =====

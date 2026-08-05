@@ -3,7 +3,7 @@
 > 📌 **本文档是项目唯一的待办清单（单一事实源）**——CLAUDE.md、README.md、PROGRESS.md 中的待办均指向本文件。
 > 更新待办请只改这里；进度看板见 [PROGRESS.md](PROGRESS.md)，版本记录见 [CHANGELOG.md](CHANGELOG.md)，项目规则见 [CLAUDE.md](CLAUDE.md)，功能说明见 [README.md](README.md)。
 
-> 生成时间：2026-07-24｜当前版本：v1.5.3（详见 [CHANGELOG.md](CHANGELOG.md)）｜总计：**37 项**
+> 生成时间：2026-07-24｜当前版本：v1.5.4（详见 [CHANGELOG.md](CHANGELOG.md)）｜总计：**46 项**
 
 ---
 
@@ -102,6 +102,57 @@
   - 一次输入「电流 + 铜厚 + 电压 + 材料组 + 可用宽度」，同时输出走线约束 + 安规间距 + 合计占用，判定是否冲突
   - 冲突时按优先级给设计建议：开槽 → 高 CTI 板材 → 三防漆 → 改铜厚/改布局
   - *来源：pcb_calc 审查对话（v1.4.1）*
+
+---
+
+## 📖 Agent 学习落地（2026-08-05 新增，9 项）
+
+> 学习素材：`D:\hello-agents`（Datawhale 16 章教程）+ `D:\ai-agent-book`（李博杰 10 章原理，均已 clone 最新版）
+> 依据：docs/[20260805-Agent学习项目研读报告.md](docs/20260805-Agent学习项目研读报告.md) + [20260805-恩特小助手Agent落地路线报告.md](docs/20260805-恩特小助手Agent落地路线报告.md)
+> 两本书交叉共识的 5 大差距，按成本/收益排序
+
+- [ ] **上下文工程**：动态内容移出 system prompt + token 预算管控（最紧急）
+  - [ ] 用户档案/短记忆/长记忆从 `system_content +=` 改为 `messages.append` 追加到消息末尾（KV Cache 前缀缓存友好，DeepSeek 支持前缀缓存）
+  - [ ] 加 `build_system_context()`：token 预算 + 相关性/新近性评分贪心选择（参考 hello-agents `code/chapter9/context/builder.py`）
+  - *来源：hello-agents ch9 GSSC / ai-agent-book ch2 KV Cache 三铁律；落地报告差距1*
+
+- [ ] **Agent 状态栏 + 重复调用检测**（防白烧 token）
+  - [ ] 每轮注入「第 N/5 轮、已调工具 X 次、上一轮未命中建议换关键词」
+  - [ ] 同 `(工具名, 参数)` 指纹 ≥3 次直接跳出提示换问法
+  - *来源：ai-agent-book ch2 实验2-8 / hello-agents ch4 Reflection；落地报告差距4*
+
+- [ ] **标准分块补上下文前缀（Contextual Retrieval）**
+  - 对 standards 块用 `_extract_std_info()` 生成 `[来源：GB/T xxx 第x.x条]` 前缀再入库（一次性重索引；失败率可降 ~49%）
+  - *来源：ai-agent-book ch3 实验3-11；落地报告差距3*
+
+- [ ] **MQE 查询扩展开关**
+  - `enhanced_query()` 加 `enable_mqe` 参数，LLM 生成 3-4 个等价查询合并检索，默认关（轻量环境不增开销），LLM 失败自动退回原查询
+  - *来源：hello-agents ch8 §8.3.5；落地报告差距3*
+
+- [ ] **Agent 层评估（eval_agent.py）**——接 TODO P2「检索评测」
+  - [ ] 新建 `data/eval/agent_eval.json`：真实问法 + 期望工具名/参数 + 期望答案要点
+  - [ ] DeepSeek 当 judge 按 Rubric 4 维度打分（幻觉一票否决），每次改 prompt/工具/记忆后跑
+  - *来源：hello-agents ch12 BFCL+LLM Judge / ai-agent-book ch6 Rubric；落地报告差距2*
+
+- [ ] **记忆冲突覆盖 + importance 评分**
+  - [ ] 压缩提示词让 LLM 输出 `importance`；保存前查同 user 同主题 fact 做「最新覆盖旧版」
+  - [ ] `format_long_term` 按 importance 排序截断
+  - *来源：ai-agent-book ch3 Mem0 / hello-agents ch8；落地报告差距5*
+
+### 第二梯队（进阶，有余力再做）
+
+- [ ] **工具 schema 自动生成**
+  - 用 ToolParameter 声明式定义 + `to_openai_schema()` 自动生成 function calling schema，替代手写 DEFINITION dict
+  - *来源：hello-agents ch7 §7.5.1*
+
+- [ ] **万物皆为工具 + 工具链**
+  - 「故障→对应标准→PCB」固定多步流程固化为工具链（ToolChain），减少 LLM 串联不确定性
+  - 未来经验库/钉钉能力也抽象成工具，统一注册
+  - *来源：hello-agents ch7 §7.5.4 / ai-agent-book ch4*
+
+- [ ] **Plan-and-Solve 规划层**
+  - 复杂多步排查（先查代码→再查标准→再算 PCB）时先让 LLM 输出规划列表再逐步执行
+  - *来源：hello-agents ch4 §4.3*
 
 ---
 
@@ -218,11 +269,12 @@
 | 🔥 P0 阻塞级 | 4 | 必须先做 |
 | ⚠️ P1 重要 | 7 | 尽快安排 |
 | 📌 P2 可做可不做 | 6 | 有余力再弄 |
+| 📖 Agent 学习落地 | 9 | 学习路线（2026-08-05 新增） |
 | 🎯 第二步经验库 | 5 | 第一步结束后启动 |
 | 🏢 v2.0 企业中枢 | 6 | 依赖第二步 |
 | 🔭 第三步研发探索 | 3 | 远期 |
 | 🐛 其他 | 6 | 低频/待触发 |
-| **合计** | **37** | |
+| **合计** | **46** | |
 
 ---
 

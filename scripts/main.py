@@ -6,6 +6,7 @@
 import logging
 import os
 import sys
+import threading
 from logging.handlers import RotatingFileHandler
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -51,12 +52,11 @@ app.include_router(admin_router)
 
 
 @app.on_event("startup")
-def _startup_recovery():
-    """启动时执行崩溃恢复：清理/恢复遗留的 staging/retired 版本数据。
+def _startup():
+    """启动时：先崩溃恢复（同步），再后台预热重排模型。
 
-    两阶段换版若在写入或切换中途崩溃，会在 Chroma 留下残留块
-    （staging 半成品、重复 active、未清理的 retired）。这里统一修复，
-    失败不阻塞服务启动，仅记录日志。
+    顺序执行避免并发触发 numpy 循环导入（chromadb 与 sentence_transformers
+    都依赖 numpy，两线程同时 import 会 circular import 失败）。
     """
     try:
         from doc_mgr.recovery import recover_crashed_data
@@ -72,6 +72,19 @@ def _startup_recovery():
             logger.info("  [恢复] 无遗留 staging/retired 数据")
     except Exception:
         logger.exception("  [恢复] 崩溃恢复失败（不影响启动）")
+
+    # 预热重排模型（recovery 完成后再启动线程，sleep 避开 numpy 导入窗口）
+    def _preload_reranker():
+        try:
+            import time
+            time.sleep(1)
+            from skills.enhanced_search import _get_reranker
+            _get_reranker()
+            logger.info("  已预热 bge-reranker 重排模型")
+        except Exception as e:
+            logger.warning(f"重排模型预热失败（不影响启动）: {e}")
+
+    threading.Thread(target=_preload_reranker, daemon=True).start()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -114,8 +127,8 @@ def ask(q: str = Form("", description="用户问题"), user: str = Form("", desc
             from skills import memory
             uid = f"web_{user}"
             answer = result.get("answer", "")
-            memory.add(uid, "user", q[:500])
-            memory.add(uid, "assistant", answer[:500])
+            memory.add(uid, "user", q)
+            memory.add(uid, "assistant", answer)
         except Exception:
             pass
 

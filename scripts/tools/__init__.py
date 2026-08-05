@@ -101,4 +101,5 @@ def execute_tool(name: str, args: dict) -> str:
 from . import search_knowledge_base  # noqa: E402, F811
 from . import search_standards       # noqa: E402, F811
 from . import calc_pcb_trace         # noqa: E402, F811 — PCB 走线计算（IPC-2221）
+from . import calc_copper_busbar     # noqa: E402, F811 — 铜排/母线载流（v1.6.0）
 from . import search_experience_kb   # noqa: E402, F811 — 经验知识库检索（v1.4.2 第二步）

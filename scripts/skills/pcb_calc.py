@@ -71,6 +71,8 @@ import json
 import logging
 import math
 import re
+from dataclasses import dataclass
+from typing import Any, Callable
 
 from skills import BaseSkill, register
 
@@ -139,6 +141,8 @@ _CALC_TOPIC_WORDS = [
 _RE_CURRENT = re.compile(r'(\d+(?:\.\d+)?)\s*(?:[Aa]|安|安培)')
 _RE_OZ = re.compile(r'(\d+(?:\.\d+)?)\s*oz', re.IGNORECASE)
 _RE_TEMP = re.compile(r'(?:温升|ΔT|δT|dT)\s*[=:]?\s*(\d+)', re.IGNORECASE)
+# 温升兼容写法：「30度」「30℃」「30°C」「30°」（无"温升"前缀时也识别）
+_RE_TEMP_DEG = re.compile(r'(?<![\d.])(\d+(?:\.\d+)?)\s*(?:℃|°C|°C|°|度)(?![\d.])', re.IGNORECASE)
 _RE_WIDTH = re.compile(r'(\d+(?:\.\d+)?)\s*(mm|毫米|mil)')
 _RE_LENGTH = re.compile(r'(\d+(?:\.\d+)?)\s*(cm|厘米|mm|毫米|m\b|米|inch|英寸)')
 _RE_MM = re.compile(r'(\d+(?:\.\d+)?)\s*(?:mm|毫米)')            # 毫米值
@@ -154,7 +158,10 @@ _RE_W_LABEL = re.compile(r'(?:线宽|w\s*=)\s*(\d+(?:\.\d+)?)\s*(mm|毫米|mil)'
 _RE_H_LABEL = re.compile(r'(?:介质|层厚|h\s*=)\s*(\d+(?:\.\d+)?)\s*(mm|毫米|mil)', re.IGNORECASE)
 _RE_B_LABEL = re.compile(r'(?:两平面间距|b\s*=)\s*(\d+(?:\.\d+)?)\s*(mm|毫米|mil)', re.IGNORECASE)
 _RE_CTI = re.compile(r'(?:CTI|cti)\s*(\d+)')
-_RE_ALT = re.compile(r'(?:海拔|高度)\s*(\d+)\s*m')
+# 海拔：兼容「海拔3000m」「3000M海拔」「3000米海拔」「3000m 高度」等写法（M/米 均支持）
+_RE_ALT = re.compile(
+    r'(?:海拔|高度)\s*(\d+)\s*(?:m|米)|(\d+)\s*(?:m|米)\s*(?:海拔|高度)',
+    re.IGNORECASE)
 _RE_AVAIL = re.compile(r'(?:可用宽度|可用空间|沟道宽度|沟道|净空|走线空间|空间宽度)\s*(?:约|为)?\s*(\d+(?:\.\d+)?)\s*(mm|毫米|mil)', re.IGNORECASE)
 
 
@@ -170,7 +177,7 @@ def _is_pcb_calc_query(query: str) -> bool:
     if any(w in q for w in ["综合校验", "布局校验", "组合校验", "沟道", "净空校验", "走线空间"]):
         return True
     # 独立主题：无 PCB 词也能识别为计算需求（铜排/三相/电源类等）
-    if any(w in q for w in ["铜排", "汇流条", "母线", "busbar", "三相", "3相", "three 相",
+    if any(w in q for w in ["铜排", "紫铜", "汇流条", "母线", "busbar", "三相", "3相", "three 相",
                             "吸收电路", "吸收电阻", "振铃", "目标阻抗", "去耦", "电源完整性",
                             "寄生电容", "寄生电感", "热过孔", "开关电源", "占空比",
                             "额定电流", "变压器容量", "电抗", "感抗", "容抗",
@@ -358,7 +365,15 @@ def _extract_material(q: str) -> tuple[str, bool]:
 
 def _extract_altitude_m(q: str):
     m = _RE_ALT.search(q)
-    return int(m.group(1)) if m else None
+    if not m:
+        return None
+    return int(m.group(1) or m.group(2))
+
+
+def _extract_ambient(q: str) -> float | None:
+    """提取环境温度（如「环境温度40℃」「环境 TA=40」），返回 ℃ 或 None"""
+    m = re.search(r'(?:环境温度|环境)\s*(?:TA|Ta|ta)?\s*[=:]?\s*(\d+(?:\.\d+)?)\s*(?:℃|°C|°|度)?', q)
+    return float(m.group(1)) if m else None
 
 
 def _altitude_factor(alt_m):
@@ -537,6 +552,7 @@ def _calc_impedance(q: str) -> dict:
     """阻抗计算，返回 {rows, source}"""
     is_stripline = "带状" in q or "stripline" in q.lower()
     er = _first([r'介电常数\s*(\d+(?:\.\d+)?)', r'εr\s*=\s*(\d+(?:\.\d+)?)'], q)
+    er_provided = er is not None
     if er is None:
         er = 4.2  # FR4 默认介电常数
     oz = _extract_oz(q)
@@ -569,7 +585,7 @@ def _calc_impedance(q: str) -> dict:
              else _microstrip_z(w_solved, h, t_mm, er))
         rows = [
             ("计算目标", f"目标 {target_z}Ω{' 带状线' if is_stripline else ' 微带线'} → 求线宽"),
-            ("介电常数 εr", str(er)),
+            ("介电常数 εr", str(er) + ("（默认 FR4）" if not er_provided else "")),
             ("铜厚", f"{oz} oz（{t_mm * 1000:.0f} μm）"),
             ("参考间距", f"{b if is_stripline else h} mm"),
             ("所需线宽", f"{_num(w_solved * 1000)} μm（{_num(w_solved)} mm ≈ {_num(w_solved / MIL_TO_MM)} mil）"),
@@ -586,7 +602,7 @@ def _calc_impedance(q: str) -> dict:
         rows = [
             ("计算目标", f"给定线宽 → 特征阻抗（{'带状线' if is_stripline else '微带线'}）"),
             ("线宽", f"{_num(w_mm * 1000)} μm（{_num(w_mm / MIL_TO_MM)} mil）"),
-            ("介电常数 εr", str(er)),
+            ("介电常数 εr", str(er) + ("（默认 FR4）" if not er_provided else "")),
             ("铜厚", f"{oz} oz"),
             ("参考间距", f"{b if is_stripline else h} mm"),
             ("特征阻抗 Z0", f"{_num(z, 1)} Ω"),
@@ -620,6 +636,7 @@ def _calc_via(q: str) -> dict:
     # 注：μm 优先于 oz——题目可能同时给"25μm（1oz）"，μm 是更精确的孔壁标称
     oz = _first([r'(\d+(?:\.\d+)?)\s*oz'], q)
     um = _first([r'(\d+(?:\.\d+)?)\s*(?:μm|um|微米)'], q)
+    wall_provided = (oz is not None) or (um is not None)
     if um is not None:
         wall_mil = um / 1000 / MIL_TO_MM
     elif oz is not None:
@@ -638,7 +655,8 @@ def _calc_via(q: str) -> dict:
     rows = [
         ("计算目标", "过孔载流能力 / 电阻 / 并联数"),
         ("孔径", f"{d_mil_val:.1f} mil（{_num(d_mm)} mm）" if d_mm else f"{_num(d_mil)} mil"),
-        ("孔壁铜厚", f"{_num(wall_mil * MIL_TO_MM * 1000)} μm（{_num(wall_mil)} mil）"),
+        ("孔壁铜厚", f"{_num(wall_mil * MIL_TO_MM * 1000)} μm（{_num(wall_mil)} mil）"
+         + ("" if wall_provided else "（默认 18μm，板厂下限）")),
         ("环形截面", f"{_num(area_mil2, 1)} mil²"),
         ("温升", f"{temp_rise} ℃"),
         ("单孔最大载流", f"{_num(max_cur)} A"),
@@ -920,6 +938,7 @@ def _calc_differential(q: str) -> dict:
     """差分对阻抗：给定参数求 Zdiff，或已知目标（90Ω/100Ω）反推线宽"""
     is_stripline = "带状" in q or "stripline" in q.lower()
     er = _first([r'介电常数\s*(\d+(?:\.\d+)?)', r'εr\s*=\s*(\d+(?:\.\d+)?)'], q)
+    er_provided = er is not None
     if er is None:
         er = 4.2
     oz = _extract_oz(q)
@@ -950,8 +969,8 @@ def _calc_differential(q: str) -> dict:
         rows = [
             ("计算目标", f"差分阻抗随线宽变化（{'差分带状线' if is_stripline else '差分微带线'}）"),
             ("介质高度 h", f"{_num(hb_mm)} mm"),
-            ("线间距 s", f"{_num(s_used)} mm"),
-            ("介电常数 εr", str(er)),
+            ("线间距 s", f"{_num(s_used)} mm" + ("（缺省按 s/h=1.0）" if s_val is None else "")),
+            ("介电常数 εr", str(er) + ("（默认 FR4）" if not er_provided else "")),
             ("铜厚", f"{oz} oz"),
             (f"线宽 {_num(w1_mm * 1000, 0)}μm", f"差分阻抗 Zdiff = {_num(z1, 1)} Ω"),
             (f"线宽 {_num(w2_mm * 1000, 0)}μm", f"差分阻抗 Zdiff = {_num(z2, 1)} Ω"),
@@ -970,7 +989,7 @@ def _calc_differential(q: str) -> dict:
             ("计算目标", f"目标差分 {target_z}Ω{'（差分带状线）' if is_stripline else '（差分微带线）'} → 求线宽"),
             ("线间距 s", f"{_num(s_used)} mm" + ("（缺省按 s/h=1.0）" if s_val is None else "")),
             ("参考间距", f"{_num(hb_mm)} mm"),
-            ("介电常数 εr", str(er)),
+            ("介电常数 εr", str(er) + ("（默认 FR4）" if not er_provided else "")),
             ("铜厚", f"{oz} oz"),
             ("所需线宽", f"{_num(w_solved * 1000)} μm（{_num(w_solved)} mm ≈ {_num(w_solved / MIL_TO_MM)} mil）"),
             ("实际差分阻抗", f"{_num(z, 1)} Ω"),
@@ -988,9 +1007,9 @@ def _calc_differential(q: str) -> dict:
         rows = [
             ("计算目标", f"给定差分对参数 → 差分阻抗（{'差分带状线' if is_stripline else '差分微带线'}）"),
             ("线宽", f"{_num(w_mm * 1000)} μm（{_num(w_mm / MIL_TO_MM)} mil）"),
-            ("线间距 s", f"{_num(s_used)} mm"),
+            ("线间距 s", f"{_num(s_used)} mm" + ("（缺省按 s/h=1.0）" if s_val is None else "")),
             ("参考间距", f"{_num(hb_mm)} mm"),
-            ("介电常数 εr", str(er)),
+            ("介电常数 εr", str(er) + ("（默认 FR4）" if not er_provided else "")),
             ("铜厚", f"{oz} oz"),
             ("单端阻抗 Z0", f"{_num(z0, 1)} Ω"),
             ("差分阻抗 Zdiff", f"{_num(zd, 1)} Ω"),
@@ -1080,18 +1099,26 @@ def _calc_creepage(q: str) -> dict:
     if v is None:
         return {"rows": [("提示", "安规间距需要电压。如「380V 爬电距离」「2.5kV 电气间隙 PD2 材料组II」")], "note": ""}
     pd = _extract_pd(q)
+    pd_provided = re.search(r'(?:污染|pd)\s*(?:等级|degree)?\s*(\d)', q, re.IGNORECASE) is not None
     group, from_cti = _extract_material(q)
+    material_provided = bool(re.search(
+        r'(?:材料组|材料|组|material\s*group)\s*\(?(IIIa|IIIb|III|II|I)\)?', q, re.IGNORECASE)) or from_cti
     reinforced = "加强" in q or "reinforced" in q.lower()
     alt = _extract_altitude_m(q)
 
+    is_dc = ("直流" in q) or bool(re.search(r'(?<![a-zA-Z])dc(?![a-zA-Z])', q, re.IGNORECASE))
     if unit == "kv":
         v_peak_kv = v
         v_rms = v * 1000
-        volt_desc = f"{v} kV"
+        volt_desc = f"{v} kV" + ("（直流）" if is_dc else "（交流）")
     else:
         v_rms = v
-        v_peak_kv = v_rms * 1.414 / 1000
-        volt_desc = f"{v} V（峰值 ≈ {_num(v_peak_kv, 3)} kV）"
+        if is_dc:
+            v_peak_kv = v / 1000  # 直流：峰值 = 电压本身
+            volt_desc = f"{v} V（直流，峰值 = {_num(v_peak_kv, 3)} kV）"
+        else:
+            v_peak_kv = v_rms * 1.414 / 1000  # 交流正弦：峰值 = √2 × RMS
+            volt_desc = f"{v} V（交流，峰值 ≈ {_num(v_peak_kv, 3)} kV）"
 
     clear, _ci = _lookup_clearance(v_peak_kv, pd)
     creep, _ri = _lookup_creepage(v_rms, pd, group)
@@ -1103,8 +1130,9 @@ def _calc_creepage(q: str) -> dict:
     rows = [
         ("计算目标", "IEC-60664-1 电气间隙 / 爬电距离"),
         ("电压", volt_desc),
-        ("污染等级", f"PD{pd}"),
-        ("材料组", f"{group}" + ("（由 CTI 推断）" if from_cti else "")),
+        ("污染等级", f"PD{pd}" + ("" if pd_provided else "（默认 PD2）")),
+        ("材料组", f"{group}" + ("（由 CTI 推断）" if from_cti else "")
+         + ("" if material_provided else "（默认 II）")),
         ("绝缘", "加强绝缘（爬电 ×2）" if reinforced else "基本/功能绝缘"),
         ("电气间隙", f"{_num(clear, 3)} mm"
          + ("（超出表范围，取上界）" if _ci else "")
@@ -1281,8 +1309,21 @@ def _calc_copper_busbar(q: str) -> dict:
     """铜排载流：牛顿散热 / ASTM B187 实测表 / 电流密度反推"""
     rho, _, mat = _busbar_material(q)
     temp_rise = _extract_temp_rise(q)
-    if temp_rise == DEFAULT_TEMP_RISE:
+    busbar_temp_default = temp_rise == DEFAULT_TEMP_RISE
+    ambient = _extract_ambient(q)
+    if busbar_temp_default:
         temp_rise = 65  # 铜排惯例温升（镀锡 ≤65℃）
+    # 温度语义标注：区分用户给的是「温升」还是「环境温度」（王哥反馈的细节）
+    if ambient is not None:
+        temp_note = f"，环境温度 {ambient}℃"
+    elif "温升" in q or _RE_TEMP.search(q):
+        temp_note = f"，温升 {temp_rise}℃" + ("（默认 65℃）" if busbar_temp_default else "")
+    elif "温度" in q:
+        temp_note = f"，温升 {temp_rise}℃（你给的『温度』按温升理解；若指环境温度请说明）"
+    elif _RE_TEMP_DEG.search(q):
+        temp_note = f"，温升 {temp_rise}℃"
+    else:
+        temp_note = f"，温升默认 {temp_rise}℃"
     orient = "侧立" if "侧立" in q else ("平放" if "平放" in q or "水平" in q else "平放")
 
     # 宽度 × 厚度：标签式或 W×H 式
@@ -1306,7 +1347,7 @@ def _calc_copper_busbar(q: str) -> dict:
         i_newton = math.sqrt(kt * 2 * (w_m + h_m) * w_m * h_m * temp_rise / rho)
         i_exp = w * (h + 8.5)
         rows = [
-            ("计算目标", f"铜排载流（{mat}，{orient}，{_num(w)}×{_num(h)} mm，温升 {temp_rise}℃）"),
+            ("计算目标", f"铜排载流（{mat}，{orient}，{_num(w)}×{_num(h)} mm{temp_note}）"),
             ("牛顿散热法", f"{_num(i_newton)} A（Kt={kt}）"),
             ("经验公式", f"{_num(i_exp)} A（I≈W×(H+8.5)）"),
         ]
@@ -1326,10 +1367,12 @@ def _calc_copper_busbar(q: str) -> dict:
         return {"rows": rows, "note": note}
 
     if current is not None:
-        j = _first([r'(?:电流密度|J)\s*(\d+(?:\.\d+)?)'], q) or 6.0
+        j_ex = _first([r'(?:电流密度|J)\s*(\d+(?:\.\d+)?)'], q)
+        j = j_ex or 6.0
         area_mm2 = current / j
         rows = [
-            ("计算目标", f"铜排截面反推（{current}A，密度 {j} A/mm²）"),
+            ("计算目标", f"铜排截面反推（{current}A，密度 {j} A/mm²"
+             + ("（默认 6）" if j_ex is None else "") + "）"),
             ("所需截面积", f"{_num(area_mm2)} mm²"),
             ("推荐截面", " / ".join(f"{_num(a)}×{_num(area_mm2 / a, 1)}mm" for a in (20, 30, 50) if a <= area_mm2) or f"{_num(area_mm2, 0)}×1mm"),
             ("经验公式参考", f"I≈W×(H+8.5) → 宽 {_num(current / 20, 1)}mm 约配 {_num(20 - 8.5)}mm 厚"),
@@ -2547,7 +2590,7 @@ def _detect_calc_type(q: str) -> str:
         return "reactance"
     if any(w in q for w in ["热过孔", "散热过孔", "过孔热阻", "过孔阵列"]):
         return "via_thermal"
-    if any(w in q for w in ["铜排", "汇流条", "母线", "busbar", "Busbar"]):
+    if any(w in q for w in ["铜排", "紫铜", "汇流条", "母线", "busbar", "Busbar"]) and "重量" not in q:
         return "copper_busbar"
     if "三相" in q or "3相" in q or "three-phase" in q.lower():
         return "three_phase"
@@ -2676,12 +2719,18 @@ def format_result(direction: str, **kw) -> str:
         lines.append(f"{num}. 【{label}】{text}")
         num += 1
 
+    def _mark(provided: bool, note: str) -> str:
+        return f"（{note}）" if not provided else ""
+
     if direction == "width":
         add("计算目标", "已知电流 → 求最小走线宽度")
         add("电流", f"{kw['current']} A")
-        add("铜厚", f"{kw['oz']} oz（约 {kw['oz'] * 35:.0f} μm）")
-        add("温升", f"{kw['temp_rise']} ℃")
-        add("所在层", _layer_note(kw["is_internal"]))
+        add("铜厚", f"{kw['oz']} oz（约 {kw['oz'] * 35:.0f} μm）"
+            + _mark(kw.get("oz_provided", True), "默认，未提供"))
+        add("温升", f"{kw['temp_rise']} ℃"
+            + _mark(kw.get("temp_rise_provided", True), "默认，未提供"))
+        add("所在层", _layer_note(kw["is_internal"])
+            + _mark(kw.get("layer_provided", True), "默认外层，未指明"))
         add("最小线宽", f"{_num(kw['width_mil'])} mil（≈ {_num(kw['width_mm'])} mm）")
         margin = kw.get("margin", SAFETY_MARGIN)
         add("推荐线宽", f"{_num(kw['width_mil'] * margin)} mil（留 {_num((margin - 1) * 100, 0)}% 裕量）")
@@ -2695,9 +2744,12 @@ def format_result(direction: str, **kw) -> str:
     elif direction == "current":
         add("计算目标", "已知线宽 → 求最大载流")
         add("线宽", f"{kw['width']} {kw['width_unit']}（≈ {_num(kw['width_mil'])} mil）")
-        add("铜厚", f"{kw['oz']} oz（约 {kw['oz'] * 35:.0f} μm）")
-        add("温升", f"{kw['temp_rise']} ℃")
-        add("所在层", _layer_note(kw["is_internal"]))
+        add("铜厚", f"{kw['oz']} oz（约 {kw['oz'] * 35:.0f} μm）"
+            + _mark(kw.get("oz_provided", True), "默认，未提供"))
+        add("温升", f"{kw['temp_rise']} ℃"
+            + _mark(kw.get("temp_rise_provided", True), "默认，未提供"))
+        add("所在层", _layer_note(kw["is_internal"])
+            + _mark(kw.get("layer_provided", True), "默认外层，未指明"))
         add("最大载流", f"{_num(kw['max_current'])} A")
         add("安全电流", f"{_num(kw['max_current'] * 0.8)} A（取 80% 裕量）")
         add("标准", "IPC-2221 经验公式")
@@ -2709,9 +2761,12 @@ def format_result(direction: str, **kw) -> str:
         add("计算目标", "校验给定线宽能否承载目标电流")
         add("电流", f"{kw['current']} A")
         add("线宽", f"{kw['width']} {kw['width_unit']}（≈ {_num(kw['width_mil'])} mil）")
-        add("铜厚", f"{kw['oz']} oz（约 {kw['oz'] * 35:.0f} μm）")
-        add("温升", f"{kw['temp_rise']} ℃")
-        add("所在层", _layer_note(kw["is_internal"]))
+        add("铜厚", f"{kw['oz']} oz（约 {kw['oz'] * 35:.0f} μm）"
+            + _mark(kw.get("oz_provided", True), "默认，未提供"))
+        add("温升", f"{kw['temp_rise']} ℃"
+            + _mark(kw.get("temp_rise_provided", True), "默认，未提供"))
+        add("所在层", _layer_note(kw["is_internal"])
+            + _mark(kw.get("layer_provided", True), "默认外层，未指明"))
         add("该线宽最大载流", f"{_num(kw['max_current'])} A")
         add("结论", kw["verdict"])
         add("标准", "IPC-2221 经验公式")
@@ -2722,9 +2777,62 @@ def format_result(direction: str, **kw) -> str:
             add("功率损耗", f"{_num(p, 3)} W")
             add("提示", "长度不影响载流，只影响压降/损耗")
 
+    # 参数补全参考：关键参数未提供时，给出常用替代组合
+    alt = kw.get("alt_rows") or []
+    if alt:
+        lines.append("")
+        lines.append("───────── 参数补全参考（你未指定，主结果已按默认） ─────────")
+        for desc, val in alt:
+            lines.append(f"· {desc} → {val}")
+        lines.append("──────────────────────────────────────────────")
+
     lines.append("---")
     lines.append("提示：IPC-2221 结果偏保守，实际受板层堆叠、临近铺铜、散热影响，建议与板厂确认")
     return "\n".join(lines)
+
+
+def _build_alt_rows(direction: str, current, width_mil, oz, temp_rise, is_internal,
+                    oz_provided, temp_rise_provided, layer_provided) -> list:
+    """缺失参数时生成多组合参考行 [(场景描述, 结果), ...]，全提供则返回空列表"""
+    alt = []
+
+    def _w(width_mil_val: float) -> str:
+        return f"{_num(width_mil_val)} mil（≈{_num(width_mil_val * MIL_TO_MM)} mm）"
+
+    def _i(width_mil_val: float, oz_val: float, tr_val: float, internal: bool,
+           current_val=None) -> str:
+        i = calc_max_current(width_mil_val, oz_val, tr_val, internal)
+        if current_val is None:
+            return f"最大载流 {_num(i)} A"
+        ok = "✅ 够" if current_val <= i else "❌ 不够"
+        return f"最大载流 {_num(i)} A（当前 {current_val}A {ok}）"
+
+    if not temp_rise_provided:
+        for tr in (30, 50):
+            if direction == "width":
+                alt.append((f"温升 {tr}℃", f"最小线宽 {_w(calc_min_width(current, oz, tr, is_internal))}"))
+            elif direction == "current":
+                alt.append((f"温升 {tr}℃", _i(width_mil, oz, tr, is_internal)))
+            else:  # check
+                alt.append((f"温升 {tr}℃", _i(width_mil, oz, tr, is_internal, current)))
+    if not layer_provided:
+        other = not is_internal  # 默认外层 → 补内层（散热差约减半）
+        lbl = "内层" if other else "外层"
+        if direction == "width":
+            alt.append((lbl, f"最小线宽 {_w(calc_min_width(current, oz, temp_rise, other))}（内层散热差，约减半）"))
+        elif direction == "current":
+            alt.append((lbl, _i(width_mil, oz, temp_rise, other) + "（内层散热差，约减半）"))
+        else:
+            alt.append((lbl, _i(width_mil, oz, temp_rise, other, current) + "（内层散热差，约减半）"))
+    if not oz_provided:
+        for ozz in (2, 3):
+            if direction == "width":
+                alt.append((f"铜厚 {ozz}oz", f"最小线宽 {_w(calc_min_width(current, ozz, temp_rise, is_internal))}"))
+            elif direction == "current":
+                alt.append((f"铜厚 {ozz}oz", _i(width_mil, ozz, temp_rise, is_internal)))
+            else:
+                alt.append((f"铜厚 {ozz}oz", _i(width_mil, ozz, temp_rise, is_internal, current)))
+    return alt
 
 
 # ===== 参数提取 =====
@@ -2734,14 +2842,34 @@ def _extract_current(query: str) -> float | None:
     return float(m.group(1)) if m else None
 
 
-def _extract_oz(query: str) -> float:
+def _extract_oz_ex(query: str) -> tuple[float, bool]:
+    """返回 (铜厚 oz, 是否用户提供)。兼容「1oz」「1OZ」「1盎司」写法。"""
     m = _RE_OZ.search(query)
-    return float(m.group(1)) if m else 1.0
+    if m:
+        return float(m.group(1)), True
+    m = re.search(r'(\d+(?:\.\d+)?)\s*盎司', query)
+    if m:
+        return float(m.group(1)), True
+    return 1.0, False
+
+
+def _extract_oz(query: str) -> float:
+    return _extract_oz_ex(query)[0]
+
+
+def _extract_temp_rise_ex(query: str) -> tuple[float, bool]:
+    """返回 (温升, 是否用户提供)。兼容「温升30」「30度」「30℃」写法。"""
+    m = _RE_TEMP.search(query)
+    if m:
+        return float(m.group(1)), True
+    m = _RE_TEMP_DEG.search(query)
+    if m:
+        return float(m.group(1)), True
+    return DEFAULT_TEMP_RISE, False
 
 
 def _extract_temp_rise(query: str) -> float:
-    m = _RE_TEMP.search(query)
-    return float(m.group(1)) if m else DEFAULT_TEMP_RISE
+    return _extract_temp_rise_ex(query)[0]
 
 
 def _extract_margin(query: str) -> float:
@@ -2750,8 +2878,22 @@ def _extract_margin(query: str) -> float:
     return 1 + float(m.group(1)) / 100 if m else SAFETY_MARGIN
 
 
+_INTERNAL_LAYER_WORDS = ["内层", "内电层", "中间层", "内芯", "内表面", "电源层"]
+_EXTERNAL_LAYER_WORDS = ["外层", "表层", "顶层", "底层", "表面", "外表面"]
+
+
+def _extract_layer_ex(query: str) -> tuple[str, bool]:
+    """返回 (internal|external, 是否用户指明所在层)。未指明默认外层。"""
+    q = query.lower()
+    if any(w in q for w in _INTERNAL_LAYER_WORDS):
+        return "internal", True
+    if any(w in q for w in _EXTERNAL_LAYER_WORDS):
+        return "external", True
+    return "external", False
+
+
 def _extract_layer(query: str) -> str:
-    return "internal" if "内层" in query.lower() else "external"
+    return _extract_layer_ex(query)[0]
 
 
 def _extract_width(query: str) -> tuple[float | None, str]:
@@ -2772,6 +2914,311 @@ def _extract_length(query: str) -> tuple[float | None, str]:
     if not m:
         return None, "m"
     return float(m.group(1)), m.group(2)
+
+
+# ===== 通用参数补足层（v1.5.6） =====
+# 每个计算器声明可补足参数 → 用户未提供时自动补默认值、生成多组备选表格、提示缺失。
+# 公式层不变，仅在此层做"计算前"的参数准备。
+
+@dataclass
+class Param:
+    """计算器参数声明。
+
+    extractor: q -> (value, provided)；multi=True 时返回 (list[value], provided)
+    combos: 用户未提供时注入的常用备选值（生成多组表格）
+    inject: 把备选值写回查询文本的模板（"{value}" 占位；纯文本如 "内层" 直接追加）
+    """
+    key: str
+    label: str
+    unit: str = ""
+    default: Any = None
+    combos: tuple = ()
+    required: bool = False
+    extractor: Any = None
+    inject: str = ""
+    multi: bool = False
+
+
+# ---- 提取器包装：统一返回 (value, provided) ----
+def _ex_current(q):
+    v = _extract_current(q)
+    return v, v is not None
+
+
+def _ex_current_multi(q):
+    vals = [float(x) for x in _RE_CURRENT.findall(q)]
+    return vals, bool(vals)
+
+
+def _ex_oz(q):
+    return _extract_oz_ex(q)
+
+
+def _ex_temp_rise(q):
+    return _extract_temp_rise_ex(q)
+
+
+def _ex_layer(q):
+    return _extract_layer_ex(q)
+
+
+def _ex_width(q):
+    v, _u = _extract_width(q)
+    return v, v is not None
+
+
+def _ex_length(q):
+    v, _u = _extract_length(q)
+    return v, v is not None
+
+
+def _ex_voltage(q):
+    v, _u = _extract_voltage(q)
+    return v, v is not None
+
+
+def _ex_er(q):
+    v = _first([r'介电常数\s*(\d+(?:\.\d+)?)', r'εr\s*=\s*(\d+(?:\.\d+)?)'], q)
+    return v if v is not None else 4.2, v is not None
+
+
+def _ex_pd(q):
+    v = _extract_pd(q)
+    prov = re.search(r'(?:污染|pd)\s*(?:等级|degree)?\s*(\d)', q, re.IGNORECASE) is not None
+    return v, prov
+
+
+def _ex_material(q):
+    v, from_cti = _extract_material(q)
+    prov = from_cti or bool(re.search(
+        r'(?:材料组|材料|组|material\s*group)\s*\(?(IIIa|IIIb|III|II|I)\)?', q, re.IGNORECASE))
+    return v, prov
+
+
+def _ex_altitude(q):
+    v = _extract_altitude_m(q)
+    return v, v is not None
+
+
+def _ex_j(q):
+    """电流密度（铜排），默认 6 A/mm²"""
+    v = _first([r'(?:电流密度|J)\s*(\d+(?:\.\d+)?)'], q)
+    return v if v is not None else 6.0, v is not None
+
+
+def _ex_busbar_material(q):
+    """铜排材料（紫铜/黄铜/铝），默认紫铜"""
+    v = "黄铜" if "黄铜" in q else ("铝" if "铝" in q else "紫铜")
+    prov = ("黄铜" in q) or ("铝" in q) or ("紫铜" in q)
+    return v, prov
+
+
+def _ex_orient(q):
+    """铜排放置方向（侧立/平放），默认平放"""
+    v = "侧立" if "侧立" in q else "平放"
+    prov = ("侧立" in q) or ("平放" in q)
+    return v, prov
+
+
+# ---- 引擎：补足 + 多组 + 表格 ----
+def _select_mode_target(defn, extracted):
+    """反算选模式：need 参数满足的模式，返回其 target（求解目标参数 key）"""
+    for mode in defn.get("modes", []):
+        if all(extracted.get(k, (None, False))[1] for k in mode.get("need", [])):
+            return mode.get("target")
+    return None
+
+
+def _inject_param(q, param, value):
+    if not param.inject:
+        return q
+    if "{value}" in param.inject:
+        return f"{q} {param.inject.format(value=value)}"
+    return f"{q} {param.inject}"
+
+
+def _result_value(res, result_keys):
+    for label, val in res.get("rows", []):
+        if label in result_keys:
+            return val
+    return ""
+
+
+def _render_table(title, header, rows, note):
+    """markdown 表格（钉钉回复走 reply_markdown）"""
+    if not rows:
+        return ""
+    lines = ["", f"【{title}】", "", f"| 参数 | {header} |", "|------|------|"]
+    for label, val in rows:
+        lines.append(f"| {label} | {val} |")
+    lines.append("")
+    lines.append(note)
+    return "\n".join(lines)
+
+
+def _append_completion(answer, q, fn, defn, main_res):
+    """主结果 answer 之后，追加：多组输入结果 + 缺失参数补足备选表格"""
+    params = defn.get("params", [])
+    result_keys = defn.get("result_keys") or [defn.get("result_key", "")]
+    extracted = {}
+    for p in params:
+        extracted[p.key] = p.extractor(q) if p.extractor else (None, False)
+
+    target = _select_mode_target(defn, extracted)
+
+    # 缺失：非 target、未提供、有 combos
+    missing = [p for p in params
+               if not extracted.get(p.key, (None, False))[1]
+               and p.key != target
+               and p.combos]
+
+    # 多组输入：multi 参数多个值 → 每组单独算一组结果
+    for p in params:
+        if not p.multi or not p.extractor:
+            continue
+        vals, _prov = p.extractor(q)
+        if isinstance(vals, list) and len(vals) > 1:
+            rows = []
+            for v in vals:
+                vq = _inject_param(q, p, v)
+                try:
+                    r = fn(vq)
+                    val = _result_value(r, result_keys)
+                except Exception:
+                    val = ""
+                rows.append((f"{p.label} {v}{p.unit}", val))
+            answer += _render_table(
+                f"你给出了多个{p.label}，结果如下", result_keys[0], rows,
+                "每条已按你给的数值单独计算")
+
+    # 缺失参数备选表格
+    if missing:
+        alt_rows = []
+        for p in missing:
+            for combo in p.combos:
+                vq = _inject_param(q, p, combo)
+                try:
+                    r = fn(vq)
+                    val = _result_value(r, result_keys)
+                except Exception:
+                    val = ""
+                label = f"{p.label} {combo}{p.unit}" if p.unit else f"{p.label} {combo}"
+                alt_rows.append((label, val))
+        missing_names = "、".join(p.label for p in missing)
+        answer += _render_table(
+            "参数补足参考", result_keys[0], alt_rows,
+            f"未指定{missing_names}，已按默认值补足；需要哪个组合直接回复即可")
+    return answer
+
+
+# ---- 计算器参数声明：只声明"可补足"参数（有默认值、用户常省略）；params 为空的类接入引擎但无备选表格 ----
+CALC_DEFS: dict[str, dict] = {
+    # ── 走线族：温升/铜厚/内外层 常被省略 ──
+    "trace2152": {
+        "params": [
+            Param("temp_rise", "温升", "℃", default=10, combos=(30, 50), extractor=_ex_temp_rise, inject="温升{value}℃"),
+            Param("oz", "铜厚", "oz", default=1.0, combos=(2, 3), extractor=_ex_oz, inject="铜厚{value}oz"),
+            Param("layer", "所在层", "", default="外层", combos=("内层",), extractor=_ex_layer, inject="内层"),
+        ],
+        "result_keys": ["IPC-2152 最大载流", "IPC-2152 最小线宽"],
+    },
+    "layout": {
+        "params": [
+            Param("temp_rise", "温升", "℃", default=10, combos=(30,), extractor=_ex_temp_rise, inject="温升{value}℃"),
+            Param("oz", "铜厚", "oz", default=1.0, combos=(2,), extractor=_ex_oz, inject="铜厚{value}oz"),
+            Param("pd", "污染等级", "", default=2, combos=(3,), extractor=_ex_pd, inject="污染等级{value}"),
+            Param("material", "材料组", "", default="II", combos=("IIIa",), extractor=_ex_material, inject="材料组{value}"),
+        ],
+        "result_keys": ["走线约束"],
+    },
+    # ── 阻抗族：介电常数/铜厚 ──
+    "impedance": {
+        "params": [
+            Param("er", "介电常数", "", default=4.2, combos=(4.4, 3.66), extractor=_ex_er, inject="介电常数{value}"),
+            Param("oz", "铜厚", "oz", default=1.0, combos=(1.5, 2), extractor=_ex_oz, inject="铜厚{value}oz"),
+        ],
+        "result_keys": ["所需线宽", "特征阻抗 Z0"],
+    },
+    "differential": {
+        "params": [
+            Param("er", "介电常数", "", default=4.2, combos=(4.4,), extractor=_ex_er, inject="介电常数{value}"),
+            Param("oz", "铜厚", "oz", default=1.0, combos=(1.5, 2), extractor=_ex_oz, inject="铜厚{value}oz"),
+        ],
+        "result_keys": ["所需线宽", "差分阻抗 Zdiff", "特征阻抗 Z0"],
+    },
+    # ── 过孔：温升 ──
+    "via": {
+        "params": [
+            Param("temp_rise", "温升", "℃", default=10, combos=(30, 50), extractor=_ex_temp_rise, inject="温升{value}℃"),
+        ],
+        "result_keys": ["单孔最大载流"],
+    },
+    # ── 安规：污染等级/材料组/海拔 ──
+    "creepage": {
+        "params": [
+            Param("pd", "污染等级", "", default=2, combos=(1, 3), extractor=_ex_pd, inject="污染等级{value}"),
+            Param("material", "材料组", "", default="II", combos=("IIIa",), extractor=_ex_material, inject="材料组{value}"),
+        ],
+        "result_keys": ["爬电距离"],
+    },
+    # ── 铜排：温升/电流密度/材料/放置 ──
+    "copper_busbar": {
+        "params": [
+            Param("temp_rise", "温升", "℃", default=65, combos=(50, 80), extractor=_ex_temp_rise, inject="温升{value}℃"),
+            Param("j", "电流密度", "A/mm²", default=6.0, combos=(4, 8), extractor=_ex_j, inject="电流密度{value}"),
+            Param("material", "材料", "", default="紫铜", combos=("黄铜", "铝"), extractor=_ex_busbar_material, inject="{value}"),
+            Param("orient", "放置", "", default="平放", combos=("侧立",), extractor=_ex_orient, inject="{value}"),
+        ],
+        "result_keys": ["牛顿散热法", "ASTM B187 表"],
+    },
+    # ── 其余计算器：无可补足默认参数，接入引擎但行为不变 ──
+    "three_phase": {"params": [], "result_keys": ["有功 P"]},
+    "skin": {"params": [], "result_keys": ["趋肤深度"]},
+    "signal": {"params": [], "result_keys": []},
+    "thermal": {"params": [], "result_keys": ["结温 TJ"]},
+    "led": {"params": [], "result_keys": ["限流电阻"]},
+    "divider": {"params": [], "result_keys": ["输出 VR"]},
+    "rc": {"params": [], "result_keys": ["时间常数 τ"]},
+    "snubber": {"params": [], "result_keys": ["开关节点寄生电容 Cp"]},
+    "pdn": {"params": [], "result_keys": ["目标阻抗 Z_target"]},
+    "smps": {"params": [], "result_keys": []},
+    "buck": {"params": [], "result_keys": []},
+    "rated_current": {"params": [], "result_keys": []},
+    "via_parasitic": {"params": [], "result_keys": ["寄生电容 Cvia", "寄生电感 Lvia"]},
+    "via_thermal": {"params": [], "result_keys": []},
+    "lc_resonance": {"params": [], "result_keys": ["谐振频率 f0"]},
+    "reactance": {"params": [], "result_keys": []},
+    "supercapacitor": {"params": [], "result_keys": []},
+    "battery_life": {"params": [], "result_keys": ["续航时间"]},
+    "battery_charging": {"params": [], "result_keys": []},
+    "iot_battery": {"params": [], "result_keys": []},
+    "wire_drop": {"params": [], "result_keys": ["压降 ΔV"]},
+    "induction_heating": {"params": [], "result_keys": []},
+    "opamp": {"params": [], "result_keys": ["增益 Av"]},
+    "opamp_filter": {"params": [], "result_keys": []},
+    "diff_amp": {"params": [], "result_keys": []},
+    "wheatstone": {"params": [], "result_keys": []},
+    "transistor_bias": {"params": [], "result_keys": []},
+    "zener": {"params": [], "result_keys": ["限流电阻"]},
+    "lm317": {"params": [], "result_keys": ["输出电压"]},
+    "mc34063": {"params": [], "result_keys": []},
+    "i2c_pullup": {"params": [], "result_keys": ["上拉电阻"]},
+    "parallel_resistance": {"params": [], "result_keys": ["等效电阻"]},
+    "series_capacitor": {"params": [], "result_keys": []},
+    "electric_power": {"params": [], "result_keys": ["功率"]},
+    "adc": {"params": [], "result_keys": []},
+    "rs485": {"params": [], "result_keys": []},
+    "crystal": {"params": [], "result_keys": ["匹配电容"]},
+    "smd_pad": {"params": [], "result_keys": []},
+    "vswr": {"params": [], "result_keys": []},
+    "frequency_wavelength": {"params": [], "result_keys": ["波长 λ"]},
+    "pwm": {"params": [], "result_keys": []},
+    "metal_weight": {"params": [], "result_keys": ["重量"]},
+    "emc_convert": {"params": [], "result_keys": []},
+    "crosstalk": {"params": [], "result_keys": []},
+    "lc_filter": {"params": [], "result_keys": ["截止频率"]},
+    "timer_555": {"params": [], "result_keys": []},
+}
 
 
 # ===== 主入口 =====
@@ -2846,13 +3293,27 @@ def _handle_impl(query: str) -> dict:
             logger.exception(f"PCB 计算器 [{ctype}] 异常: {e}")
             return {"answer": f"这个计算需要的信息不完整，请补充参数后重试（{str(e)[:50]}）", "source": ""}
         answer = _build_answer(res["rows"], res["note"]) if res["rows"] else "请补充计算参数"
+        # 通用参数补足层：主结果保留，追加缺失参数的备选表格 / 多组输入结果
+        defn = CALC_DEFS.get(ctype)
+        if defn:
+            answer = _append_completion(answer, q, fn, defn, res)
         return {"answer": answer, "source": f"PCB计算({ctype})"}
 
     # ===== 走线计算（原逻辑） =====
+    # 多组输入：用户给了多个电流 → 每组单独算（如「3A 和 5A 各要多宽」）
+    _multi_cur = [float(x) for x in _RE_CURRENT.findall(q)]
+    if len(_multi_cur) > 1:
+        _base = _RE_CURRENT.sub("", q)
+        _parts = []
+        for _c in _multi_cur:
+            _r = _handle_impl(f"{_base} 电流{_num(_c, 1)}A")
+            _parts.append(f"【{_num(_c, 1)}A 时】\n" + _r["answer"])
+        return {"answer": "\n\n".join(_parts), "source": "PCB计算(trace)"}
     current = _extract_current(q)
-    oz = _extract_oz(q)
-    temp_rise = _extract_temp_rise(q)
-    is_internal = _extract_layer(q) == "internal"
+    oz, oz_provided = _extract_oz_ex(q)
+    temp_rise, temp_rise_provided = _extract_temp_rise_ex(q)
+    _layer_str, layer_provided = _extract_layer_ex(q)
+    is_internal = _layer_str == "internal"
     width, width_unit = _extract_width(q)
     length, length_unit = _extract_length(q)
 
@@ -2890,7 +3351,12 @@ def _handle_impl(query: str) -> dict:
         kw = dict(direction="check", current=current, width=width,
                   width_unit=width_unit, width_mil=width_mil, oz=oz,
                   temp_rise=temp_rise, is_internal=is_internal,
-                  max_current=max_cur, verdict=verdict)
+                  max_current=max_cur, verdict=verdict,
+                  oz_provided=oz_provided, temp_rise_provided=temp_rise_provided,
+                  layer_provided=layer_provided,
+                  alt_rows=_build_alt_rows("check", current, width_mil, oz, temp_rise,
+                                           is_internal, oz_provided,
+                                           temp_rise_provided, layer_provided))
         if length is not None:
             kw["length_m"] = _to_meters(length, length_unit)
             kw["resistance"] = calc_resistance_drop(width_mil, oz, kw["length_m"], current)
@@ -2901,7 +3367,12 @@ def _handle_impl(query: str) -> dict:
         max_cur = calc_max_current(width_mil, oz, temp_rise, is_internal)
         kw = dict(direction="current", width=width, width_unit=width_unit,
                   width_mil=width_mil, oz=oz, temp_rise=temp_rise,
-                  is_internal=is_internal, max_current=max_cur)
+                  is_internal=is_internal, max_current=max_cur,
+                  oz_provided=oz_provided, temp_rise_provided=temp_rise_provided,
+                  layer_provided=layer_provided,
+                  alt_rows=_build_alt_rows("current", None, width_mil, oz, temp_rise,
+                                           is_internal, oz_provided,
+                                           temp_rise_provided, layer_provided))
         return {"answer": format_result(**kw), "source": "PCB计算(trace)"}
 
     if current is not None:
@@ -2909,7 +3380,12 @@ def _handle_impl(query: str) -> dict:
         kw = dict(direction="width", current=current, oz=oz,
                   temp_rise=temp_rise, is_internal=is_internal,
                   width_mil=width_mil, width_mm=width_mil * MIL_TO_MM,
-                  margin=_extract_margin(q))
+                  margin=_extract_margin(q),
+                  oz_provided=oz_provided, temp_rise_provided=temp_rise_provided,
+                  layer_provided=layer_provided,
+                  alt_rows=_build_alt_rows("width", current, None, oz, temp_rise,
+                                           is_internal, oz_provided,
+                                           temp_rise_provided, layer_provided))
         if length is not None:
             kw["length_m"] = _to_meters(length, length_unit)
             kw["resistance"] = calc_resistance_drop(width_mil, oz, kw["length_m"], current)

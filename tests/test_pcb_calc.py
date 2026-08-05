@@ -481,5 +481,205 @@ class PCBBatch3Tests(unittest.TestCase):
             self.assertNotIn("【提示】", r["answer"], q)
 
 
+class PCBTempRiseAndDefaultsTests(unittest.TestCase):
+    """v1.5.6 王哥反馈：温升识别不全面 / 默认值不标注 / 多组合补全"""
+
+    # ── 温升识别（王哥反馈核心 bug：「写了30度却用10度」）──
+
+    def test_temp_rise_degree_syntax(self):
+        """「30度」「30℃」应识别为温升，不再静默落默认10"""
+        for q in ["10A 1oz 30度 走线要多宽", "10A 1oz 30℃，走内层多宽"]:
+            v, prov = pcb_calc._extract_temp_rise_ex(q)
+            self.assertAlmostEqual(v, 30.0, msg=q)
+            self.assertTrue(prov, q)
+
+    def test_temp_rise_absent_is_default(self):
+        """未提温升 → 默认10 且标记未提供"""
+        v, prov = pcb_calc._extract_temp_rise_ex("5A 1oz 走线要多宽")
+        self.assertAlmostEqual(v, 10.0)
+        self.assertFalse(prov)
+
+    def test_old_syntax_still_works(self):
+        """原「温升10」写法不受影响"""
+        self.assertAlmostEqual(_extract_temp_rise("温升 20"), 20.0)
+
+    # ── 层识别扩充（原来只认「内层」）──
+
+    def test_layer_extended_words(self):
+        """内电层/中间层/表层/顶层等常见说法应被识别"""
+        for q, expected in [
+            ("走内电层 5A", "internal"),
+            ("中间层 5A", "internal"),
+            ("走表层 5A", "external"),
+            ("顶层 5A", "external"),
+        ]:
+            v, prov = pcb_calc._extract_layer_ex(q)
+            self.assertEqual(v, expected, q)
+            self.assertTrue(prov, q)
+
+    def test_layer_absent_default_external(self):
+        """未指明层 → 外层且标记未提供"""
+        v, prov = pcb_calc._extract_layer_ex("5A 走线要多宽")
+        self.assertEqual(v, "external")
+        self.assertFalse(prov)
+
+    # ── oz 识别扩充 ──
+
+    def test_oz_angsi(self):
+        """「1盎司」应识别为 1oz"""
+        v, prov = pcb_calc._extract_oz_ex("1盎司 5A 走线")
+        self.assertAlmostEqual(v, 1.0)
+        self.assertTrue(prov)
+
+    # ── 默认值标注 + 多组合表格 ──
+
+    def test_default_marked_in_output(self):
+        """信息不全时，输出标注默认值"""
+        r = pcb_calc._handle_impl("10A 1oz 走线要多宽")
+        self.assertIn("默认，未提供", r["answer"])
+
+    def test_all_provided_no_default_note(self):
+        """参数全给时，不出现默认标注，也不出现补全表格"""
+        r = pcb_calc._handle_impl("3A 1oz 外层 温升10度 走线要多宽")
+        self.assertNotIn("默认，未提供", r["answer"])
+        self.assertNotIn("参数补全参考", r["answer"])
+
+    def test_multi_combo_table_when_missing(self):
+        """温升未给 → 出现 30℃/50℃ 补全行"""
+        r = pcb_calc._handle_impl("10A 1oz 走线要多宽")
+        self.assertIn("参数补全参考", r["answer"])
+        self.assertIn("温升 30℃", r["answer"])
+        self.assertIn("温升 50℃", r["answer"])
+
+    def test_multi_combo_layer_when_unspecified(self):
+        """层未指明 → 补内层"""
+        r = pcb_calc._handle_impl("10A 1oz 走线要多宽")
+        self.assertIn("内层 →", r["answer"])
+
+    def test_30_degree_actually_used(self):
+        """「30度」应真实参与计算：结果与默认10度不同且线宽更窄"""
+        import re
+        r30 = pcb_calc._handle_impl("10A 1oz 30度 走线要多宽")
+        r10 = pcb_calc._handle_impl("10A 1oz 走线要多宽")
+        w30 = float(re.search(r"最小线宽】([\d.]+)", r30["answer"]).group(1))
+        w10 = float(re.search(r"最小线宽】([\d.]+)", r10["answer"]).group(1))
+        self.assertLess(w30, w10)
+
+    # ── 工具通道校验 ──
+
+    def test_tool_rejects_oz_hallucination(self):
+        """LLM 幻觉 oz=57 应被拦截（王哥「紫铜2×2」案例）"""
+        from tools.calc_pcb_trace import execute
+        out = execute({"width_mil": 78.74, "oz": 57, "temp_rise": 30})
+        self.assertIn("铜厚 oz 取值异常", out)
+        self.assertIn("铜排", out)  # 提示是铜排问题
+
+    def test_tool_is_internal_false_string(self):
+        """is_internal 传字符串 false 不应误判为内层"""
+        import json
+        from tools.calc_pcb_trace import execute
+        out = execute({"current_a": 10, "oz": 1, "temp_rise": 30, "is_internal": "false"})
+        data = json.loads(out)
+        self.assertFalse(data["is_internal"])
+
+
+class PCBCompletionTests(unittest.TestCase):
+    """v1.5.6 通用参数补足层：缺失参数 → 多组合表格；多组输入 → 多组结果"""
+
+    def test_impedance_missing_er_gets_completion_table(self):
+        """阻抗缺介电常数/铜厚 → 追加参数补足表格"""
+        r = pcb_calc._handle_impl("50Ω 微带 介质 1mm 要多宽")
+        self.assertIn("参数补足参考", r["answer"])
+        self.assertIn("介电常数 4.4", r["answer"])
+        self.assertIn("铜厚 1.5oz", r["answer"])
+
+    def test_creepage_missing_pd_gets_completion_table(self):
+        """安规缺污染等级/材料组 → 追加补足表格"""
+        r = pcb_calc._handle_impl("380V 爬电距离")
+        self.assertIn("参数补足参考", r["answer"])
+        self.assertIn("污染等级 1", r["answer"])
+        self.assertIn("材料组 IIIa", r["answer"])
+
+    def test_copper_busbar_missing_gets_completion_table(self):
+        """铜排缺温升/密度/材料 → 追加补足表格"""
+        r = pcb_calc._handle_impl("铜排 30mm宽 3mm厚 载流")
+        self.assertIn("参数补足参考", r["answer"])
+        self.assertIn("温升 50℃", r["answer"])
+        self.assertIn("材料 黄铜", r["answer"])
+
+    def test_full_params_no_completion_table(self):
+        """参数全给 → 不出现补足表格"""
+        r = pcb_calc._handle_impl("380V 爬电距离 PD2 材料组II")
+        self.assertNotIn("参数补足参考", r["answer"])
+
+    def test_trace_multi_current_groups(self):
+        """trace 多组输入：3A 和 5A → 两组结果"""
+        r = pcb_calc._handle_impl("3A 和 5A 各要多宽")
+        self.assertIn("【3A 时】", r["answer"])
+        self.assertIn("【5A 时】", r["answer"])
+
+    def test_target_param_not_counted_missing(self):
+        """反算：求解目标（线宽）不算缺失参数，只补介电常数/铜厚"""
+        r = pcb_calc._handle_impl("50Ω 微带 介质 1mm 要多宽")
+        self.assertNotIn("未指定线宽", r["answer"])
+        self.assertIn("未指定介电常数、铜厚", r["answer"])
+
+    def test_table_is_markdown_format(self):
+        """补足表格用 markdown 格式（钉钉 reply_markdown 渲染）"""
+        r = pcb_calc._handle_impl("380V 爬电距离")
+        self.assertIn("| 参数 | 爬电距离 |", r["answer"])
+        self.assertIn("|------|------|", r["answer"])
+
+
+class PCBCreepageBusbarFixTests(unittest.TestCase):
+    """v1.6.0 王哥反馈修复：安规 AC/DC / 海拔 / 紫铜路由 / 铜排温度"""
+
+    def test_creepage_ac_vs_dc_clearance_differs(self):
+        """交流 vs 直流 1000V：电气间隙不同（直流峰值=电压本身，不乘√2）"""
+        import re as _re
+        ac = pcb_calc._handle_impl("交流1000V的爬电距离")["answer"]
+        dc = pcb_calc._handle_impl("直流1000V的爬电距离")["answer"]
+        self.assertIn("交流", ac)
+        self.assertIn("直流", dc)
+        self.assertLess(float(_re.search(r"【电气间隙】([\d.]+)", dc).group(1)),
+                        float(_re.search(r"【电气间隙】([\d.]+)", ac).group(1)))
+
+    def test_altitude_variants(self):
+        """海拔多种写法都应识别（3000M海拔/海拔3000m/3000米海拔/大写M）"""
+        for q in ["3000M海拔", "海拔3000m", "3000米海拔", "海拔3000M"]:
+            self.assertEqual(pcb_calc._extract_altitude_m(q), 3000, q)
+
+    def test_altitude_affects_clearance(self):
+        """海拔 3000M → 电气间隙含海拔修正"""
+        r = pcb_calc._handle_impl("在3000M海拔情况下，交流1000V的爬电距离")["answer"]
+        self.assertIn("含海拔修正", r)
+
+    def test_zitong_routes_to_busbar(self):
+        """「紫铜 2x4能走多少电流」→ 铜排计算器（不再落 LLM 瞎算）"""
+        q = "计算一下，紫铜 2x4能走多少电流"
+        self.assertTrue(pcb_calc._is_pcb_calc_query(q))
+        self.assertEqual(pcb_calc._detect_calc_type(q), "copper_busbar")
+
+    def test_zitong_weight_still_metal_weight(self):
+        """「紫铜板 100×50×3mm 重量」仍走金属重量，不被紫铜误路由"""
+        self.assertEqual(pcb_calc._detect_calc_type("紫铜板 100×50×3mm 重量多少"), "metal_weight")
+
+    def test_busbar_ambient_vs_temp_rise_label(self):
+        """铜排区分环境温度 vs 温升标注；模糊的『温度』提示歧义"""
+        a = pcb_calc._handle_impl("铜排 30mm宽 3mm厚 环境温度60℃ 载流")["answer"]
+        self.assertIn("环境温度 60.0℃", a)
+        t = pcb_calc._handle_impl("铜排 30mm宽 3mm厚 温升50℃ 载流")["answer"]
+        self.assertIn("温升 50.0℃", t)
+        v = pcb_calc._handle_impl("紫铜 2x2 温度60度 载流")["answer"]
+        self.assertIn("按温升理解", v)
+
+    def test_busbar_tool_registered(self):
+        """铜排工具已注册且可调用（LLM 有正确工具，不再瞎算）"""
+        from tools import execute_tool, get_tool_names
+        self.assertIn("calc_copper_busbar", get_tool_names())
+        out = execute_tool("calc_copper_busbar", {"w_mm": 30, "h_mm": 3})
+        self.assertIn("牛顿散热法", out)
+
+
 if __name__ == "__main__":
     unittest.main()
