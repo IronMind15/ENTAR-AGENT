@@ -1,0 +1,42 @@
+{
+  "meta": {
+    "created": "2026-08-04",
+    "purpose": "恩特小助手裸检索质量基线（Context Recall）。测的是「检索层能否把正确答案送进 Top-N」——在 Agent 循环里 LLM 会兜底，但检索质量决定 LLM 回答的上限，故单独评估检索层。",
+    "match_field": {
+      "error_codes": "fault_code",
+      "standards": "std_id"
+    },
+    "topk_hint": "评估脚本默认 Top-5，命中判定为 expected 与结果 metadata 匹配字段归一化后相等"
+  },
+  "cases": [
+    {"id": "F01", "type": "fault_code", "collection": "error_codes", "query": "d4-1 是什么故障", "expected": ["d4-1"], "note": "精确代码查询"},
+    {"id": "F02", "type": "fault_code", "collection": "error_codes", "query": "d5-7 这个故障代码是什么意思", "expected": ["d5-7"], "note": "精确代码查询"},
+    {"id": "F03", "type": "fault_code", "collection": "error_codes", "query": "查一下 d8-5 是什么故障", "expected": ["d8-5"], "note": "精确代码查询"},
+    {"id": "F04", "type": "fault_code", "collection": "error_codes", "query": "d4-12 报的是什么告警", "expected": ["d4-12"], "note": "精确代码查询"},
+    {"id": "F05", "type": "fault_code", "collection": "error_codes", "query": "d7-16 是啥意思", "expected": ["d7-16"], "note": "精确代码查询"},
+    {"id": "F06", "type": "fault_symptom", "collection": "error_codes", "query": "外部急停信号闭合了，报什么故障", "expected": ["d4-1"], "note": "现象描述->故障"},
+    {"id": "F07", "type": "fault_symptom", "collection": "error_codes", "query": "电池端电压反接报什么故障", "expected": ["d4-10"], "note": "现象描述->故障"},
+    {"id": "F08", "type": "fault_symptom", "collection": "error_codes", "query": "直流欠压是什么故障", "expected": ["d4-9"], "note": "故障名直接查询"},
+    {"id": "F09", "type": "fault_symptom", "collection": "error_codes", "query": "BMS 没通讯了怎么办", "expected": ["df-1"], "note": "场景->故障"},
+    {"id": "F10", "type": "fault_symptom", "collection": "error_codes", "query": "功率模组过温了", "expected": ["d5-11", "d5-12", "d5-13", "d7-11"], "note": "症状->多个候选"},
+    {"id": "F11", "type": "fault_symptom", "collection": "error_codes", "query": "交流侧过压故障怎么处理", "expected": ["d5-9"], "note": "故障名查询"},
+    {"id": "F12", "type": "fault_symptom", "collection": "error_codes", "query": "漏电流超过 35mA 会报什么", "expected": ["d5-6"], "note": "阈值场景->故障"},
+    {"id": "F13", "type": "fault_symptom", "collection": "error_codes", "query": "直流预充一直失败是什么原因", "expected": ["d8-1"], "note": "现象->故障"},
+    {"id": "F14", "type": "fault_symptom", "collection": "error_codes", "query": "频繁启动被拦截了，是什么故障", "expected": ["de-6"], "note": "场景->故障"},
+    {"id": "F15", "type": "fault_symptom", "collection": "error_codes", "query": "直流母线电压过高报什么故障", "expected": ["d7-13", "d7-14"], "note": "症状->多个候选"},
+    {"id": "F16", "type": "fault_symptom", "collection": "error_codes", "query": "电网缺相是什么情况", "expected": ["d7-6", "d7-7", "d7-8"], "note": "现象->多个候选"},
+    {"id": "F17", "type": "fault_symptom", "collection": "error_codes", "query": "逆变器启动时报直流绝缘电阻低", "expected": ["d4-12", "d8-8"], "note": "绝缘电阻多码"},
+    {"id": "S01", "type": "std_id", "collection": "standards", "query": "GB/T 34133 是什么标准", "expected": ["GB/T 34133-2023"], "note": "标准编号"},
+    {"id": "S02", "type": "std_id", "collection": "standards", "query": "储能变流器技术要求是哪份国标", "expected": ["GB_T 34120-2023"], "note": "标题反查编号"},
+    {"id": "S03", "type": "std_id", "collection": "standards", "query": "IEC 60664-1 是讲什么的", "expected": ["IEC 60664-1", "I60664-1E2", "GBT16935"], "note": "国际标准编号"},
+    {"id": "S04", "type": "std_id", "collection": "standards", "query": "EN 62109-1 安全标准内容", "expected": ["EN62109"], "note": "标准编号"},
+    {"id": "S05", "type": "std_clause", "collection": "standards", "query": "爬电距离是怎么规定的", "expected": ["IEC 60664-1", "I60664-1E2", "GBT16935", "EN62109"], "note": "通用概念，多标准都有"},
+    {"id": "S06", "type": "std_clause", "collection": "standards", "query": "电气间隙的最小值怎么查", "expected": ["IEC 60664-1", "I60664-1E2", "GBT16935"], "note": "通用概念"},
+    {"id": "S07", "type": "std_clause", "collection": "standards", "query": "污染等级分成几级", "expected": ["IEC 60664-1", "I60664-1E2", "GBT16935"], "note": "绝缘配合条款"},
+    {"id": "S08", "type": "std_clause", "collection": "standards", "query": "过电压类别怎么划分", "expected": ["IEC 60664-1", "I60664-1E2", "GBT16935"], "note": "绝缘配合条款"},
+    {"id": "S09", "type": "std_clause", "collection": "standards", "query": "光伏发电系统用储能变流器的技术规范", "expected": ["CQC 3310", "CNCA/CTS 0022-2013"], "note": "认证规范标题"},
+    {"id": "S10", "type": "std_clause", "collection": "standards", "query": "微电源并网的低压配电网络接入要求", "expected": ["EN50438_2008"], "note": "并网接口标准"},
+    {"id": "S11", "type": "std_clause", "collection": "standards", "query": "低压系统内设备的绝缘配合标准", "expected": ["GBT16935", "IEC 60664-1", "I60664-1E2"], "note": "标准主题"},
+    {"id": "S12", "type": "std_clause", "collection": "standards", "query": "电力装置用电子设备的安全要求", "expected": ["EN 50178"], "note": "标准主题"}
+  ]
+}
