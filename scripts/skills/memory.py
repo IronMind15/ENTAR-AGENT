@@ -59,6 +59,7 @@ def add(user_id: str, role: str, content: str):
         try:
             store = _get_sqlite_store()
             store.add_memory(user_id, role, content)
+            _maybe_schedule_compress(user_id)
             return
         except Exception as e:
             logger.warning(f"SQLite 写入失败，回退 JSON: {e}")
@@ -112,6 +113,86 @@ def format_context(user_id: str, max_content: int = 200) -> str:
         content = msg["content"][:max_content]
         lines.append(f"{speaker}：{content}")
     return "\n".join(lines)
+
+
+# ===== 双层记忆（长期记忆） =====
+
+def _get_config_flag(name, default):
+    """读取 config 配置项（带默认值）"""
+    try:
+        import importlib
+        cfg = importlib.import_module("config")
+        return getattr(cfg, name, default)
+    except Exception:
+        return default
+
+
+def _maybe_schedule_compress(user_id: str):
+    """写入后检查是否触发异步压缩（非阻塞、防抖）
+
+    条件：长期记忆开关开启 + 该用户不在压缩中 + 未压缩消息超过阈值。
+    压缩在 task_manager 后台线程执行，不阻塞回复。
+    """
+    try:
+        if not _get_config_flag("LONG_TERM_MEMORY_ENABLED", True):
+            return
+        from skills import memory_compress
+        if memory_compress.is_pending(user_id):
+            return
+        store = _get_sqlite_store()
+        max_session_rounds = int(_get_config_flag("MAX_SESSION_ROUNDS", 12))
+        if store.count_uncompressed(user_id) <= max_session_rounds * 2:
+            return
+        if not memory_compress.add_pending(user_id):
+            return
+
+        from doc_mgr.task_manager import get_manager
+
+        def _run():
+            try:
+                memory_compress.compress_user_history(user_id)
+            finally:
+                memory_compress.remove_pending(user_id)
+
+        get_manager().run_async(f"memory_compress_{user_id}", _run)
+    except Exception as e:
+        logger.warning(f"调度记忆压缩失败（不影响主流程）: {e}")
+
+
+def format_long_term(user_id: str, max_items: Optional[int] = None) -> str:
+    """格式化长期记忆为文字（facts 排前，供拼进 system prompt）"""
+    if _get_backend() != "sqlite":
+        return ""
+    try:
+        store = _get_sqlite_store()
+        if max_items is None:
+            max_items = int(_get_config_flag("LONG_TERM_MAX_ITEMS", 8))
+        item_cap = int(_get_config_flag("LONG_TERM_ITEM_MAX_CONTENT", 150))
+        items = store.get_long_term(user_id, max_items)
+        if not items:
+            return ""
+        lines = []
+        for it in items:
+            content = it["content"][:item_cap]
+            label = "事实" if it["mem_type"] == "fact" else "摘要"
+            lines.append(f"- [{label}] {content}")
+        return "\n".join(lines)
+    except Exception as e:
+        logger.warning(f"格式化长期记忆失败: {e}")
+        return ""
+
+
+def save_long_term(user_id: str, mem_type: str, content: str,
+                   source_session: str = "") -> bool:
+    """保存长期记忆（代理，供测试/外部调用）"""
+    if _get_backend() != "sqlite":
+        return False
+    try:
+        store = _get_sqlite_store()
+        return store.save_long_term(user_id, mem_type, content, source_session)
+    except Exception as e:
+        logger.warning(f"保存长期记忆失败: {e}")
+        return False
 
 
 # ===== JSON 后端保留逻辑（兼容回退） =====

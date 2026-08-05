@@ -268,6 +268,21 @@ def _handle_impl(query: str, user_id: str = "") -> dict:
         except Exception as e:
             logger.warning(f"注入记忆失败: {e}")
 
+    # 注入长期记忆（历史事实 + 会话摘要，常驻）
+    if user_id:
+        try:
+            from skills import memory
+            long_term = memory.format_long_term(user_id)
+            if long_term:
+                system_content += (
+                    "\n\n【长期记忆 - 用户历史背景】\n"
+                    "以下是你长期记录中关于该用户的重要事实与历史会话摘要，回答时若相关请主动引用：\n"
+                    + long_term
+                )
+                logger.info(f"已注入 {user_id} 的长期记忆 ({len(long_term)}字)")
+        except Exception as e:
+            logger.warning(f"注入长期记忆失败: {e}")
+
     messages = [
         {"role": "system", "content": system_content},
         {"role": "user", "content": q},

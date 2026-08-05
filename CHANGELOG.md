@@ -3,6 +3,27 @@
 > 📌 **本文档是项目唯一的版本记录（单一事实源）**——README.md、PROGRESS.md 的版本历史均指向本文件，发版时只在这里追加记录。
 > 相关：待办清单见 [TODO.md](TODO.md)，进度看板见 [PROGRESS.md](PROGRESS.md)。
 
+## v1.5.3（2026-08-05）
+
+**双层会话记忆升级**——记忆从「最近 5 轮流水账」升级为「短期窗口 + 长期记忆」双层结构（记忆功能升级，非全新功能）：
+
+### 新增
+
+- **长期记忆表**（`long_term_memories`）：滚出短期窗口的旧对话由 LLM 异步压缩成「事实（fact）+ 摘要（summary）」入库，agent 常驻注入 system prompt（【长期记忆 - 用户历史背景】段），跨会话记得用户重要信息（项目 / 型号 / 偏好 / 未决事项）
+- **异步压缩管线**（`skills/memory_compress.py` + `prompts/memory_compress.txt`）：`memory.add` 写后自动检测未压缩消息数，超阈值（默认 12 轮）在 task_manager 后台线程压缩窗口外最旧 8 轮——非阻塞、防抖、LLM 失败不卡流程、按 user_id 隔离不串用户
+- **`task_manager.run_async`**：通用后台任务方法（复用线程池 + 任务列表可观测性，不动文档管线）
+- **session_id 打标**：`conversations.session_id`（原预留字段）按时间间隔写入，供长期记忆来源追溯，为将来 Web「新对话按钮」留挂载点
+- **短期窗口 5→8 轮**（`MAX_CONTEXT_ROUNDS`）；**配置开关**：`LONG_TERM_MEMORY_ENABLED` 等 8 项（默认开启，`False` 时行为与升级前一致）
+
+### 数据迁移
+
+- 首次启动幂等 backfill：旧消息除每用户最近一个窗口外标记 `compressed=1`（保留当前上下文，避免存量海量历史触发一次性批量 LLM 压缩）；长期记忆自本版上线日生效，不迁移历史内容
+
+### 验证
+
+- 新增 23 项记忆测试（短期窗口 / 去重 / session_id / 长期记忆 / 压缩 / JSON 解析 / 调度防抖 / backfill），全套 **151 项测试全绿**
+- 按 user_id 隔离验证不串用户
+
 ## v1.5.2（2026-08-04）
 
 **修改文件归属 + 修复 bge-reranker 重排静默失效**：

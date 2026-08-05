@@ -61,11 +61,20 @@ KNOWLEDGE_REVIEWER_STAFF_IDS: str = _get_config("KNOWLEDGE_REVIEWER_STAFF_IDS")
 # 存储后端：sqlite（推荐）| json（回退）
 MEMORY_BACKEND: str = "sqlite"
 
-# 对话记忆轮数上限（一问一答算 1 轮，即 5 轮 = 10 条消息）
-MAX_CONTEXT_ROUNDS: int = 5
+# 对话记忆轮数上限（一问一答算 1 轮，即 8 轮 = 16 条消息）
+MAX_CONTEXT_ROUNDS: int = 8
 
 # 管理员密码（空 = 不开启密码保护）
 ADMIN_PASSWORD: str = _get_config("ADMIN_PASSWORD")
 
 # MinerU API Token（精准解析）
 MINERU_TOKEN: str = _get_config("MINERU_TOKEN")
+
+# ── 双层记忆（长期记忆）配置 ───────────────────────────
+LONG_TERM_MEMORY_ENABLED: bool = True   # 长期记忆总开关（False 时行为与升级前一致）
+SESSION_TIMEOUT_MINUTES: int = 30       # 距上条消息超过该分钟数 → 新会话（仅用于 session_id 打标）
+MAX_SESSION_ROUNDS: int = 12            # 未压缩消息达该轮数触发压缩（窗口 8 + 冗余 4）
+COMPRESS_BATCH_ROUNDS: int = 8          # 每次压缩的对话轮数
+LONG_TERM_MAX_ITEMS: int = 8            # 注入 system prompt 的长期条目上限
+LONG_TERM_MAX_PER_USER: int = 50        # 每用户长期条目上限（超限先淘汰 summary）
+LONG_TERM_ITEM_MAX_CONTENT: int = 150   # 单条长期记忆注入截断长度

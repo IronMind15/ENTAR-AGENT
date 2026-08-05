@@ -120,6 +120,32 @@ class UserStore(ABC):
         """从旧的 chat_memory.json 迁移数据"""
         ...
 
+    @abstractmethod
+    def count_uncompressed(self, user_id: str) -> int:
+        """统计用户未压缩的对话条数"""
+        ...
+
+    @abstractmethod
+    def get_compress_batch(self, user_id: str, batch: int) -> list[dict]:
+        """获取最旧 batch 条未压缩对话"""
+        ...
+
+    @abstractmethod
+    def mark_compressed(self, ids: list[int]) -> int:
+        """把指定对话标记为已压缩"""
+        ...
+
+    @abstractmethod
+    def save_long_term(self, user_id: str, mem_type: str, content: str,
+                       source_session: str = "") -> bool:
+        """保存一条长期记忆（fact 精确去重，summary 追加）"""
+        ...
+
+    @abstractmethod
+    def get_long_term(self, user_id: str, max_items: int = 8) -> list[dict]:
+        """获取用户最近的长期记忆条目"""
+        ...
+
 
 class SQLiteUserStore(UserStore):
     """SQLite 实现"""
@@ -197,6 +223,21 @@ class SQLiteUserStore(UserStore):
             CREATE INDEX IF NOT EXISTS idx_conv_created
                 ON conversations(created_at);
 
+            CREATE TABLE IF NOT EXISTS long_term_memories (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id        TEXT NOT NULL,
+                mem_type       TEXT NOT NULL CHECK(mem_type IN ('fact','summary')),
+                content        TEXT NOT NULL,
+                source_session TEXT DEFAULT '',
+                created_at     TEXT DEFAULT (datetime('now','localtime')),
+                updated_at     TEXT DEFAULT (datetime('now','localtime')),
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_ltm_user
+                ON long_term_memories(user_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_ltm_type
+                ON long_term_memories(user_id, mem_type, created_at);
+
             CREATE TABLE IF NOT EXISTS permissions (
                 user_id     TEXT PRIMARY KEY,
                 can_upload  INTEGER DEFAULT 0,
@@ -218,7 +259,20 @@ class SQLiteUserStore(UserStore):
             logger.info("[迁移] users 表新增列: centers")
         except sqlite3.OperationalError:
             pass  # 列已存在
+        # 迁移：conversations 加 compressed 列（幂等）
+        try:
+            conn.execute("ALTER TABLE conversations ADD COLUMN compressed INTEGER DEFAULT 0")
+            logger.info("[迁移] conversations 表新增列: compressed")
+        except sqlite3.OperationalError:
+            pass  # 列已存在
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_conv_compress "
+                         "ON conversations(user_id, compressed)")
+        except sqlite3.OperationalError:
+            pass
         conn.commit()
+        # backfill：旧数据（无 session_id）除每用户最近一个窗口外全部标记已压缩
+        self._backfill_compressed()
         logger.info(f"SQLite 用户存储已初始化: {self._db_path}")
 
     # ── 对话记忆 ──────────────────────────────
@@ -240,11 +294,14 @@ class SQLiteUserStore(UserStore):
                 if row and row["role"] == role and row["content"] == content:
                     return
 
-                # 写入
+                session_id = self._resolve_session_id(user_id)
+
+                # 写入（compressed=0 进短期窗口）
                 conn.execute(
-                    "INSERT INTO conversations (user_id, role, content) "
-                    "VALUES (?, ?, ?)",
-                    (user_id, role, content),
+                    "INSERT INTO conversations "
+                    "(user_id, role, content, session_id, compressed) "
+                    "VALUES (?, ?, ?, ?, 0)",
+                    (user_id, role, content, session_id),
                 )
                 conn.commit()
             except Exception as e:
@@ -258,7 +315,7 @@ class SQLiteUserStore(UserStore):
         try:
             rows = conn.execute(
                 "SELECT role, content FROM conversations "
-                "WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+                "WHERE user_id = ? AND compressed = 0 ORDER BY id DESC LIMIT ?",
                 (user_id, max_items),
             ).fetchall()
             # 反转成正序
@@ -283,6 +340,252 @@ class SQLiteUserStore(UserStore):
             content = msg["content"][:max_content]
             lines.append(f"{speaker}：{content}")
         return "\n".join(lines)
+
+    # ── 双层记忆（短期窗口 + 长期记忆） ──────────────
+
+    def _resolve_session_id(self, user_id: str) -> str:
+        """计算当前消息所属会话 ID（时间间隔判定）
+
+        距上条消息超过 SESSION_TIMEOUT_MINUTES 视为新会话（生成新时间戳）；
+        否则沿用上条消息的 session_id。仅用于溯源打标，不作为压缩触发依据。
+        """
+        try:
+            import importlib
+            cfg = importlib.import_module("config")
+            timeout_min = int(getattr(cfg, "SESSION_TIMEOUT_MINUTES", 30))
+        except Exception:
+            timeout_min = 30
+        conn = self._get_conn()
+        try:
+            row = conn.execute(
+                "SELECT created_at, session_id FROM conversations "
+                "WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+                (user_id,),
+            ).fetchone()
+            if not row or not row["session_id"]:
+                return datetime.now().strftime("%Y%m%d%H%M%S")
+            last = datetime.strptime(row["created_at"], "%Y-%m-%d %H:%M:%S")
+            if (datetime.now() - last).total_seconds() > timeout_min * 60:
+                return datetime.now().strftime("%Y%m%d%H%M%S")
+            return row["session_id"]
+        except Exception:
+            return datetime.now().strftime("%Y%m%d%H%M%S")
+
+    def count_uncompressed(self, user_id: str) -> int:
+        """统计用户未压缩的对话条数"""
+        conn = self._get_conn()
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM conversations "
+                "WHERE user_id = ? AND compressed = 0",
+                (user_id,),
+            ).fetchone()
+            return row[0] if row else 0
+        except Exception as e:
+            logger.warning(f"统计未压缩对话失败: {e}")
+            return 0
+
+    def get_compress_batch(self, user_id: str, batch: int) -> list[dict]:
+        """获取最旧 batch 条未压缩对话（id 升序，供压缩任务）"""
+        conn = self._get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT id, role, content, session_id FROM conversations "
+                "WHERE user_id = ? AND compressed = 0 ORDER BY id ASC LIMIT ?",
+                (user_id, batch),
+            ).fetchall()
+            return [
+                {"id": r["id"], "role": r["role"], "content": r["content"],
+                 "session_id": r["session_id"] or ""}
+                for r in rows
+            ]
+        except Exception as e:
+            logger.warning(f"读取压缩批次失败: {e}")
+            return []
+
+    def mark_compressed(self, ids: list[int]) -> int:
+        """把指定对话标记为已压缩（幂等）"""
+        if not ids:
+            return 0
+        conn = self._get_conn()
+        with self._lock:
+            try:
+                conn.executemany(
+                    "UPDATE conversations SET compressed = 1 "
+                    "WHERE id = ? AND compressed = 0",
+                    [(i,) for i in ids],
+                )
+                conn.commit()
+                return conn.total_changes
+            except Exception as e:
+                conn.rollback()
+                logger.warning(f"标记已压缩失败: {e}")
+                return 0
+
+    def save_long_term(self, user_id: str, mem_type: str, content: str,
+                       source_session: str = "") -> bool:
+        """保存一条长期记忆（fact 精确去重，summary 追加）"""
+        if mem_type not in ("fact", "summary") or not content.strip():
+            return False
+        conn = self._get_conn()
+        with self._lock:
+            try:
+                self.get_or_create_user(user_id)
+                content = content.strip()
+                if mem_type == "fact":
+                    # 精确去重：同用户同内容 fact 只保留一条，刷新更新时间
+                    exist = conn.execute(
+                        "SELECT id FROM long_term_memories "
+                        "WHERE user_id = ? AND mem_type = 'fact' AND content = ?",
+                        (user_id, content),
+                    ).fetchone()
+                    if exist:
+                        conn.execute(
+                            "UPDATE long_term_memories SET updated_at = "
+                            "datetime('now','localtime') WHERE id = ?",
+                            (exist["id"],),
+                        )
+                        conn.commit()
+                        return True
+                conn.execute(
+                    "INSERT INTO long_term_memories "
+                    "(user_id, mem_type, content, source_session) "
+                    "VALUES (?, ?, ?, ?)",
+                    (user_id, mem_type, content, source_session),
+                )
+                conn.commit()
+                self._evict_long_term(user_id)
+                return True
+            except Exception as e:
+                conn.rollback()
+                logger.warning(f"保存长期记忆失败: {e}")
+                return False
+
+    def get_long_term(self, user_id: str, max_items: int = 8) -> list[dict]:
+        """获取用户最近的长期记忆条目（facts 在前，各自按时间倒序）"""
+        conn = self._get_conn()
+        try:
+            facts = conn.execute(
+                "SELECT content, created_at, updated_at FROM long_term_memories "
+                "WHERE user_id = ? AND mem_type = 'fact' ORDER BY id DESC LIMIT ?",
+                (user_id, max_items),
+            ).fetchall()
+            remaining = max_items - len(facts)
+            summaries = []
+            if remaining > 0:
+                summaries = conn.execute(
+                    "SELECT content, created_at, updated_at FROM long_term_memories "
+                    "WHERE user_id = ? AND mem_type = 'summary' "
+                    "ORDER BY id DESC LIMIT ?",
+                    (user_id, remaining),
+                ).fetchall()
+            result = []
+            for f in facts:
+                result.append({"mem_type": "fact", "content": f["content"],
+                               "created_at": f["created_at"],
+                               "updated_at": f["updated_at"]})
+            for s in summaries:
+                result.append({"mem_type": "summary", "content": s["content"],
+                               "created_at": s["created_at"],
+                               "updated_at": s["updated_at"]})
+            return result
+        except Exception as e:
+            logger.warning(f"读取长期记忆失败: {e}")
+            return []
+
+    def get_long_term_stats(self, user_id: str) -> dict:
+        """获取用户长期记忆统计（可观测性）"""
+        conn = self._get_conn()
+        try:
+            facts = conn.execute(
+                "SELECT COUNT(*) FROM long_term_memories "
+                "WHERE user_id = ? AND mem_type = 'fact'", (user_id,),
+            ).fetchone()[0]
+            summaries = conn.execute(
+                "SELECT COUNT(*) FROM long_term_memories "
+                "WHERE user_id = ? AND mem_type = 'summary'", (user_id,),
+            ).fetchone()[0]
+            return {"facts": facts, "summaries": summaries,
+                    "total": facts + summaries}
+        except Exception as e:
+            logger.warning(f"查询长期记忆统计失败: {e}")
+            return {"facts": 0, "summaries": 0, "total": 0}
+
+    def _evict_long_term(self, user_id: str):
+        """长期记忆超上限时淘汰（先删最旧 summary，再删最旧 fact）"""
+        try:
+            import importlib
+            cfg = importlib.import_module("config")
+            limit = int(getattr(cfg, "LONG_TERM_MAX_PER_USER", 50))
+        except Exception:
+            limit = 50
+        conn = self._get_conn()
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM long_term_memories WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+            if row[0] <= limit:
+                return
+            excess = row[0] - limit
+            # 先删最旧 summary
+            deleted = conn.execute(
+                "DELETE FROM long_term_memories WHERE id IN ("
+                "SELECT id FROM long_term_memories WHERE user_id = ? "
+                "AND mem_type = 'summary' ORDER BY id ASC LIMIT ?)",
+                (user_id, excess),
+            ).rowcount
+            if deleted < excess:
+                conn.execute(
+                    "DELETE FROM long_term_memories WHERE id IN ("
+                    "SELECT id FROM long_term_memories WHERE user_id = ? "
+                    "AND mem_type = 'fact' ORDER BY id ASC LIMIT ?)",
+                    (user_id, excess - deleted),
+                )
+            conn.commit()
+            logger.info(f"[长期记忆] 用户 {user_id} 超上限，淘汰 {excess} 条")
+        except Exception as e:
+            logger.warning(f"淘汰长期记忆失败: {e}")
+
+    def _backfill_compressed(self):
+        """旧数据（session_id=''）除每用户最近一个短期窗口外标记为已压缩
+
+        目的：① 升级瞬间不丢用户当前可见上下文；② 防止存量海量历史被压缩
+        任务一次性 LLM 处理（超时 + 成本）。幂等，可安全重复执行。
+        """
+        try:
+            import importlib
+            cfg = importlib.import_module("config")
+            window = int(getattr(cfg, "MAX_CONTEXT_ROUNDS", 8)) * 2
+        except Exception:
+            window = 16
+        conn = self._get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT user_id, id FROM conversations "
+                "WHERE session_id = '' AND compressed = 0 ORDER BY id DESC"
+            ).fetchall()
+            # 每用户保留最新 window 条，其余进 backfill 列表
+            seen: dict[str, int] = {}
+            keep_ids = set()
+            for r in rows:
+                uid = r["user_id"]
+                if seen.get(uid, 0) < window:
+                    seen[uid] = seen.get(uid, 0) + 1
+                    keep_ids.add(r["id"])
+            backfill_ids = [r["id"] for r in rows if r["id"] not in keep_ids]
+            if backfill_ids:
+                conn.executemany(
+                    "UPDATE conversations SET compressed = 1 WHERE id = ?",
+                    [(i,) for i in backfill_ids],
+                )
+                conn.commit()
+                logger.info(
+                    f"[迁移] backfill 标记 {len(backfill_ids)} 条旧消息为已压缩"
+                    f"（保留每用户最近 {window} 条）"
+                )
+        except Exception as e:
+            logger.warning(f"[迁移] backfill 失败（不影响主流程）: {e}")
 
     # ── 用户信息 ──────────────────────────────
 
@@ -751,3 +1054,29 @@ def format_context(user_id: str, max_rounds: int = 5,
                    max_content: int = 200) -> str:
     """兼容 memory.format_context() 接口"""
     return get_store().format_context(user_id, max_rounds, max_content)
+
+
+def count_uncompressed(user_id: str) -> int:
+    """兼容 memory.count_uncompressed() 接口"""
+    return get_store().count_uncompressed(user_id)
+
+
+def get_compress_batch(user_id: str, batch: int) -> list[dict]:
+    """兼容 memory.get_compress_batch() 接口"""
+    return get_store().get_compress_batch(user_id, batch)
+
+
+def mark_compressed(ids: list[int]) -> int:
+    """兼容 memory.mark_compressed() 接口"""
+    return get_store().mark_compressed(ids)
+
+
+def save_long_term(user_id: str, mem_type: str, content: str,
+                   source_session: str = "") -> bool:
+    """兼容 memory.save_long_term() 接口"""
+    return get_store().save_long_term(user_id, mem_type, content, source_session)
+
+
+def get_long_term(user_id: str, max_items: int = 8) -> list[dict]:
+    """兼容 memory.get_long_term() 接口"""
+    return get_store().get_long_term(user_id, max_items)

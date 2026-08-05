@@ -155,6 +155,56 @@ class TaskManager:
         finally:
             _set_current_task_id(None)
 
+    def run_async(self, name: str, fn: Callable[[], None]) -> TaskRecord:
+        """提交一个通用后台任务（不绑定 Document 语义）
+
+        用于记忆压缩等轻任务。复用线程池 + 任务列表 + 进度追踪。
+
+        Args:
+            name: 任务名称（记录用）
+            fn: 无参执行函数
+
+        Returns:
+            TaskRecord（已包含 task_id）
+        """
+        record = TaskRecord(name, "memory")
+        with self._lock:
+            self._tasks[record.task_id] = record
+
+        self._executor.submit(self._run_generic, record, fn)
+        logger.info(f"[任务] 已提交通用任务: {record.task_id} → {name}")
+        return record
+
+    def _run_generic(self, record: TaskRecord, fn: Callable[[], None]):
+        """在线程池中执行通用任务（异常只记录，不抛到外层）"""
+        _set_current_task_id(record.task_id)
+        try:
+            self.update_progress(record.task_id, "start", 5, "开始处理...")
+
+            # 执行用户函数（无返回值约定）
+            fn()
+
+            with self._lock:
+                record.status = TASK_DONE
+                record.progress = 100
+                record.step = "done"
+                record.progress_text = "处理完成"
+                record.result = {"status": "ok"}
+                record.updated_at = time.time()
+            logger.info(f"[任务] 通用任务完成: {record.task_id} → {record.file_name}")
+
+        except Exception as e:
+            logger.exception(f"[任务] 通用任务失败: {record.task_id} → {record.file_name}")
+            with self._lock:
+                record.status = TASK_ERROR
+                record.progress = 0
+                record.step = "error"
+                record.progress_text = str(e)[:200]
+                record.error = str(e)
+                record.updated_at = time.time()
+        finally:
+            _set_current_task_id(None)
+
     def update_progress(self, task_id: str, step: str,
                         progress: int, message: str):
         """更新任务进度（线程安全）"""
