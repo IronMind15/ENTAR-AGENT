@@ -49,3 +49,6 @@ models/
 
 # ── 临时诊断脚本 ──
 data/pcb/_diag_std.py
+
+# ── Claude 本地配置（个人权限，每次使用会变，不进版本库） ──
+.claude/settings.local.json
