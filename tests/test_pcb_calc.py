@@ -19,6 +19,10 @@ from skills.pcb_calc import (
     _calc_thermal, _calc_led, _calc_divider, _calc_rc,
     _detect_calc_type, _microstrip_z, _solve_width,
     _calc_layout_check, _build_answer,
+    _calc_copper_busbar, _calc_three_phase, _calc_snubber, _calc_pdn,
+    _calc_smps, _calc_rated_current, _calc_via_parasitic,
+    _calc_lc_resonance, _calc_supercapacitor, _calc_electric_power,
+    _calc_vswr, _calc_555, _calc_battery_life, _calc_wire_drop,
 )
 
 
@@ -225,10 +229,13 @@ class PCBExtraCalculatorTests(unittest.TestCase):
         self.assertIn("100", rows["限流电阻"])
 
     def test_divider(self):
-        """5V R1=10k R2=10k → 2.5V"""
+        """5V R1=10k R2=10k → 2.5V；双源 12V/V2=3V → 7.5V"""
         res = _calc_divider("5V 分压 R1=10k R2=10k 输出多少")
         rows = dict(res["rows"])
-        self.assertIn("2.5", rows["输出 Vout"])
+        self.assertIn("2.5", rows["输出 VR"])
+        res2 = _calc_divider("12V 分压 V2=3V R1=10k R2=10k")
+        rows2 = dict(res2["rows"])
+        self.assertIn("7.5", rows2["输出 VR"])
 
     def test_rc_time_constant(self):
         """10kΩ 1μF → τ=10ms"""
@@ -364,6 +371,114 @@ class PCBCompCheckTests(unittest.TestCase):
         self.assertIn("layout", r["source"])
         self.assertIn("综合校验", r["answer"])
         self.assertIn("走线约束", r["answer"])
+
+
+class PCBBatch2Tests(unittest.TestCase):
+    """批次2：以 pcb-tools.cn 为准的新增高价值计算器"""
+
+    def test_copper_busbar_ampacity(self):
+        """铜排 30×3 → ASTM B187 实测表参考"""
+        res = _calc_copper_busbar("铜排 30mm宽 3mm厚 载流")
+        text = _build_answer(res["rows"], res["note"])
+        self.assertIn("ASTM", text)
+        self.assertIn("65℃", text)
+
+    def test_three_phase_power(self):
+        """380V 100A cos0.85 → P≈55.95kW"""
+        res = _calc_three_phase("380V 三相 100A 功率因数0.85 多少千瓦")
+        rows = dict(res["rows"])
+        self.assertIn("55.95", rows["有功 P"])
+
+    def test_snubber_double_freq(self):
+        """双频法 100/60MHz 220pF → Cp≈123.7pF"""
+        res = _calc_snubber("原始振铃100MHz 加220pF后60MHz 算吸收电路")
+        rows = dict(res["rows"])
+        self.assertIn("123.7", rows["开关节点寄生电容 Cp"])
+
+    def test_pdn_target_impedance(self):
+        """1.2V 3% 5A → 目标阻抗 7.2mΩ"""
+        res = _calc_pdn("Vdd1.2V 纹波3% 阶跃电流5A 目标阻抗多少")
+        rows = dict(res["rows"])
+        self.assertIn("7.2", rows["目标阻抗 Z_target"])
+
+    def test_smps_buck_efficiency(self):
+        """Buck 24→12 5A 10mΩ → 效率 99.8%"""
+        res = _calc_smps("Buck 24V转12V 5A Rds10mΩ 效率多少")
+        rows = dict(res["rows"])
+        self.assertIn("99.8", rows["总损耗 / 效率"])
+
+    def test_rated_current_transformer(self):
+        """1000kVA 10/0.4kV → 0.4kV 侧 1443A"""
+        res = _calc_rated_current("1000kVA 变压器 10kV/0.4kV 额定电流")
+        rows = dict(res["rows"])
+        self.assertIn("1443", rows["0.4 kV 侧额定电流"])
+
+    def test_via_parasitic_capacitance(self):
+        """板厚1.6 焊盘0.6 反焊盘1.0 → Cvia≈14.2pF"""
+        res = _calc_via_parasitic("板厚1.6mm 焊盘0.6 反焊盘1.0 寄生电容")
+        rows = dict(res["rows"])
+        self.assertIn("14.2", rows["寄生电容 Cvia"])
+
+
+class PCBBatch3Tests(unittest.TestCase):
+    """批次3：常用电路计算器"""
+
+    def test_lc_resonance(self):
+        """100μH 10nF → ≈159kHz"""
+        res = _calc_lc_resonance("100μH 10nF 谐振频率")
+        rows = dict(res["rows"])
+        self.assertIn("159", rows["谐振频率 f0"])
+
+    def test_supercapacitor(self):
+        """100F 2.7V→1V 100mA → 恒流放电 ≈1700s"""
+        res = _calc_supercapacitor("100F 超级电容 2.7V放到1V 负载100mA 能撑多久")
+        rows = dict(res["rows"])
+        self.assertIn("1700", rows["恒流放电"])
+
+    def test_electric_power(self):
+        """12V 3A → 36W"""
+        res = _calc_electric_power("12V 3A 功率多少")
+        rows = dict(res["rows"])
+        self.assertIn("36", rows["功率"])
+
+    def test_vswr(self):
+        """VSWR1.5 → RL≈13.98dB"""
+        res = _calc_vswr("VSWR1.5 回波损耗多少")
+        rows = dict(res["rows"])
+        self.assertIn("14", rows["回波损耗 RL"])
+
+    def test_timer_555_astable(self):
+        """1k/10k/0.1μF → f≈685Hz"""
+        res = _calc_555("555 R1=1k R2=10k C=0.1μF 频率多少")
+        rows = dict(res["rows"])
+        self.assertIn("685", rows["频率 f"])
+
+    def test_battery_life(self):
+        """2000mAh / 100mA → 20小时"""
+        res = _calc_battery_life("2000mAh 电池 平均电流100mA 续航多少")
+        rows = dict(res["rows"])
+        self.assertIn("20", rows["续航时间"])
+
+    def test_wire_drop(self):
+        """2.5mm² 铜线 50m 10A → 压降≈3.4V"""
+        res = _calc_wire_drop("2.5mm² 铜线 50m 10A 压降多少")
+        rows = dict(res["rows"])
+        self.assertIn("3.4", rows["压降 ΔV"])
+
+    def test_new_calculators_end_to_end(self):
+        """批次2/3 计算器通过技能 handle 输出且非提示"""
+        for q in [
+            "铜排 30mm宽 3mm厚 载流", "380V 三相 100A 功率因数0.85 多少千瓦",
+            "原始振铃100MHz 加220pF后60MHz 算吸收电路", "Vdd1.2V 纹波3% 阶跃电流5A 目标阻抗多少",
+            "Buck 24V转12V 5A Rds10mΩ 效率多少", "1000kVA 变压器 10kV/0.4kV 额定电流",
+            "100μH 10nF 谐振频率", "12V 3A 功率多少", "20dBm 是几瓦",
+            "2.4GHz 波长多少", "VSWR1.5 回波损耗多少", "555 R1=1k R2=10k C=0.1μF 频率多少",
+            "10kΩ 100nF 低通截止频率多少", "运放 Rf=10k R1=1k 同相增益多少",
+            "3.3V I2C 总线电容100pF 上拉多少", "2.5mm² 铜线 50m 10A 压降多少",
+        ]:
+            r = pcb_calc._handle_impl(q)
+            self.assertIn("【", r["answer"], q)
+            self.assertNotIn("【提示】", r["answer"], q)
 
 
 if __name__ == "__main__":

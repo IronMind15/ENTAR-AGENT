@@ -13,7 +13,7 @@
 
 恩特能源（天津恩特能源科技有限公司，Tianjin Entar Energy Technology Co., Ltd.，品牌 ENTAR）AI Agent 项目。目标是搭建面向中小企业的 AI Agent 全生命周期管理平台。
 
-### 当前进度：三步走计划 — 第一步稳定化 + 第二步经验知识库启动（v1.5.3）
+### 当前进度：三步走计划 — 第一步稳定化 + 第二步经验知识库启动（v1.5.4）
 
 **第一步：智能查询 + 标准文档检索 + 通用聊天 + 多技能（故障/标准/PCB 计算）——核心能力已完成，正在做真实环境验收与安全收尾**
 - 基于 RAG（检索增强生成）架构的内部工具
@@ -32,7 +32,7 @@
 - ✅ Web 同步管理、强制重学和任务进度追踪（v1.2.5）
 - ✅ SHA-256 内容指纹、安全版本替换和 MinerU 安全加固（v1.2.6）
 - 🧪 固定审核人主动推送与审批口令已完成代码和离线测试，尚未真实发消息
-- ✅ 151 项自动化回归测试（含 44 项 PCB 计算 + 文档处理/版本替换/上传审核）
+- ✅ 166 项自动化回归测试（含 65 项 PCB 计算 + 文档处理/版本替换/上传审核）
 - ✅ 局域网共享（防火墙放行端口 8000）
 - ✅ 同事实测通过
 - ⚠️ v1.4.1 尚未在正式知识库、真实 MinerU 和钉钉生产环境完成端到端回归
@@ -51,6 +51,7 @@ D:\ENTAR_AGENT\
 │   ├── fault_codes/                             #    故障代码 Excel 数据
 │   │   └── PCS参数表 V1.6.2.xlsx                #    实际工程 PCS 参数表（133 条故障）
 │   ├── standards/                               #    标准文档 PDF 文件（含 MinerU 提取输出）
+│   ├── pcb/                                     #    PCB 公式权威源（pcb-tools.cn 基准 + 查表）
 │   ├── uploads/                                 #    钉钉文件接收保存目录（自动生成，已 gitignore）
 │   └── chat_memory.json                         #    会话记忆（自动生成，已 gitignore）
 │
@@ -97,7 +98,7 @@ D:\ENTAR_AGENT\
 │       ├── error_query.py                       # 🔧 故障查询（两级查询策略）
 │       ├── standards_query.py                   # 📋 标准文档查询
 │       ├── enhanced_search.py                   # 🆕 混合检索 + 重排（v1.3.0）
-│       ├── pcb_calc.py                          # 🆕 PCB 计算技能 13 类（v1.4.2）
+│       ├── pcb_calc.py                          # 🆕 PCB 计算技能 54 类（v1.5.4 以 pcb-tools.cn 为基准）
 │       ├── experience_query.py                  # 🆕 经验知识库查询（v1.4.2）
 │       └── memory.py                            # 💭 会话记忆管理
 │
@@ -137,7 +138,7 @@ FastAPI (main.py) → Agent 循环（agent.py）
                        │     ├─ search_knowledge_base（故障知识库）
                        │     ├─ search_standards（标准知识库）
                        │     └─ calc_pcb_trace（PCB 走线计算）
-                       ├─ 技能：pcb_calc（13 类 PCB 计算器）
+                       ├─ 技能：pcb_calc（54 类 PCB 计算器）
                        ├─ 增强检索 enhanced_search
                        │     ├─ 向量 + BM25 双路召回 → RRF 融合
                        │     └─ bge-reranker 重排
@@ -222,11 +223,11 @@ FastAPI (main.py) → Agent 循环（agent.py）
 | 工具注册 | tools/ | @register 装饰器注册，新增工具无需改 agent.py（v1.2.7） |
 | 标准查询 | standards_query.py | 标准文档检索工具（含标准编号快速通道 v1.2.3） |
 | 增强检索 | enhanced_search.py | 向量 + BM25 双路召回 RRF 融合 + bge-reranker 重排（v1.3.0） |
-| PCB 计算 | pcb_calc.py + tools/calc_pcb_trace.py | 13 类 PCB 计算器，全本地秒回（v1.4.2 含布局综合校验） |
+| PCB 计算 | pcb_calc.py + tools/calc_pcb_trace.py | 54 类 PCB 计算器，全本地秒回（v1.5.4 以 pcb-tools.cn 为基准） |
 | 文件接收 | file_handler.py | 钉钉文件/图片接收 → 自动下载保存到 data/uploads/ |
 | 上传审核 | knowledge_review.py + dingtalk_notifier.py | 固定审核人主动通知、一次性审批和后台同步 |
 | 崩溃恢复 | doc_mgr/recovery.py | 启动时清理/恢复遗留 staging/retired 版本数据 |
-| 自动化测试 | unittest | 84 项文档引擎、同步追踪、PCB 计算、安全和版本替换测试 |
+| 自动化测试 | unittest | 166 项文档引擎、同步追踪、PCB 计算、安全和版本替换测试 |
 | 部署 | Docker + docker-compose | 可选容器化部署 |
 
 ## 运行方式

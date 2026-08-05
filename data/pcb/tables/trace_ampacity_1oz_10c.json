@@ -1,0 +1,47 @@
+[
+  {
+    "width_mil": 10,
+    "width_mm": 0.254,
+    "current_A": 0.81
+  },
+  {
+    "width_mil": 15,
+    "width_mm": 0.381,
+    "current_A": 1.08
+  },
+  {
+    "width_mil": 20,
+    "width_mm": 0.508,
+    "current_A": 1.32
+  },
+  {
+    "width_mil": 30,
+    "width_mm": 0.762,
+    "current_A": 1.76
+  },
+  {
+    "width_mil": 50,
+    "width_mm": 1.27,
+    "current_A": 2.54
+  },
+  {
+    "width_mil": 80,
+    "width_mm": 2.032,
+    "current_A": 3.57
+  },
+  {
+    "width_mil": 100,
+    "width_mm": 2.54,
+    "current_A": 4.2
+  },
+  {
+    "width_mil": 150,
+    "width_mm": 3.81,
+    "current_A": 5.63
+  },
+  {
+    "width_mil": 200,
+    "width_mm": 5.08,
+    "current_A": 6.93
+  }
+]

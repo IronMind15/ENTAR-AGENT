@@ -1,0 +1,5356 @@
+{
+  "meta": {
+    "title": "PCB 设计计算公式全集",
+    "description": "从 pcb-tools.cn、eda365 论坛等来源整理的 PCB 设计计算核心公式，可直接集成到 AI Agent 工具链",
+    "version": "1.0",
+    "date": "2026-08-05",
+    "sources": [
+      "https://pcb-tools.cn/",
+      "https://bbs.eda365.com/",
+      "https://impedancecalculator.com/"
+    ]
+  },
+  "categories": {
+    "pcb_trace_current": {
+      "name": "PCB走线载流与温升 (IPC-2221)",
+      "formulas": [
+        {
+          "id": "trace_current_outer",
+          "name": "表层走线载流量",
+          "formula": "I = 0.048 × ΔT^0.44 × A^0.725",
+          "parameters": {
+            "I": {
+              "symbol": "I",
+              "name": "最大安全载流量",
+              "unit": "A",
+              "desc": "走线可通过的最大电流"
+            },
+            "ΔT": {
+              "symbol": "ΔT",
+              "name": "允许温升",
+              "unit": "℃",
+              "desc": "走线允许的温升，一般消费电子 10~20℃，工业 ≤10℃"
+            },
+            "A": {
+              "symbol": "A",
+              "name": "走线截面积",
+              "unit": "mil²",
+              "desc": "走线截面积，A = 铜厚(mil) × 线宽(mil)"
+            },
+            "K": {
+              "symbol": "K",
+              "name": "修正系数(外层)",
+              "unit": "-",
+              "desc": "外层固定 0.048"
+            }
+          },
+          "notes": [
+            "1 oz铜 ≈ 35μm ≈ 1.4 mil",
+            "1 mil = 0.001 inch = 0.0254 mm"
+          ],
+          "source": "IPC-2221 / pcb-tools.cn"
+        },
+        {
+          "id": "trace_current_inner",
+          "name": "内层走线载流量",
+          "formula": "I = 0.024 × ΔT^0.44 × A^0.725",
+          "parameters": {
+            "I": {
+              "symbol": "I",
+              "name": "最大安全载流量",
+              "unit": "A"
+            },
+            "ΔT": {
+              "symbol": "ΔT",
+              "name": "允许温升",
+              "unit": "℃"
+            },
+            "A": {
+              "symbol": "A",
+              "name": "走线截面积",
+              "unit": "mil²"
+            },
+            "K": {
+              "symbol": "K",
+              "name": "修正系数(内层)",
+              "unit": "-",
+              "desc": "内层固定 0.024"
+            }
+          },
+          "notes": [
+            "内层散热差，同等线宽载流量约为表层的一半"
+          ],
+          "source": "IPC-2221 / pcb-tools.cn"
+        },
+        {
+          "id": "trace_width_from_current",
+          "name": "由电流反推截面积",
+          "formula": "A = (I / (K × ΔT^0.44))^(1/0.725)",
+          "parameters": {
+            "A": {
+              "symbol": "A",
+              "name": "所需最小截面积",
+              "unit": "mil²"
+            },
+            "I": {
+              "symbol": "I",
+              "name": "目标电流",
+              "unit": "A"
+            },
+            "K": {
+              "symbol": "K",
+              "name": "修正系数",
+              "unit": "-",
+              "desc": "外层0.048，内层0.024"
+            },
+            "ΔT": {
+              "symbol": "ΔT",
+              "name": "允许温升",
+              "unit": "℃"
+            }
+          },
+          "derived": "线宽 W(mil) = A / 铜厚(mil)",
+          "source": "IPC-2221 逆运算"
+        },
+        {
+          "id": "trace_resistance",
+          "name": "走线直流电阻",
+          "formula": "R = ρ × L / (W × T)",
+          "parameters": {
+            "R": {
+              "symbol": "R",
+              "name": "走线直流电阻",
+              "unit": "Ω"
+            },
+            "ρ": {
+              "symbol": "ρ",
+              "name": "铜电阻率",
+              "unit": "Ω·m",
+              "desc": "铜 = 1.72×10⁻⁸ Ω·m (20℃)"
+            },
+            "L": {
+              "symbol": "L",
+              "name": "走线长度",
+              "unit": "m"
+            },
+            "W": {
+              "symbol": "W",
+              "name": "走线宽度",
+              "unit": "m"
+            },
+            "T": {
+              "symbol": "T",
+              "name": "铜箔厚度",
+              "unit": "m"
+            }
+          },
+          "simplified": "导线阻抗 ≈ 0.0005 × L/W (线长/线宽，单位inch/mil)",
+          "source": "通用公式 / eda365"
+        },
+        {
+          "id": "trace_voltage_drop",
+          "name": "走线压降",
+          "formula": "ΔV = I × R",
+          "parameters": {
+            "ΔV": {
+              "symbol": "ΔV",
+              "name": "走线压降",
+              "unit": "V"
+            },
+            "I": {
+              "symbol": "I",
+              "name": "流过电流",
+              "unit": "A"
+            },
+            "R": {
+              "symbol": "R",
+              "name": "走线电阻",
+              "unit": "Ω"
+            }
+          },
+          "source": "欧姆定律"
+        },
+        {
+          "id": "trace_power_loss",
+          "name": "走线发热功耗",
+          "formula": "P = I² × R",
+          "parameters": {
+            "P": {
+              "symbol": "P",
+              "name": "走线发热功耗",
+              "unit": "W"
+            },
+            "I": {
+              "symbol": "I",
+              "name": "电流",
+              "unit": "A"
+            },
+            "R": {
+              "symbol": "R",
+              "name": "走线电阻",
+              "unit": "Ω"
+            }
+          }
+        }
+      ],
+      "reference_tables": {
+        "1oz_outer_10C_temp_rise": [
+          {
+            "width_mil": 10,
+            "width_mm": 0.254,
+            "current_A": 0.81
+          },
+          {
+            "width_mil": 15,
+            "width_mm": 0.381,
+            "current_A": 1.08
+          },
+          {
+            "width_mil": 20,
+            "width_mm": 0.508,
+            "current_A": 1.32
+          },
+          {
+            "width_mil": 30,
+            "width_mm": 0.762,
+            "current_A": 1.76
+          },
+          {
+            "width_mil": 50,
+            "width_mm": 1.27,
+            "current_A": 2.54
+          },
+          {
+            "width_mil": 80,
+            "width_mm": 2.032,
+            "current_A": 3.57
+          },
+          {
+            "width_mil": 100,
+            "width_mm": 2.54,
+            "current_A": 4.2
+          },
+          {
+            "width_mil": 150,
+            "width_mm": 3.81,
+            "current_A": 5.63
+          },
+          {
+            "width_mil": 200,
+            "width_mm": 5.08,
+            "current_A": 6.93
+          }
+        ]
+      }
+    },
+    "impedance": {
+      "name": "PCB阻抗计算",
+      "formulas": [
+        {
+          "id": "microstrip_impedance",
+          "name": "微带线特性阻抗",
+          "formula": "Z₀ = (87 / √(εr + 1.41)) × ln(5.98H / (0.8W + T))",
+          "parameters": {
+            "Z₀": {
+              "symbol": "Z₀",
+              "name": "特性阻抗",
+              "unit": "Ω",
+              "desc": "微带线特性阻抗，通常目标50Ω或90Ω（差分）"
+            },
+            "εr": {
+              "symbol": "εr",
+              "name": "介质相对介电常数",
+              "unit": "-",
+              "desc": "FR-4约为4.2~4.6"
+            },
+            "H": {
+              "symbol": "H",
+              "name": "介质层高度",
+              "unit": "mm或mil",
+              "desc": "走线到参考平面的距离"
+            },
+            "W": {
+              "symbol": "W",
+              "name": "走线宽度",
+              "unit": "mm或mil"
+            },
+            "T": {
+              "symbol": "T",
+              "name": "铜箔厚度",
+              "unit": "mm或mil"
+            }
+          },
+          "applicable_range": "0.1 ≤ W/H ≤ 2.0, 1 ≤ εr ≤ 15",
+          "source": "IPC-2141 / eda365"
+        },
+        {
+          "id": "stripline_impedance",
+          "name": "带状线特性阻抗",
+          "formula": "Z₀ = (60 / √εr) × ln(4H / (0.67π × W × (0.8 + T/W)))",
+          "parameters": {
+            "Z₀": {
+              "symbol": "Z₀",
+              "name": "特性阻抗",
+              "unit": "Ω"
+            },
+            "εr": {
+              "symbol": "εr",
+              "name": "介质相对介电常数",
+              "unit": "-"
+            },
+            "H": {
+              "symbol": "H",
+              "name": "两参考平面间总距离",
+              "unit": "mm或mil",
+              "desc": "走线位于两平面中间"
+            },
+            "W": {
+              "symbol": "W",
+              "name": "走线宽度",
+              "unit": "mm或mil"
+            },
+            "T": {
+              "symbol": "T",
+              "name": "铜箔厚度",
+              "unit": "mm或mil"
+            }
+          },
+          "applicable_range": "W/H < 0.35, T/H < 0.25",
+          "source": "IPC-2141 / eda365"
+        }
+      ]
+    },
+    "skin_effect": {
+      "name": "趋肤效应",
+      "formulas": [
+        {
+          "id": "skin_depth",
+          "name": "趋肤深度",
+          "formula": "δ = √(ρ / (π × f × μr × μ₀))",
+          "simplified": "δ(铜) ≈ 2.6 / √f(MHz) μm 或 δ ≈ 66 / √f(Hz) mm",
+          "parameters": {
+            "δ": {
+              "symbol": "δ",
+              "name": "趋肤深度",
+              "unit": "m或μm",
+              "desc": "电流密度降为表面1/e的深度"
+            },
+            "ρ": {
+              "symbol": "ρ",
+              "name": "材料电阻率",
+              "unit": "Ω·m",
+              "desc": "铜=1.72×10⁻⁸"
+            },
+            "f": {
+              "symbol": "f",
+              "name": "频率",
+              "unit": "Hz"
+            },
+            "μr": {
+              "symbol": "μr",
+              "name": "相对磁导率",
+              "unit": "-",
+              "desc": "非磁性材料≈1"
+            },
+            "μ₀": {
+              "symbol": "μ₀",
+              "name": "真空磁导率",
+              "unit": "H/m",
+              "desc": "μ₀ = 4π×10⁻⁷"
+            }
+          },
+          "reference_values": {
+            "copper_1MHz": "66 μm",
+            "copper_100MHz": "6.6 μm",
+            "copper_1GHz": "2.1 μm",
+            "copper_10GHz": "0.66 μm"
+          },
+          "notes": [
+            "电流集中在~3δ深度内",
+            "高频时有效截面积减小，交流电阻增大"
+          ],
+          "source": "pcb-tools.cn"
+        }
+      ]
+    },
+    "high_speed": {
+      "name": "高速信号与信号完整性",
+      "formulas": [
+        {
+          "id": "propagation_delay",
+          "name": "传播延迟",
+          "formula": "t_pd = √εr / c",
+          "simplified": "微带线延迟≈5.6 ps/mm，带状线≈6.8 ps/mm (FR-4)",
+          "parameters": {
+            "t_pd": {
+              "symbol": "t_pd",
+              "name": "单位长度传播延迟",
+              "unit": "ps/mm或ps/inch"
+            },
+            "εr": {
+              "symbol": "εr",
+              "name": "有效介电常数",
+              "unit": "-"
+            },
+            "c": {
+              "symbol": "c",
+              "name": "光速",
+              "unit": "m/s",
+              "desc": "3×10⁸ m/s"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "critical_length",
+          "name": "临界长度（传输线判据）",
+          "formula": "L_crit = tr × vp / 2",
+          "parameters": {
+            "L_crit": {
+              "symbol": "L_crit",
+              "name": "临界长度",
+              "unit": "mm或inch"
+            },
+            "tr": {
+              "symbol": "tr",
+              "name": "信号上升时间",
+              "unit": "ns或ps"
+            },
+            "vp": {
+              "symbol": "vp",
+              "name": "传播速度",
+              "unit": "mm/ns",
+              "desc": "vp = c/√εr"
+            }
+          },
+          "rule_of_thumb": "1 ns上升时间 → 约1 inch临界长度",
+          "source": "impedancecalculator.com"
+        }
+      ]
+    },
+    "via_parasitic": {
+      "name": "过孔寄生参数",
+      "formulas": [
+        {
+          "id": "via_parasitic_capacitance",
+          "name": "过孔寄生电容",
+          "formula": "C_via = (1.41 × εr × T × D1) / (D2 - D1)",
+          "parameters": {
+            "C_via": {
+              "symbol": "C_via",
+              "name": "过孔寄生电容",
+              "unit": "pF"
+            },
+            "εr": {
+              "symbol": "εr",
+              "name": "板材介电常数",
+              "unit": "-"
+            },
+            "T": {
+              "symbol": "T",
+              "name": "PCB板厚",
+              "unit": "mm"
+            },
+            "D1": {
+              "symbol": "D1",
+              "name": "过孔焊盘直径",
+              "unit": "mm"
+            },
+            "D2": {
+              "symbol": "D2",
+              "name": "反焊盘(Anti-pad)直径",
+              "unit": "mm"
+            }
+          },
+          "source": "pcb-tools.cn / 通用公式"
+        },
+        {
+          "id": "via_parasitic_inductance",
+          "name": "过孔寄生电感",
+          "formula": "L_via = 5.08 × h × (ln(4h/d) + 1)",
+          "parameters": {
+            "L_via": {
+              "symbol": "L_via",
+              "name": "过孔寄生电感",
+              "unit": "nH"
+            },
+            "h": {
+              "symbol": "h",
+              "name": "过孔长度",
+              "unit": "mm"
+            },
+            "d": {
+              "symbol": "d",
+              "name": "过孔直径",
+              "unit": "mm"
+            }
+          },
+          "source": "pcb-tools.cn / 通用公式"
+        }
+      ]
+    },
+    "crystal_matching": {
+      "name": "无源晶振负载电容匹配",
+      "formulas": [
+        {
+          "id": "crystal_load_cap",
+          "name": "晶振负载电容（通用式）",
+          "formula": "CL = ((C1 + Cin) × (C2 + Cout)) / (C1 + Cin + C2 + Cout) + Cstray",
+          "parameters": {
+            "CL": {
+              "symbol": "CL",
+              "name": "晶振标称负载电容",
+              "unit": "pF",
+              "desc": "参考晶振Datasheet，常见6pF/9pF/12.5pF/18pF/20pF"
+            },
+            "C1": {
+              "symbol": "C1",
+              "name": "外接匹配电容1",
+              "unit": "pF"
+            },
+            "C2": {
+              "symbol": "C2",
+              "name": "外接匹配电容2",
+              "unit": "pF"
+            },
+            "Cin": {
+              "symbol": "Cin",
+              "name": "IC OSC_IN引脚电容",
+              "unit": "pF",
+              "desc": "STM32/ESP32典型2~5pF"
+            },
+            "Cout": {
+              "symbol": "Cout",
+              "name": "IC OSC_OUT引脚电容",
+              "unit": "pF",
+              "desc": "通常与Cin相近"
+            },
+            "Cstray": {
+              "symbol": "Cstray",
+              "name": "PCB走线寄生电容",
+              "unit": "pF",
+              "desc": "良好布线2~5pF"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "crystal_load_cap_symmetric",
+          "name": "对称条件下简化公式",
+          "formula": "C1 = C2 = 2 × (CL - Cstray) - Cin",
+          "assumptions": "C1=C2 且 Cin=Cout",
+          "parameters": {
+            "C1": {
+              "symbol": "C1",
+              "name": "外接匹配电容",
+              "unit": "pF"
+            },
+            "CL": {
+              "symbol": "CL",
+              "name": "晶振标称负载电容",
+              "unit": "pF"
+            },
+            "Cstray": {
+              "symbol": "Cstray",
+              "name": "PCB走线寄生电容",
+              "unit": "pF"
+            },
+            "Cin": {
+              "symbol": "Cin",
+              "name": "IC引脚电容",
+              "unit": "pF"
+            }
+          },
+          "debugging_hints": [
+            "实测频率偏高 → CL偏小 → 调大 C1/C2",
+            "实测频率偏低 → CL偏大 → 调小 C1/C2"
+          ],
+          "source": "pcb-tools.cn"
+        }
+      ]
+    },
+    "thermal": {
+      "name": "热设计",
+      "formulas": [
+        {
+          "id": "junction_temp",
+          "name": "结温计算（热阻链模型）",
+          "formula": "Tj = TA + PD × (Rjc + Rcs + Rsa)",
+          "parameters": {
+            "Tj": {
+              "symbol": "Tj",
+              "name": "实际结温",
+              "unit": "℃"
+            },
+            "TA": {
+              "symbol": "TA",
+              "name": "环境温度",
+              "unit": "℃"
+            },
+            "PD": {
+              "symbol": "PD",
+              "name": "芯片耗散功率",
+              "unit": "W"
+            },
+            "Rjc": {
+              "symbol": "Rjc",
+              "name": "结到外壳热阻",
+              "unit": "℃/W",
+              "desc": "查Datasheet"
+            },
+            "Rcs": {
+              "symbol": "Rcs",
+              "name": "外壳到散热片热阻",
+              "unit": "℃/W",
+              "desc": "导热垫/硅脂典型0.3~1.0"
+            },
+            "Rsa": {
+              "symbol": "Rsa",
+              "name": "散热片到环境热阻",
+              "unit": "℃/W",
+              "desc": "自然对流铝翅片3~15"
+            }
+          },
+          "source": "pcb-tools.cn (热阻链模型)"
+        },
+        {
+          "id": "max_heatsink_rsa",
+          "name": "最大允许散热片热阻",
+          "formula": "Rsa_max = (Tj_max - TA) / PD - Rjc - Rcs",
+          "parameters": {
+            "Rsa_max": {
+              "symbol": "Rsa_max",
+              "name": "散热片最大允许热阻",
+              "unit": "℃/W"
+            },
+            "Tj_max": {
+              "symbol": "Tj_max",
+              "name": "最大结温限制",
+              "unit": "℃",
+              "desc": "MOSFET/IGBT 150℃，通用IC 125℃"
+            },
+            "TA": {
+              "symbol": "TA",
+              "name": "环境温度",
+              "unit": "℃"
+            },
+            "PD": {
+              "symbol": "PD",
+              "name": "耗散功率",
+              "unit": "W"
+            },
+            "Rjc": {
+              "symbol": "Rjc",
+              "name": "结到壳热阻",
+              "unit": "℃/W"
+            },
+            "Rcs": {
+              "symbol": "Rcs",
+              "name": "壳到散热片热阻",
+              "unit": "℃/W"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "ldo_power_dissipation",
+          "name": "LDO耗散功率",
+          "formula": "Pd = (Vin - Vout) × Iout + Vin × Ignd",
+          "simplified": "忽略Ignd时: Pd ≈ (Vin - Vout) × Iout",
+          "parameters": {
+            "Pd": {
+              "symbol": "Pd",
+              "name": "LDO耗散功率",
+              "unit": "W"
+            },
+            "Vin": {
+              "symbol": "Vin",
+              "name": "输入电压",
+              "unit": "V"
+            },
+            "Vout": {
+              "symbol": "Vout",
+              "name": "输出电压",
+              "unit": "V"
+            },
+            "Iout": {
+              "symbol": "Iout",
+              "name": "负载输出电流",
+              "unit": "A"
+            },
+            "Ignd": {
+              "symbol": "Ignd",
+              "name": "静态电流(接地电流)",
+              "unit": "A",
+              "desc": "通常很小，可忽略"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "ldo_junction_temp",
+          "name": "LDO结温",
+          "formula": "Tj = TA + Pd × RθJA",
+          "parameters": {
+            "Tj": {
+              "symbol": "Tj",
+              "name": "LDO结温",
+              "unit": "℃"
+            },
+            "TA": {
+              "symbol": "TA",
+              "name": "环境温度",
+              "unit": "℃",
+              "desc": "机壳内建议50~70℃"
+            },
+            "Pd": {
+              "symbol": "Pd",
+              "name": "LDO耗散功率",
+              "unit": "W"
+            },
+            "RθJA": {
+              "symbol": "RθJA",
+              "name": "结到环境热阻",
+              "unit": "℃/W"
+            }
+          },
+          "reference_RθJA": {
+            "SOT-23-5": 230,
+            "SOT-89": 100,
+            "SOT-223": 60,
+            "TO-252_DPAK": 45,
+            "SOIC-8_带散热垫": 40,
+            "DFN-6_WDFN-6": 55
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "ldo_target_thermal_resistance",
+          "name": "LDO容许最大热阻",
+          "formula": "RθJA_target = (Tj_max - TA) / Pd",
+          "parameters": {
+            "RθJA_target": {
+              "symbol": "RθJA_target",
+              "name": "容许最大热阻",
+              "unit": "℃/W"
+            },
+            "Tj_max": {
+              "symbol": "Tj_max",
+              "name": "最大结温",
+              "unit": "℃",
+              "desc": "商业级125℃，工业级/车规150℃"
+            },
+            "TA": {
+              "symbol": "TA",
+              "name": "环境温度",
+              "unit": "℃"
+            },
+            "Pd": {
+              "symbol": "Pd",
+              "name": "耗散功率",
+              "unit": "W"
+            }
+          },
+          "copper_area_rule": "双面1oz铜箔，约每50℃/W需要2.5cm²顶底面铺铜打散热过孔",
+          "source": "pcb-tools.cn"
+        }
+      ]
+    },
+    "pdn": {
+      "name": "PDN电源完整性 (目标阻抗与去耦)",
+      "formulas": [
+        {
+          "id": "pdn_ripple_voltage",
+          "name": "容许最大纹波电压",
+          "formula": "ΔVmax = Vdd × (Ripple% / 100)",
+          "parameters": {
+            "ΔVmax": {
+              "symbol": "ΔVmax",
+              "name": "容许最大纹波电压",
+              "unit": "V或mV"
+            },
+            "Vdd": {
+              "symbol": "Vdd",
+              "name": "电源轨额定电压",
+              "unit": "V",
+              "desc": "FPGA核心 0.9/1.0/1.2V，DDR 1.2/1.35V"
+            },
+            "Ripple%": {
+              "symbol": "Ripple%",
+              "name": "允许纹波百分比",
+              "unit": "%",
+              "desc": "Core通常2~3%，IO通常5%"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "pdn_target_impedance",
+          "name": "PDN目标阻抗",
+          "formula": "Z_target = ΔVmax / ΔImax",
+          "parameters": {
+            "Z_target": {
+              "symbol": "Z_target",
+              "name": "PDN目标阻抗",
+              "unit": "Ω或mΩ"
+            },
+            "ΔVmax": {
+              "symbol": "ΔVmax",
+              "name": "容许最大纹波电压",
+              "unit": "V"
+            },
+            "ΔImax": {
+              "symbol": "ΔImax",
+              "name": "最大动态阶跃电流",
+              "unit": "A",
+              "desc": "芯片从空闲到满载的最大电流跳变"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "pdn_total_capacitance",
+          "name": "去耦所需最小总电容",
+          "formula": "C_total ≈ ΔImax / (ΔVmax × 2π × f_transit)",
+          "parameters": {
+            "C_total": {
+              "symbol": "C_total",
+              "name": "最小总去耦电容",
+              "unit": "F或μF"
+            },
+            "ΔImax": {
+              "symbol": "ΔImax",
+              "name": "最大动态电流",
+              "unit": "A"
+            },
+            "ΔVmax": {
+              "symbol": "ΔVmax",
+              "name": "容许纹波电压",
+              "unit": "V"
+            },
+            "f_transit": {
+              "symbol": "f_transit",
+              "name": "最高去耦转折频率",
+              "unit": "Hz",
+              "desc": "高于此频率由电源/地平面间分布电容负责"
+            }
+          },
+          "notes": [
+            "此公式基于电容容抗 |ZC|=1/(2πfC) ≤ Z_target 推导",
+            "实际还需考虑ESR/ESL寄生参数"
+          ],
+          "source": "pcb-tools.cn"
+        }
+      ]
+    },
+    "snubber": {
+      "name": "Snubber RC吸收电路 (双频法)",
+      "formulas": [
+        {
+          "id": "snubber_parasitic_cap",
+          "name": "开关节点寄生电容（双频法）",
+          "formula": "x = (f_ring1 / f_ring2)² - 1,  Cp = C_test / x",
+          "parameters": {
+            "f_ring1": {
+              "symbol": "f_ring1",
+              "name": "未加Snubber时的原始振铃频率",
+              "unit": "MHz",
+              "desc": "示波器测SW脚波形尖峰的高频振铃"
+            },
+            "f_ring2": {
+              "symbol": "f_ring2",
+              "name": "并联C_test后的振铃频率",
+              "unit": "MHz",
+              "desc": "加测试电容后示波器测得的较低频率"
+            },
+            "C_test": {
+              "symbol": "C_test",
+              "name": "测试电容",
+              "unit": "pF或nF",
+              "desc": "并联在MOS D-S极的已知小电容，建议使频率降至原来1/2~2/3"
+            },
+            "Cp": {
+              "symbol": "Cp",
+              "name": "寄生电容",
+              "unit": "pF"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "snubber_parasitic_inductance",
+          "name": "开关回路寄生电感",
+          "formula": "Lp = 1 / ((2π × f_ring1)² × Cp)",
+          "parameters": {
+            "Lp": {
+              "symbol": "Lp",
+              "name": "寄生电感",
+              "unit": "nH"
+            },
+            "f_ring1": {
+              "symbol": "f_ring1",
+              "name": "原始振铃频率",
+              "unit": "Hz"
+            },
+            "Cp": {
+              "symbol": "Cp",
+              "name": "寄生电容",
+              "unit": "F"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "snubber_resistance",
+          "name": "推荐吸收电阻 (临界阻尼)",
+          "formula": "R_snub = √(Lp / Cp) = Z₀",
+          "parameters": {
+            "R_snub": {
+              "symbol": "R_snub",
+              "name": "推荐吸收电阻",
+              "unit": "Ω"
+            },
+            "Lp": {
+              "symbol": "Lp",
+              "name": "寄生电感",
+              "unit": "H"
+            },
+            "Cp": {
+              "symbol": "Cp",
+              "name": "寄生电容",
+              "unit": "F"
+            },
+            "Z₀": {
+              "symbol": "Z₀",
+              "name": "特征阻抗",
+              "unit": "Ω"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "snubber_capacitance",
+          "name": "推荐吸收电容",
+          "formula": "C_snub = (1~3) × Cp (通用推荐取2×Cp)",
+          "parameters": {
+            "C_snub": {
+              "symbol": "C_snub",
+              "name": "推荐吸收电容",
+              "unit": "pF"
+            },
+            "Cp": {
+              "symbol": "Cp",
+              "name": "寄生电容",
+              "unit": "pF"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "snubber_power",
+          "name": "吸收电阻功耗",
+          "formula": "PR_snub = C_snub × Vin² × fsw",
+          "parameters": {
+            "PR_snub": {
+              "symbol": "PR_snub",
+              "name": "吸收电阻功耗",
+              "unit": "W"
+            },
+            "C_snub": {
+              "symbol": "C_snub",
+              "name": "吸收电容",
+              "unit": "F"
+            },
+            "Vin": {
+              "symbol": "Vin",
+              "name": "输入电压",
+              "unit": "V"
+            },
+            "fsw": {
+              "symbol": "fsw",
+              "name": "开关频率",
+              "unit": "Hz"
+            }
+          },
+          "source": "pcb-tools.cn"
+        }
+      ]
+    },
+    "filter": {
+      "name": "LC滤波器",
+      "formulas": [
+        {
+          "id": "lc_resonant_freq",
+          "name": "LC谐振频率/截止频率",
+          "formula": "f₀ = 1 / (2π × √(L × C))",
+          "parameters": {
+            "f₀": {
+              "symbol": "f₀",
+              "name": "谐振频率（-3dB截止频率）",
+              "unit": "Hz"
+            },
+            "L": {
+              "symbol": "L",
+              "name": "电感量",
+              "unit": "H"
+            },
+            "C": {
+              "symbol": "C",
+              "name": "电容量",
+              "unit": "F"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "lc_characteristic_impedance",
+          "name": "LC特征阻抗",
+          "formula": "Z₀ = √(L / C)",
+          "parameters": {
+            "Z₀": {
+              "symbol": "Z₀",
+              "name": "特征阻抗",
+              "unit": "Ω"
+            },
+            "L": {
+              "symbol": "L",
+              "name": "电感量",
+              "unit": "H"
+            },
+            "C": {
+              "symbol": "C",
+              "name": "电容量",
+              "unit": "F"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "lc_quality_factor",
+          "name": "品质因数",
+          "formula": "Q = Z₀ / ZL  (低通)",
+          "parameters": {
+            "Q": {
+              "symbol": "Q",
+              "name": "品质因数",
+              "unit": "-"
+            },
+            "Z₀": {
+              "symbol": "Z₀",
+              "name": "特征阻抗",
+              "unit": "Ω"
+            },
+            "ZL": {
+              "symbol": "ZL",
+              "name": "负载阻抗",
+              "unit": "Ω"
+            }
+          },
+          "design_notes": [
+            "Q ≈ 0.707 → 巴特沃斯平坦响应",
+            "Q > 1 → 截止频率附近出现过冲峰(Peaking)",
+            "实际电感存在SRF，高于SRF时电感呈容性"
+          ],
+          "source": "pcb-tools.cn"
+        }
+      ]
+    },
+    "smps": {
+      "name": "开关电源效率与损耗 (Buck拓扑)",
+      "formulas": [
+        {
+          "id": "buck_duty",
+          "name": "Buck占空比",
+          "formula": "D = Vout / Vin",
+          "parameters": {
+            "D": {
+              "symbol": "D",
+              "name": "占空比",
+              "unit": "-"
+            },
+            "Vout": {
+              "symbol": "Vout",
+              "name": "输出电压",
+              "unit": "V"
+            },
+            "Vin": {
+              "symbol": "Vin",
+              "name": "输入电压",
+              "unit": "V"
+            }
+          },
+          "other_topologies": {
+            "Boost": "D = 1 - Vin/Vout",
+            "Flyback_BuckBoost": "D = Vout/(Vout + Vin)"
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "mosfet_conduction_loss",
+          "name": "MOSFET导通损耗",
+          "formula": "P_cond = Iout² × RDS(on) × D",
+          "parameters": {
+            "P_cond": {
+              "symbol": "P_cond",
+              "name": "MOSFET导通损耗",
+              "unit": "W"
+            },
+            "Iout": {
+              "symbol": "Iout",
+              "name": "输出电流",
+              "unit": "A"
+            },
+            "RDS(on)": {
+              "symbol": "RDS(on)",
+              "name": "MOSFET导通电阻",
+              "unit": "Ω"
+            },
+            "D": {
+              "symbol": "D",
+              "name": "占空比",
+              "unit": "-"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "mosfet_switching_loss",
+          "name": "MOSFET开关损耗",
+          "formula": "P_sw ≈ Qg × Vg × fsw",
+          "parameters": {
+            "P_sw": {
+              "symbol": "P_sw",
+              "name": "MOSFET开关损耗",
+              "unit": "W"
+            },
+            "Qg": {
+              "symbol": "Qg",
+              "name": "MOSFET总栅极电荷",
+              "unit": "C（输入nC需×10⁻⁹）"
+            },
+            "Vg": {
+              "symbol": "Vg",
+              "name": "栅极驱动电压",
+              "unit": "V"
+            },
+            "fsw": {
+              "symbol": "fsw",
+              "name": "开关频率",
+              "unit": "Hz（输入kHz需×1000）"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "diode_conduction_loss",
+          "name": "续流二极管损耗",
+          "formula": "P_D = Iout × VD × (1 - D)",
+          "parameters": {
+            "P_D": {
+              "symbol": "P_D",
+              "name": "二极管损耗",
+              "unit": "W"
+            },
+            "Iout": {
+              "symbol": "Iout",
+              "name": "输出电流",
+              "unit": "A"
+            },
+            "VD": {
+              "symbol": "VD",
+              "name": "二极管正向压降",
+              "unit": "V",
+              "desc": "肖特基0.3~0.6V，同步整流=0"
+            },
+            "D": {
+              "symbol": "D",
+              "name": "占空比",
+              "unit": "-"
+            }
+          },
+          "source": "推导公式"
+        },
+        {
+          "id": "inductor_dcr_loss",
+          "name": "电感铜损",
+          "formula": "P_DCR = Iout² × DCR",
+          "parameters": {
+            "P_DCR": {
+              "symbol": "P_DCR",
+              "name": "电感铜损",
+              "unit": "W"
+            },
+            "Iout": {
+              "symbol": "Iout",
+              "name": "输出电流",
+              "unit": "A"
+            },
+            "DCR": {
+              "symbol": "DCR",
+              "name": "电感直流电阻",
+              "unit": "Ω"
+            }
+          },
+          "source": "推导公式"
+        },
+        {
+          "id": "smps_efficiency",
+          "name": "开关电源转换效率",
+          "formula": "η = Pout / (Pout + P_loss) = Pout / Pin",
+          "parameters": {
+            "η": {
+              "symbol": "η",
+              "name": "转换效率",
+              "unit": "%或0~1"
+            },
+            "Pout": {
+              "symbol": "Pout",
+              "name": "输出功率",
+              "unit": "W",
+              "desc": "Pout = Vout × Iout"
+            },
+            "P_loss": {
+              "symbol": "P_loss",
+              "name": "总损耗",
+              "unit": "W",
+              "desc": "P_loss = P_cond + P_sw + P_D + P_DCR"
+            }
+          },
+          "source": "pcb-tools.cn"
+        }
+      ]
+    },
+    "opamp": {
+      "name": "运算放大器",
+      "formulas": [
+        {
+          "id": "opamp_non_inverting_gain",
+          "name": "同相放大增益",
+          "formula": "Av = 1 + Rf / R1",
+          "parameters": {
+            "Av": {
+              "symbol": "Av",
+              "name": "闭环电压增益",
+              "unit": "V/V"
+            },
+            "Rf": {
+              "symbol": "Rf",
+              "name": "反馈电阻",
+              "unit": "Ω"
+            },
+            "R1": {
+              "symbol": "R1",
+              "name": "接地电阻（反馈网络底端）",
+              "unit": "Ω"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "opamp_inverting_gain",
+          "name": "反相放大增益",
+          "formula": "Av = -Rf / R1",
+          "parameters": {
+            "Av": {
+              "symbol": "Av",
+              "name": "闭环电压增益",
+              "unit": "V/V",
+              "desc": "负号表示180°相位反转"
+            },
+            "Rf": {
+              "symbol": "Rf",
+              "name": "反馈电阻",
+              "unit": "Ω"
+            },
+            "R1": {
+              "symbol": "R1",
+              "name": "输入电阻",
+              "unit": "Ω"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "opamp_bandwidth",
+          "name": "闭环-3dB带宽",
+          "formula": "BW = GBW / Noise_Gain",
+          "parameters": {
+            "BW": {
+              "symbol": "BW",
+              "name": "闭环-3dB带宽",
+              "unit": "Hz"
+            },
+            "GBW": {
+              "symbol": "GBW",
+              "name": "增益带宽积",
+              "unit": "Hz",
+              "desc": "LM358=1MHz, TL072=3MHz, OPA2134=8MHz, LT1028=75MHz"
+            },
+            "Noise_Gain": {
+              "symbol": "Noise_Gain",
+              "name": "噪声增益",
+              "unit": "V/V",
+              "desc": "= 1 + Rf/R1，对同相和反相均适用"
+            }
+          },
+          "notes": [
+            "噪声增益决定闭环带宽，而非信号增益",
+            "反相放大器信号增益为-Rf/R1，噪声增益仍为1+Rf/R1"
+          ],
+          "source": "pcb-tools.cn"
+        }
+      ]
+    },
+    "adc": {
+      "name": "ADC分辨率与精度",
+      "formulas": [
+        {
+          "id": "adc_lsb",
+          "name": "ADC 1 LSB电压分辨率",
+          "formula": "1_LSB = Vref / 2^N",
+          "parameters": {
+            "1_LSB": {
+              "symbol": "1_LSB",
+              "name": "最小分辨率电压",
+              "unit": "V"
+            },
+            "Vref": {
+              "symbol": "Vref",
+              "name": "参考电压",
+              "unit": "V"
+            },
+            "N": {
+              "symbol": "N",
+              "name": "ADC位数",
+              "unit": "bit"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "adc_snr_theoretical",
+          "name": "理论SNR（理想量化噪声）",
+          "formula": "SNR_theory = 6.02 × N + 1.76",
+          "parameters": {
+            "SNR_theory": {
+              "symbol": "SNR_theory",
+              "name": "理论信噪比",
+              "unit": "dB"
+            },
+            "N": {
+              "symbol": "N",
+              "name": "ADC位数",
+              "unit": "bit"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "adc_dynamic_range",
+          "name": "动态范围",
+          "formula": "DR = 20 × log10(2^N)",
+          "parameters": {
+            "DR": {
+              "symbol": "DR",
+              "name": "动态范围",
+              "unit": "dB"
+            },
+            "N": {
+              "symbol": "N",
+              "name": "ADC位数",
+              "unit": "bit"
+            }
+          },
+          "source": "pcb-tools.cn"
+        }
+      ]
+    },
+    "rs485": {
+      "name": "RS-485总线设计",
+      "formulas": [
+        {
+          "id": "rs485_terminal_resistor",
+          "name": "终端匹配电阻",
+          "formula": "RT = Z₀",
+          "parameters": {
+            "RT": {
+              "symbol": "RT",
+              "name": "终端匹配电阻",
+              "unit": "Ω",
+              "desc": "仅在总线两端各接一个"
+            },
+            "Z₀": {
+              "symbol": "Z₀",
+              "name": "电缆特征阻抗",
+              "unit": "Ω",
+              "desc": "标准双绞线STP=120Ω, CAT5=100Ω, UTP=150Ω"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "rs485_distance_limit",
+          "name": "传输距离与波特率经验关系",
+          "formula": "BaudRate × Distance ≤ 10^8 bps·m",
+          "parameters": {
+            "BaudRate": {
+              "symbol": "BaudRate",
+              "name": "通信波特率",
+              "unit": "bps"
+            },
+            "Distance": {
+              "symbol": "Distance",
+              "name": "最大传输距离",
+              "unit": "m"
+            }
+          },
+          "example": {
+            "9600bps": "约10.4km",
+            "115200bps": "约868m",
+            "1Mbps": "约100m",
+            "10Mbps": "约10m"
+          },
+          "source": "pcb-tools.cn"
+        }
+      ]
+    },
+    "led": {
+      "name": "LED限流电阻",
+      "formulas": [
+        {
+          "id": "led_resistor",
+          "name": "LED限流电阻计算",
+          "formula": "R = (Vcc - N × Vf) / If",
+          "parameters": {
+            "R": {
+              "symbol": "R",
+              "name": "限流电阻",
+              "unit": "Ω"
+            },
+            "Vcc": {
+              "symbol": "Vcc",
+              "name": "供电电压",
+              "unit": "V"
+            },
+            "N": {
+              "symbol": "N",
+              "name": "串联LED数量",
+              "unit": "颗",
+              "desc": "N×Vf必须严格小于Vcc"
+            },
+            "Vf": {
+              "symbol": "Vf",
+              "name": "单颗LED正向压降",
+              "unit": "V"
+            },
+            "If": {
+              "symbol": "If",
+              "name": "目标工作电流",
+              "unit": "A"
+            }
+          },
+          "reference_Vf": {
+            "红光": "1.8~2.2V",
+            "黄光/橙光": "2.0~2.3V",
+            "绿光(普通)": "2.2V",
+            "蓝光/白光/翠绿": "3.0~3.4V",
+            "紫外UV": "3.4~3.8V"
+          },
+          "warning": "严禁LED直接并联！各LED Vf存在差异，会导致电流分配不均而烧毁",
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "led_resistor_power",
+          "name": "限流电阻功耗",
+          "formula": "PR = If² × R",
+          "parameters": {
+            "PR": {
+              "symbol": "PR",
+              "name": "电阻功耗",
+              "unit": "W"
+            },
+            "If": {
+              "symbol": "If",
+              "name": "工作电流",
+              "unit": "A"
+            },
+            "R": {
+              "symbol": "R",
+              "name": "限流电阻",
+              "unit": "Ω"
+            }
+          },
+          "rule": "电阻额定功率 ≥ 2 × PR（预留一倍散热余量）",
+          "source": "pcb-tools.cn"
+        }
+      ]
+    },
+    "voltage_divider": {
+      "name": "电阻分压",
+      "formulas": [
+        {
+          "id": "voltage_divider_general",
+          "name": "通用电阻分压（双电压源）",
+          "formula": "VR = ((V1 - V2) × R2) / (R1 + R2) + V2",
+          "parameters": {
+            "VR": {
+              "symbol": "VR",
+              "name": "分压节点电压",
+              "unit": "V"
+            },
+            "V1": {
+              "symbol": "V1",
+              "name": "输入电压1",
+              "unit": "V"
+            },
+            "V2": {
+              "symbol": "V2",
+              "name": "输入电压2",
+              "unit": "V",
+              "desc": "接地时V2=0"
+            },
+            "R1": {
+              "symbol": "R1",
+              "name": "电阻1 (V1到VR)",
+              "unit": "Ω"
+            },
+            "R2": {
+              "symbol": "R2",
+              "name": "电阻2 (VR到V2)",
+              "unit": "Ω"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "voltage_divider_grounded",
+          "name": "接地分压器（V2=0特例）",
+          "formula": "VR = V1 × R2 / (R1 + R2)",
+          "parameters": {
+            "VR": {
+              "symbol": "VR",
+              "name": "分压节点电压",
+              "unit": "V"
+            },
+            "V1": {
+              "symbol": "V1",
+              "name": "输入电压",
+              "unit": "V"
+            },
+            "R1": {
+              "symbol": "R1",
+              "name": "上端电阻",
+              "unit": "Ω"
+            },
+            "R2": {
+              "symbol": "R2",
+              "name": "下端电阻（到地）",
+              "unit": "Ω"
+            }
+          },
+          "source": "标准分压公式"
+        },
+        {
+          "id": "voltage_divider_current",
+          "name": "分压电路电流",
+          "formula": "I = (V1 - V2) / (R1 + R2)",
+          "parameters": {
+            "I": {
+              "symbol": "I",
+              "name": "回路电流",
+              "unit": "A"
+            },
+            "V1": {
+              "symbol": "V1",
+              "name": "电压源1",
+              "unit": "V"
+            },
+            "V2": {
+              "symbol": "V2",
+              "name": "电压源2",
+              "unit": "V"
+            },
+            "R1": {
+              "symbol": "R1",
+              "name": "电阻1",
+              "unit": "Ω"
+            },
+            "R2": {
+              "symbol": "R2",
+              "name": "电阻2",
+              "unit": "Ω"
+            }
+          },
+          "source": "欧姆定律"
+        },
+        {
+          "id": "voltage_divider_power",
+          "name": "分压电阻功耗",
+          "formula": "P1 = I² × R1,  P2 = I² × R2",
+          "parameters": {
+            "P1": {
+              "symbol": "P1",
+              "name": "R1功耗",
+              "unit": "W"
+            },
+            "P2": {
+              "symbol": "P2",
+              "name": "R2功耗",
+              "unit": "W"
+            },
+            "I": {
+              "symbol": "I",
+              "name": "回路电流",
+              "unit": "A"
+            },
+            "R1": {
+              "symbol": "R1",
+              "name": "电阻1",
+              "unit": "Ω"
+            },
+            "R2": {
+              "symbol": "R2",
+              "name": "电阻2",
+              "unit": "Ω"
+            }
+          },
+          "note": "接负载后VR会偏移，建议电阻额定功率≥2倍计算值",
+          "source": "pcb-tools.cn"
+        }
+      ]
+    },
+    "copper_busbar": {
+      "name": "铜排载流与热平衡",
+      "formulas": [
+        {
+          "id": "copper_busbar_current",
+          "name": "铜排载流量（牛顿散热公式）",
+          "formula": "I = √(Kt × 2 × (W + H) × W × H × τ / ρ)",
+          "parameters": {
+            "I": {
+              "symbol": "I",
+              "name": "载流量",
+              "unit": "A"
+            },
+            "Kt": {
+              "symbol": "Kt",
+              "name": "散热系数",
+              "unit": "W/(m²·K)",
+              "desc": "侧立=6.9, 平放=4.7"
+            },
+            "W": {
+              "symbol": "W",
+              "name": "铜排宽度",
+              "unit": "m"
+            },
+            "H": {
+              "symbol": "H",
+              "name": "铜排厚度",
+              "unit": "m"
+            },
+            "τ": {
+              "symbol": "τ(ΔT)",
+              "name": "允许温升",
+              "unit": "℃",
+              "desc": "镀锡铜排建议65℃"
+            },
+            "ρ": {
+              "symbol": "ρ",
+              "name": "铜电阻率",
+              "unit": "Ω·m",
+              "desc": "铜1.72×10⁻⁸ (20℃)"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "copper_busbar_experience",
+          "name": "铜排载流经验公式",
+          "formula": "I ≈ W × (H + 8.5)",
+          "parameters": {
+            "I": {
+              "symbol": "I",
+              "name": "载流量",
+              "unit": "A"
+            },
+            "W": {
+              "symbol": "W",
+              "name": "铜排宽度",
+              "unit": "mm"
+            },
+            "H": {
+              "symbol": "H",
+              "name": "铜排厚度",
+              "unit": "mm"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "copper_busbar_current_density",
+          "name": "电流密度法",
+          "formula": "I = W × H × J",
+          "parameters": {
+            "I": {
+              "symbol": "I",
+              "name": "载流量",
+              "unit": "A"
+            },
+            "W": {
+              "symbol": "W",
+              "name": "铜排宽度",
+              "unit": "mm"
+            },
+            "H": {
+              "symbol": "H",
+              "name": "铜排厚度",
+              "unit": "mm"
+            },
+            "J": {
+              "symbol": "J",
+              "name": "电流密度",
+              "unit": "A/mm²",
+              "desc": "常用5~8 A/mm²，严苛取4"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "copper_resistance",
+          "name": "铜排电阻",
+          "formula": "R = ρ × L / (W × H)",
+          "parameters": {
+            "R": {
+              "symbol": "R",
+              "name": "铜排电阻",
+              "unit": "Ω"
+            },
+            "ρ": {
+              "symbol": "ρ",
+              "name": "铜电阻率",
+              "unit": "Ω·m"
+            },
+            "L": {
+              "symbol": "L",
+              "name": "铜排长度",
+              "unit": "m"
+            },
+            "W": {
+              "symbol": "W",
+              "name": "铜排宽度",
+              "unit": "m"
+            },
+            "H": {
+              "symbol": "H",
+              "name": "铜排厚度",
+              "unit": "m"
+            }
+          },
+          "source": "通用公式"
+        },
+        {
+          "id": "copper_temperature_correction",
+          "name": "电阻率温度修正",
+          "formula": "ρ(T) = ρ₀ × (1 + α × (T - T₀))",
+          "parameters": {
+            "ρ(T)": {
+              "symbol": "ρ(T)",
+              "name": "温度T下的电阻率",
+              "unit": "Ω·m"
+            },
+            "ρ₀": {
+              "symbol": "ρ₀",
+              "name": "参考温度电阻率",
+              "unit": "Ω·m",
+              "desc": "铜1.72×10⁻⁸@20℃"
+            },
+            "α": {
+              "symbol": "α",
+              "name": "温度系数",
+              "unit": "/℃",
+              "desc": "铜=0.00393, 黄铜=0.002, 铝=0.00429"
+            },
+            "T": {
+              "symbol": "T",
+              "name": "工作温度",
+              "unit": "℃"
+            },
+            "T₀": {
+              "symbol": "T₀",
+              "name": "参考温度",
+              "unit": "℃",
+              "desc": "通常20℃"
+            }
+          },
+          "source": "通用公式"
+        }
+      ],
+      "material_properties": {
+        "copper": {
+          "resistivity_20C": "1.72×10⁻⁸ Ω·m",
+          "temp_coeff": "0.00393 /℃",
+          "conductivity": "101% IACS"
+        },
+        "brass": {
+          "resistivity_20C": "6.2×10⁻⁸ Ω·m",
+          "temp_coeff": "0.002 /℃",
+          "conductivity": "28% IACS"
+        },
+        "aluminum": {
+          "resistivity_20C": "2.82×10⁻⁸ Ω·m",
+          "temp_coeff": "0.00429 /℃",
+          "conductivity": "61% IACS"
+        }
+      }
+    },
+    "iot_battery": {
+      "name": "IoT设备电池寿命",
+      "formulas": [
+        {
+          "id": "iot_average_current",
+          "name": "平均工作电流",
+          "formula": "Iavg = (Σ(Ii × ti) + Isleep × tsleep) / Tcycle",
+          "parameters": {
+            "Iavg": {
+              "symbol": "Iavg",
+              "name": "平均电流",
+              "unit": "μA或mA"
+            },
+            "Ii": {
+              "symbol": "Ii",
+              "name": "各活跃状态电流",
+              "unit": "mA或μA",
+              "desc": "ITX发射/IRX接收/IMCU处理"
+            },
+            "ti": {
+              "symbol": "ti",
+              "name": "各活跃状态时长",
+              "unit": "ms或s"
+            },
+            "Isleep": {
+              "symbol": "Isleep",
+              "name": "睡眠电流",
+              "unit": "μA"
+            },
+            "tsleep": {
+              "symbol": "tsleep",
+              "name": "睡眠时间",
+              "unit": "s"
+            },
+            "Tcycle": {
+              "symbol": "Tcycle",
+              "name": "工作周期",
+              "unit": "s"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "iot_battery_life",
+          "name": "电池理论寿命",
+          "formula": "Life = Cbat / Iavg (小时) / 24 (天)",
+          "parameters": {
+            "Life": {
+              "symbol": "Life",
+              "name": "电池理论寿命",
+              "unit": "天"
+            },
+            "Cbat": {
+              "symbol": "Cbat",
+              "name": "电池容量",
+              "unit": "mAh",
+              "desc": "ER14505约2400mAh, 18650约2500~3400mAh"
+            },
+            "Iavg": {
+              "symbol": "Iavg",
+              "name": "平均电流",
+              "unit": "mA"
+            }
+          },
+          "protocol_presets": {
+            "LoRaWAN_SF12": {
+              "ITX": "5mA",
+              "interval": "每15min一包"
+            },
+            "NB-IoT": {
+              "ITX": "200mA",
+              "interval": "每1h一包"
+            },
+            "BLE": {
+              "ITX": "12mA",
+              "interval": "每1s广播"
+            },
+            "Zigbee": {
+              "ITX": "32mA",
+              "interval": "每30s一包"
+            }
+          },
+          "source": "pcb-tools.cn"
+        }
+      ]
+    },
+    "smd_pad": {
+      "name": "SMD贴片焊盘 (IPC-7351)",
+      "formulas": [
+        {
+          "id": "smd_pad_width",
+          "name": "焊盘宽度（Nominal等级）",
+          "formula": "wpad = W + 2 × JS",
+          "parameters": {
+            "wpad": {
+              "symbol": "wpad",
+              "name": "焊盘宽度",
+              "unit": "mm"
+            },
+            "W": {
+              "symbol": "W",
+              "name": "封装体宽度",
+              "unit": "mm"
+            },
+            "JS": {
+              "symbol": "JS",
+              "name": "侧面延伸量",
+              "unit": "mm",
+              "desc": "Nominal=0.03mm"
+            }
+          },
+          "source": "IPC-7351 / pcb-tools.cn"
+        },
+        {
+          "id": "smd_pad_length",
+          "name": "焊盘长度（Nominal等级）",
+          "formula": "lpad = T + JT + JH",
+          "parameters": {
+            "lpad": {
+              "symbol": "lpad",
+              "name": "焊盘长度",
+              "unit": "mm"
+            },
+            "T": {
+              "symbol": "T",
+              "name": "引脚/焊端长度",
+              "unit": "mm"
+            },
+            "JT": {
+              "symbol": "JT",
+              "name": "焊趾延伸量",
+              "unit": "mm",
+              "desc": "Nominal=0.35mm"
+            },
+            "JH": {
+              "symbol": "JH",
+              "name": "焊跟延伸量",
+              "unit": "mm",
+              "desc": "Nominal=0.35mm"
+            }
+          },
+          "source": "IPC-7351 / pcb-tools.cn"
+        }
+      ],
+      "density_levels": {
+        "Most": "最大焊盘，适用手工焊接/维修",
+        "Nominal": "标准焊盘，适用常规批量生产",
+        "Least": "最小焊盘，适用高密度组装"
+      },
+      "common_package_sizes": [
+        {
+          "name": "0402",
+          "metric": "1005M",
+          "L_mm": 1,
+          "W_mm": 0.5
+        },
+        {
+          "name": "0603",
+          "metric": "1608M",
+          "L_mm": 1.6,
+          "W_mm": 0.8
+        },
+        {
+          "name": "0805",
+          "metric": "2012M",
+          "L_mm": 2,
+          "W_mm": 1.25
+        },
+        {
+          "name": "1206",
+          "metric": "3216M",
+          "L_mm": 3.2,
+          "W_mm": 1.6
+        },
+        {
+          "name": "1210",
+          "metric": "3225M",
+          "L_mm": 3.2,
+          "W_mm": 2.5
+        },
+        {
+          "name": "2512",
+          "metric": "6332M",
+          "L_mm": 6.3,
+          "W_mm": 3.2
+        },
+        {
+          "name": "SOT-23",
+          "metric": "-",
+          "L_mm": 2.9,
+          "W_mm": 1.3
+        },
+        {
+          "name": "SOT-23-5",
+          "metric": "-",
+          "L_mm": 2.9,
+          "W_mm": 1.6
+        }
+      ]
+    },
+    "three_phase_power": {
+      "name": "三相电功率",
+      "formulas": [
+        {
+          "id": "three_phase_active_power",
+          "name": "三相有功功率",
+          "formula": "P = √3 × UL × IL × cosφ",
+          "parameters": {
+            "P": {
+              "symbol": "P",
+              "name": "有功功率",
+              "unit": "W或kW"
+            },
+            "UL": {
+              "symbol": "UL",
+              "name": "线电压",
+              "unit": "V",
+              "desc": "工业常用380V"
+            },
+            "IL": {
+              "symbol": "IL",
+              "name": "线电流",
+              "unit": "A"
+            },
+            "cosφ": {
+              "symbol": "cosφ",
+              "name": "功率因数",
+              "unit": "-",
+              "desc": "电机0.80~0.90，阻性=1.0"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "three_phase_reactive_power",
+          "name": "三相无功功率",
+          "formula": "Q = √3 × UL × IL × sinφ",
+          "parameters": {
+            "Q": {
+              "symbol": "Q",
+              "name": "无功功率",
+              "unit": "var或kvar"
+            },
+            "UL": {
+              "symbol": "UL",
+              "name": "线电压",
+              "unit": "V"
+            },
+            "IL": {
+              "symbol": "IL",
+              "name": "线电流",
+              "unit": "A"
+            },
+            "sinφ": {
+              "symbol": "sinφ",
+              "name": "无功因数",
+              "unit": "-"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "three_phase_apparent_power",
+          "name": "三相视在功率",
+          "formula": "S = √3 × UL × IL",
+          "parameters": {
+            "S": {
+              "symbol": "S",
+              "name": "视在功率",
+              "unit": "VA或kVA"
+            },
+            "UL": {
+              "symbol": "UL",
+              "name": "线电压",
+              "unit": "V"
+            },
+            "IL": {
+              "symbol": "IL",
+              "name": "线电流",
+              "unit": "A"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "three_phase_power_factor",
+          "name": "功率因数",
+          "formula": "cosφ = P / S",
+          "parameters": {
+            "cosφ": {
+              "symbol": "cosφ",
+              "name": "功率因数",
+              "unit": "-"
+            },
+            "P": {
+              "symbol": "P",
+              "name": "有功功率",
+              "unit": "W"
+            },
+            "S": {
+              "symbol": "S",
+              "name": "视在功率",
+              "unit": "VA"
+            }
+          },
+          "source": "定义式"
+        },
+        {
+          "id": "three_phase_Y_delta_conversion",
+          "name": "星形/三角形接法换算",
+          "formulas": {
+            "star_Y": {
+              "phase_voltage": "Uφ = UL / √3",
+              "phase_current": "Iφ = IL"
+            },
+            "delta": {
+              "phase_voltage": "Uφ = UL",
+              "phase_current": "Iφ = IL / √3"
+            }
+          },
+          "source": "pcb-tools.cn"
+        }
+      ]
+    },
+    "induction_heating": {
+      "name": "感应加热功率",
+      "formulas": [
+        {
+          "id": "induction_heat_energy",
+          "name": "加热所需热量",
+          "formula": "Q = m × cp × ΔT",
+          "parameters": {
+            "Q": {
+              "symbol": "Q",
+              "name": "所需热量",
+              "unit": "kJ"
+            },
+            "m": {
+              "symbol": "m",
+              "name": "工件质量",
+              "unit": "kg"
+            },
+            "cp": {
+              "symbol": "cp",
+              "name": "比热容",
+              "unit": "kJ/(kg·K)",
+              "desc": "碳钢0.49, 铜0.385, 铝0.900, 不锈钢0.50"
+            },
+            "ΔT": {
+              "symbol": "ΔT",
+              "name": "目标温升",
+              "unit": "℃或K"
+            }
+          },
+          "source": "pcb-tools.cn"
+        },
+        {
+          "id": "induction_heating_power",
+          "name": "加热功率",
+          "formula": "P_theory = Q / t,  P_real = P_theory / η",
+          "parameters": {
+            "P_theory": {
+              "symbol": "P_theory",
+              "name": "理论功率",
+              "unit": "kW"
+            },
+            "P_real": {
+              "symbol": "P_real",
+              "name": "实际功率（含效率）",
+              "unit": "kW"
+            },
+            "Q": {
+              "symbol": "Q",
+              "name": "所需热量",
+              "unit": "kJ"
+            },
+            "t": {
+              "symbol": "t",
+              "name": "目标加热时间",
+              "unit": "s"
+            },
+            "η": {
+              "symbol": "η",
+              "name": "感应加热总效率",
+              "unit": "%",
+              "desc": "含逆变器+线圈，60~85%"
+            }
+          },
+          "source": "pcb-tools.cn"
+        }
+      ]
+    },
+    "timer_555": {
+      "name": "555定时器电路计算",
+      "source": "pcb-tools.cn/timer555_calculator.php",
+      "formulas": [
+        {
+          "id": "555_astable_frequency",
+          "name": "非稳态振荡频率",
+          "formula": "f = 1.44 / ((R1 + 2*R2) * C)",
+          "parameters": {
+            "f": {
+              "symbol": "f",
+              "name": "振荡频率",
+              "unit": "Hz"
+            },
+            "R1": {
+              "symbol": "R1",
+              "name": "充电电阻",
+              "unit": "Ω"
+            },
+            "R2": {
+              "symbol": "R2",
+              "name": "放电电阻",
+              "unit": "Ω"
+            },
+            "C": {
+              "symbol": "C",
+              "name": "定时电容",
+              "unit": "F"
+            }
+          },
+          "notes": [
+            "常数1.44 ≈ 1/ln(2) ≈ 1.443",
+            "占空比 = (R1+R2)/(R1+2R2) 始终 >50%"
+          ]
+        },
+        {
+          "id": "555_astable_th",
+          "name": "非稳态高电平时间",
+          "formula": "tH = 0.693 * (R1 + R2) * C",
+          "parameters": {
+            "tH": {
+              "symbol": "tH",
+              "name": "高电平持续时间",
+              "unit": "s"
+            },
+            "R1": {
+              "symbol": "R1",
+              "name": "充电电阻",
+              "unit": "Ω"
+            },
+            "R2": {
+              "symbol": "R2",
+              "name": "放电电阻",
+              "unit": "Ω"
+            },
+            "C": {
+              "symbol": "C",
+              "name": "定时电容",
+              "unit": "F"
+            }
+          },
+          "notes": [
+            "0.693 = ln(2)"
+          ]
+        },
+        {
+          "id": "555_astable_tl",
+          "name": "非稳态低电平时间",
+          "formula": "tL = 0.693 * R2 * C",
+          "parameters": {
+            "tL": {
+              "symbol": "tL",
+              "name": "低电平持续时间",
+              "unit": "s"
+            },
+            "R2": {
+              "symbol": "R2",
+              "name": "放电电阻",
+              "unit": "Ω"
+            },
+            "C": {
+              "symbol": "C",
+              "name": "定时电容",
+              "unit": "F"
+            }
+          }
+        },
+        {
+          "id": "555_astable_duty",
+          "name": "非稳态占空比",
+          "formula": "D = (R1 + R2) / (R1 + 2*R2)",
+          "parameters": {
+            "D": {
+              "symbol": "D",
+              "name": "占空比",
+              "unit": "-",
+              "desc": "0~1 或百分比"
+            },
+            "R1": {
+              "symbol": "R1",
+              "unit": "Ω"
+            },
+            "R2": {
+              "symbol": "R2",
+              "unit": "Ω"
+            }
+          },
+          "notes": [
+            "非稳态模式下占空比永远>50%，要<50%需要在R2上并联二极管"
+          ]
+        },
+        {
+          "id": "555_monostable_pulse",
+          "name": "单稳态定时宽度",
+          "formula": "t = 1.1 * R * C",
+          "parameters": {
+            "t": {
+              "symbol": "t",
+              "name": "触发后输出高电平时间",
+              "unit": "s"
+            },
+            "R": {
+              "symbol": "R",
+              "name": "定时电阻",
+              "unit": "Ω"
+            },
+            "C": {
+              "symbol": "C",
+              "name": "定时电容",
+              "unit": "F"
+            }
+          },
+          "notes": [
+            "1.1 ≈ ln(3) = 1.0986",
+            "电容从0V充电至2/3Vcc"
+          ]
+        }
+      ]
+    },
+    "rc_circuit": {
+      "name": "RC电路计算（截止频率/时间常数/瞬态）",
+      "source": "pcb-tools.cn/rc_circuit_calculator.php",
+      "formulas": [
+        {
+          "id": "rc_time_constant",
+          "name": "RC时间常数",
+          "formula": "τ = R * C",
+          "parameters": {
+            "τ": {
+              "symbol": "τ",
+              "name": "时间常数",
+              "unit": "s"
+            },
+            "R": {
+              "symbol": "R",
+              "name": "电阻",
+              "unit": "Ω"
+            },
+            "C": {
+              "symbol": "C",
+              "name": "电容",
+              "unit": "F"
+            }
+          },
+          "notes": [
+            "τ时刻电容电压变化约63.2%"
+          ]
+        },
+        {
+          "id": "rc_cutoff_frequency",
+          "name": "RC截止频率(-3dB)",
+          "formula": "fc = 1 / (2π * R * C)",
+          "parameters": {
+            "fc": {
+              "symbol": "fc",
+              "name": "截止频率",
+              "unit": "Hz"
+            },
+            "R": {
+              "symbol": "R",
+              "unit": "Ω"
+            },
+            "C": {
+              "symbol": "C",
+              "unit": "F"
+            }
+          }
+        },
+        {
+          "id": "rc_transient_voltage",
+          "name": "RC充/放电瞬时电压",
+          "formula": "V(t) = Vi + (V0 - Vi) * exp(-t/τ)",
+          "parameters": {
+            "V(t)": {
+              "symbol": "V(t)",
+              "name": "t时刻电压",
+              "unit": "V"
+            },
+            "V0": {
+              "symbol": "V0",
+              "name": "初始电压",
+              "unit": "V"
+            },
+            "Vi": {
+              "symbol": "Vi",
+              "name": "最终趋向电压",
+              "unit": "V"
+            },
+            "t": {
+              "symbol": "t",
+              "name": "时间",
+              "unit": "s"
+            },
+            "τ": {
+              "symbol": "τ",
+              "name": "时间常数 = R*C",
+              "unit": "s"
+            }
+          }
+        }
+      ]
+    },
+    "lm317_regulator": {
+      "name": "LM317/LM1117可调稳压器计算",
+      "source": "pcb-tools.cn/lm317_calculator.php",
+      "formulas": [
+        {
+          "id": "lm317_vout",
+          "name": "LM317输出电压(精确)",
+          "formula": "Vout = Vref * (1 + R2/R1) + Iadj * R2",
+          "parameters": {
+            "Vout": {
+              "symbol": "Vout",
+              "name": "输出电压",
+              "unit": "V"
+            },
+            "Vref": {
+              "symbol": "Vref",
+              "name": "内部基准电压",
+              "unit": "V",
+              "desc": "LM317=1.25V"
+            },
+            "R1": {
+              "symbol": "R1",
+              "name": "ADJ端到地电阻",
+              "unit": "Ω",
+              "desc": "推荐240Ω"
+            },
+            "R2": {
+              "symbol": "R2",
+              "name": "输出到ADJ端电阻",
+              "unit": "Ω"
+            },
+            "Iadj": {
+              "symbol": "Iadj",
+              "name": "调整端电流",
+              "unit": "A",
+              "desc": "LM317≈50~100μA, 通常可忽略"
+            }
+          },
+          "notes": [
+            "简化公式: Vout ≈ 1.25*(1+R2/R1)",
+            "R1推荐240Ω保证最小负载电流",
+            "输入输出压差≥2~3V",
+            "典型: 3.3V→R2≈393Ω, 5V→R2≈720Ω, 12V→R2≈2064Ω (R1=240Ω)"
+          ]
+        }
+      ]
+    },
+    "parallel_resistance": {
+      "name": "并联电阻计算",
+      "source": "pcb-tools.cn/parallel_resistance_calculator.php",
+      "formulas": [
+        {
+          "id": "parallel_resistance_n",
+          "name": "多电阻并联等效值",
+          "formula": "1/Req = 1/R1 + 1/R2 + ... + 1/Rn",
+          "parameters": {
+            "Req": {
+              "symbol": "Req",
+              "name": "并联等效电阻",
+              "unit": "Ω"
+            },
+            "R1,R2,...Rn": {
+              "symbol": "R1~Rn",
+              "name": "各支路电阻",
+              "unit": "Ω"
+            }
+          },
+          "notes": [
+            "Req始终小于最小分支电阻",
+            "两个相同R并联 → Req=R/2"
+          ]
+        },
+        {
+          "id": "parallel_resistance_2",
+          "name": "两电阻并联简化",
+          "formula": "Req = (R1 * R2) / (R1 + R2)",
+          "parameters": {
+            "Req": {
+              "symbol": "Req",
+              "name": "等效电阻",
+              "unit": "Ω"
+            },
+            "R1": {
+              "symbol": "R1",
+              "unit": "Ω"
+            },
+            "R2": {
+              "symbol": "R2",
+              "unit": "Ω"
+            }
+          }
+        },
+        {
+          "id": "parallel_current_division",
+          "name": "并联支路电流分配",
+          "formula": "In = V / Rn",
+          "parameters": {
+            "In": {
+              "symbol": "In",
+              "name": "第n条支路电流",
+              "unit": "A"
+            },
+            "V": {
+              "symbol": "V",
+              "name": "并联总电压",
+              "unit": "V"
+            },
+            "Rn": {
+              "symbol": "Rn",
+              "name": "第n条支路电阻",
+              "unit": "Ω"
+            }
+          },
+          "notes": [
+            "各支路电压相同，电流与阻值成反比",
+            "总电流 Itotal = I1+I2+...+In"
+          ]
+        }
+      ]
+    },
+    "transistor_bias": {
+      "name": "三极管(BJT)静态工作点计算",
+      "source": "pcb-tools.cn/transistor_bias_calculator.php",
+      "formulas": [
+        {
+          "id": "bjt_fixed_bias",
+          "name": "固定偏置工作点",
+          "formula": "Ib = (Vcc - Vbe) / Rb  ;  Ic = β * Ib  ;  Vce = Vcc - Ic * Rc",
+          "parameters": {
+            "Ib": {
+              "symbol": "Ib",
+              "name": "基极电流",
+              "unit": "A"
+            },
+            "Ic": {
+              "symbol": "Ic",
+              "name": "集电极电流",
+              "unit": "A"
+            },
+            "Vce": {
+              "symbol": "Vce",
+              "name": "集射极电压",
+              "unit": "V"
+            },
+            "Vcc": {
+              "symbol": "Vcc",
+              "name": "电源电压",
+              "unit": "V"
+            },
+            "Vbe": {
+              "symbol": "Vbe",
+              "name": "基射极压降",
+              "unit": "V",
+              "desc": "硅管≈0.7V, 锗管≈0.3V"
+            },
+            "Rb": {
+              "symbol": "Rb",
+              "name": "基极电阻",
+              "unit": "Ω"
+            },
+            "Rc": {
+              "symbol": "Rc",
+              "name": "集电极电阻",
+              "unit": "Ω"
+            },
+            "β": {
+              "symbol": "β",
+              "name": "电流放大系数(hFE)",
+              "unit": "-"
+            }
+          }
+        },
+        {
+          "id": "bjt_divider_bias",
+          "name": "分压偏置工作点",
+          "formula": "Vb = Vcc * R2/(R1+R2)  ;  Ve = Vb - Vbe  ;  Ic ≈ Ve/Re  ;  Vce = Vcc - Ic*(Rc+Re)",
+          "parameters": {
+            "Vb": {
+              "symbol": "Vb",
+              "name": "基极电压",
+              "unit": "V"
+            },
+            "Ve": {
+              "symbol": "Ve",
+              "name": "发射极电压",
+              "unit": "V"
+            },
+            "R1": {
+              "symbol": "R1",
+              "name": "上偏置电阻",
+              "unit": "Ω"
+            },
+            "R2": {
+              "symbol": "R2",
+              "name": "下偏置电阻",
+              "unit": "Ω"
+            },
+            "Re": {
+              "symbol": "Re",
+              "name": "发射极电阻",
+              "unit": "Ω"
+            }
+          },
+          "notes": [
+            "分压偏置工作点受β影响较小，稳定性更好",
+            "放大区: Vce>Vbe(≈0.3V)",
+            "饱和区: Vce≤0.2V",
+            "截止区: Vbe<0.5V"
+          ]
+        }
+      ]
+    },
+    "zener_diode": {
+      "name": "稳压管(齐纳二极管)限流电阻计算",
+      "source": "pcb-tools.cn/zener_resistor_calculator.php",
+      "formulas": [
+        {
+          "id": "zener_resistor",
+          "name": "限流电阻计算",
+          "formula": "R = (Vs - Vz) / (Iz + IL)",
+          "parameters": {
+            "R": {
+              "symbol": "R",
+              "name": "限流电阻",
+              "unit": "Ω"
+            },
+            "Vs": {
+              "symbol": "Vs",
+              "name": "电源电压",
+              "unit": "V"
+            },
+            "Vz": {
+              "symbol": "Vz",
+              "name": "稳压管稳压值",
+              "unit": "V"
+            },
+            "Iz": {
+              "symbol": "Iz",
+              "name": "稳压管工作电流",
+              "unit": "A",
+              "desc": "建议取Iz_max的30~50%"
+            },
+            "IL": {
+              "symbol": "IL",
+              "name": "负载电流",
+              "unit": "A",
+              "desc": "IL=Vz/RL, 无负载时IL=0"
+            }
+          }
+        },
+        {
+          "id": "zener_power",
+          "name": "功耗校核",
+          "formula": "PR = (Vs - Vz) * (Iz + IL)  ;  Pzener = Vz * Iz",
+          "parameters": {
+            "PR": {
+              "symbol": "PR",
+              "name": "限流电阻功耗",
+              "unit": "W"
+            },
+            "Pzener": {
+              "symbol": "P_Zener",
+              "name": "稳压管功耗",
+              "unit": "W"
+            }
+          },
+          "notes": [
+            "大电流负载建议改用LDO或开关电源",
+            "常见型号: 1N4728A(3.3V/1W), 1N4733A(5.1V/1W), BZX55C5V1(5.1V/0.5W)"
+          ]
+        }
+      ]
+    },
+    "vswr": {
+      "name": "VSWR电压驻波比与回波损耗",
+      "source": "pcb-tools.cn/vswr_calculator.php",
+      "formulas": [
+        {
+          "id": "vswr_reflection_coeff",
+          "name": "VSWR→反射系数",
+          "formula": "Γ = (VSWR - 1) / (VSWR + 1)",
+          "parameters": {
+            "Γ": {
+              "symbol": "Γ",
+              "name": "反射系数",
+              "unit": "-",
+              "desc": "0~1"
+            },
+            "VSWR": {
+              "symbol": "VSWR",
+              "name": "电压驻波比",
+              "unit": "-",
+              "desc": "≥1"
+            }
+          }
+        },
+        {
+          "id": "vswr_from_gamma",
+          "name": "反射系数→VSWR",
+          "formula": "VSWR = (1 + Γ) / (1 - Γ)",
+          "parameters": {
+            "VSWR": {
+              "symbol": "VSWR",
+              "unit": "-"
+            },
+            "Γ": {
+              "symbol": "Γ",
+              "unit": "-"
+            }
+          }
+        },
+        {
+          "id": "return_loss",
+          "name": "回波损耗",
+          "formula": "RL = -20 * log10(Γ)",
+          "parameters": {
+            "RL": {
+              "symbol": "RL",
+              "name": "回波损耗",
+              "unit": "dB",
+              "desc": "正值越大越好"
+            },
+            "Γ": {
+              "symbol": "Γ",
+              "name": "反射系数",
+              "unit": "-"
+            }
+          }
+        },
+        {
+          "id": "mismatch_loss",
+          "name": "失配损耗",
+          "formula": "ML = -10 * log10(1 - Γ^2)",
+          "parameters": {
+            "ML": {
+              "symbol": "ML",
+              "name": "失配损耗",
+              "unit": "dB"
+            },
+            "Γ": {
+              "symbol": "Γ",
+              "unit": "-"
+            }
+          },
+          "notes": [
+            "VSWR参考: <1.5优秀, <2良好, 3较差, 5很差",
+            "天线调试目标VSWR<1.5",
+            "回波损耗>20dB匹配良好"
+          ]
+        }
+      ]
+    },
+    "supercapacitor": {
+      "name": "超级电容工作时间计算",
+      "source": "pcb-tools.cn/supercapacitor_calculator.php",
+      "formulas": [
+        {
+          "id": "supercap_energy",
+          "name": "可用能量",
+          "formula": "E = 0.5 * C * (V0^2 - Vcut^2)",
+          "parameters": {
+            "E": {
+              "symbol": "E",
+              "name": "可释放总能量",
+              "unit": "J"
+            },
+            "C": {
+              "symbol": "C",
+              "name": "容量",
+              "unit": "F"
+            },
+            "V0": {
+              "symbol": "V0",
+              "name": "初始电压(充满)",
+              "unit": "V"
+            },
+            "Vcut": {
+              "symbol": "Vcut",
+              "name": "截止电压(最低工作)",
+              "unit": "V"
+            }
+          }
+        },
+        {
+          "id": "supercap_constant_current",
+          "name": "恒流放电时间",
+          "formula": "t = C * (V0 - Vcut) / I",
+          "parameters": {
+            "t": {
+              "symbol": "t",
+              "name": "工作时间",
+              "unit": "s"
+            },
+            "C": {
+              "symbol": "C",
+              "unit": "F"
+            },
+            "I": {
+              "symbol": "I",
+              "name": "负载电流",
+              "unit": "A"
+            }
+          },
+          "notes": [
+            "RTC保电: 0.1~1F/5.5V",
+            "IoT峰值缓冲: 1~100F/2.7V",
+            "工业UPS: 100~3000F/2.7V"
+          ]
+        },
+        {
+          "id": "supercap_constant_power",
+          "name": "恒功率放电时间(近似)",
+          "formula": "t = E / P",
+          "parameters": {
+            "t": {
+              "symbol": "t",
+              "unit": "s"
+            },
+            "E": {
+              "symbol": "E",
+              "name": "可用能量(J)",
+              "unit": "J"
+            },
+            "P": {
+              "symbol": "P",
+              "name": "负载功率",
+              "unit": "W"
+            }
+          },
+          "notes": [
+            "近似计算，实际需考虑DC-DC效率"
+          ]
+        }
+      ]
+    },
+    "wire_voltage_drop": {
+      "name": "电线电缆压降计算",
+      "source": "pcb-tools.cn/wire_voltage_drop_calculator.php",
+      "formulas": [
+        {
+          "id": "wire_resistance",
+          "name": "导线电阻",
+          "formula": "R = ρ * L / A",
+          "parameters": {
+            "R": {
+              "symbol": "R",
+              "name": "导线电阻",
+              "unit": "Ω"
+            },
+            "ρ": {
+              "symbol": "ρ",
+              "name": "电阻率",
+              "unit": "Ω·m",
+              "desc": "铜:1.724×10⁻⁸, 铝:2.82×10⁻⁸"
+            },
+            "L": {
+              "symbol": "L",
+              "name": "导线长度",
+              "unit": "m",
+              "desc": "往返模式时L=2×单程"
+            },
+            "A": {
+              "symbol": "A",
+              "name": "导线截面积",
+              "unit": "m²"
+            }
+          }
+        },
+        {
+          "id": "wire_drop",
+          "name": "压降与功率损耗",
+          "formula": "∆V = I * R  ;  Ploss = ∆V * I = I^2 * R",
+          "parameters": {
+            "∆V": {
+              "symbol": "∆V",
+              "name": "电压降",
+              "unit": "V"
+            },
+            "Ploss": {
+              "symbol": "Ploss",
+              "name": "功率损耗",
+              "unit": "W"
+            }
+          },
+          "notes": [
+            "家用220V压降建议≤5%(11V)",
+            "工业24VDC压降建议≤3%(0.72V)",
+            "汽车12V关键负载≤3%(0.36V)"
+          ]
+        }
+      ]
+    },
+    "mc34063": {
+      "name": "MC34063A升压/降压DC-DC计算",
+      "source": "pcb-tools.cn/mc34063_calculator.php",
+      "formulas": [
+        {
+          "id": "mc34063_feedback",
+          "name": "反馈分压公式",
+          "formula": "Vout = 1.25 * (1 + R2/R1)",
+          "parameters": {
+            "Vout": {
+              "symbol": "Vout",
+              "name": "输出电压",
+              "unit": "V"
+            },
+            "R2": {
+              "symbol": "R2",
+              "name": "上端反馈电阻(接Vout)",
+              "unit": "Ω"
+            },
+            "R1": {
+              "symbol": "R1",
+              "name": "下端反馈电阻(接地)",
+              "unit": "Ω"
+            }
+          },
+          "notes": [
+            "1.25V为内部基准电压"
+          ]
+        },
+        {
+          "id": "mc34063_current_limit",
+          "name": "限流保护电阻",
+          "formula": "Rsc = 0.3 / Ipeak",
+          "parameters": {
+            "Rsc": {
+              "symbol": "Rsc",
+              "name": "限流检测电阻",
+              "unit": "Ω"
+            },
+            "Ipeak": {
+              "symbol": "Ipeak",
+              "name": "开关管峰值电流",
+              "unit": "A"
+            },
+            "0.3": {
+              "symbol": "Vth",
+              "name": "内部限流电压阈值",
+              "unit": "V"
+            }
+          },
+          "notes": [
+            "内部开关限流最大1.5A",
+            "支持升压/降压模式",
+            "频率范围: 20~100kHz",
+            "CT定时电容决定频率，CT过小导致无法起振"
+          ]
+        }
+      ]
+    },
+    "i2c_pullup": {
+      "name": "I2C总线上拉电阻计算",
+      "source": "pcb-tools.cn/i2c_pullup_calculator.php",
+      "formulas": [
+        {
+          "id": "i2c_rp_max",
+          "name": "上拉电阻最大值(由上升时间限制)",
+          "formula": "Rp_max = Tr / (0.8473 * Cb)",
+          "parameters": {
+            "Rp_max": {
+              "symbol": "Rp_max",
+              "name": "最大上拉电阻",
+              "unit": "Ω"
+            },
+            "Tr": {
+              "symbol": "Tr",
+              "name": "目标上升时间",
+              "unit": "s",
+              "desc": "Standard≤1000ns, Fast≤300ns, Fast-Plus≤120ns"
+            },
+            "Cb": {
+              "symbol": "Cb",
+              "name": "总线电容",
+              "unit": "F",
+              "desc": "Standard/Fast最大400pF, Fast-Plus最大550pF"
+            }
+          }
+        },
+        {
+          "id": "i2c_rp_min",
+          "name": "上拉电阻最小值(由驱动能力限制)",
+          "formula": "Rp_min ≈ Vcc * 0.1 / Iol",
+          "parameters": {
+            "Rp_min": {
+              "symbol": "Rp_min",
+              "name": "最小上拉电阻",
+              "unit": "Ω"
+            },
+            "Vcc": {
+              "symbol": "Vcc",
+              "name": "电源电压",
+              "unit": "V"
+            },
+            "Iol": {
+              "symbol": "Iol",
+              "name": "低电平输出电流",
+              "unit": "A",
+              "desc": "标准通常3mA"
+            }
+          },
+          "notes": [
+            "Rp越小驱动越强但功耗越高",
+            "多节点总线需计算总Cb"
+          ]
+        }
+      ]
+    },
+    "wheatstone_bridge": {
+      "name": "惠斯通电桥计算",
+      "source": "pcb-tools.cn/wheatstone_bridge_calculator.php",
+      "formulas": [
+        {
+          "id": "wheatstone_vout",
+          "name": "电桥输出电压",
+          "formula": "Vout = Vex * (R3/(R1+R3) - R4/(R2+R4))",
+          "parameters": {
+            "Vout": {
+              "symbol": "Vout",
+              "name": "差分输出电压",
+              "unit": "V"
+            },
+            "Vex": {
+              "symbol": "Vex",
+              "name": "激励电压",
+              "unit": "V"
+            },
+            "R1": {
+              "symbol": "R1",
+              "name": "上左桥臂",
+              "unit": "Ω"
+            },
+            "R2": {
+              "symbol": "R2",
+              "name": "上右桥臂",
+              "unit": "Ω"
+            },
+            "R3": {
+              "symbol": "R3",
+              "name": "下左桥臂",
+              "unit": "Ω"
+            },
+            "R4": {
+              "symbol": "R4",
+              "name": "下右桥臂(常替换为传感器)",
+              "unit": "Ω"
+            }
+          }
+        },
+        {
+          "id": "wheatstone_balance",
+          "name": "电桥平衡条件",
+          "formula": "R1 / R3 = R2 / R4",
+          "parameters": {},
+          "notes": [
+            "平衡时 Vout=0",
+            "求平衡R4: R4 = R3 * R2 / R1"
+          ]
+        }
+      ]
+    },
+    "differential_amplifier": {
+      "name": "差动(差分)放大器计算",
+      "source": "pcb-tools.cn/differential_amplifier_calculator.php",
+      "formulas": [
+        {
+          "id": "diff_amp_gain",
+          "name": "差模增益",
+          "formula": "Adm = R2 / R1  (当R1=R3, R2=R4时)",
+          "parameters": {
+            "Adm": {
+              "symbol": "Adm",
+              "name": "差模增益",
+              "unit": "- (或V/V)"
+            },
+            "R1": {
+              "symbol": "R1",
+              "name": "反相端串联电阻",
+              "unit": "Ω"
+            },
+            "R2": {
+              "symbol": "R2",
+              "name": "反馈电阻",
+              "unit": "Ω"
+            },
+            "R3": {
+              "symbol": "R3",
+              "name": "正相端串联电阻",
+              "unit": "Ω"
+            },
+            "R4": {
+              "symbol": "R4",
+              "name": "正相端对地电阻",
+              "unit": "Ω"
+            }
+          }
+        },
+        {
+          "id": "diff_amp_output",
+          "name": "输出电压",
+          "formula": "Vout = (R2/R1)*Vplus - (R4/R3)*Vminus",
+          "parameters": {
+            "Vout": {
+              "symbol": "Vout",
+              "name": "输出电压",
+              "unit": "V"
+            },
+            "Vplus": {
+              "symbol": "V+",
+              "name": "正相输入电压",
+              "unit": "V"
+            },
+            "Vminus": {
+              "symbol": "V-",
+              "name": "反相输入电压",
+              "unit": "V"
+            }
+          }
+        },
+        {
+          "id": "diff_amp_cmrr",
+          "name": "共模抑制比",
+          "formula": "CMRR = 20 * log10(Adm / Acm)",
+          "parameters": {
+            "CMRR": {
+              "symbol": "CMRR",
+              "name": "共模抑制比",
+              "unit": "dB"
+            },
+            "Adm": {
+              "symbol": "Adm",
+              "name": "差模增益",
+              "unit": "-"
+            },
+            "Acm": {
+              "symbol": "Acm",
+              "name": "共模增益",
+              "unit": "-"
+            }
+          },
+          "notes": [
+            "电阻精度是关键: 建议0.1%或更高匹配电阻",
+            "集成仪表放大器(INA128/AD620)可提供100dB+ CMRR"
+          ]
+        }
+      ]
+    },
+    "via_thermal": {
+      "name": "PCB热过孔热阻计算",
+      "source": "pcb-tools.cn/via_thermal_calculator.php",
+      "formulas": [
+        {
+          "id": "via_thermal_area",
+          "name": "过孔截面积",
+          "formula": "Acu = π * (Router^2 - Rinner^2)  ;  Afill = π * Rinner^2",
+          "parameters": {
+            "Acu": {
+              "symbol": "Acu",
+              "name": "铜壁截面积",
+              "unit": "mm²"
+            },
+            "Afill": {
+              "symbol": "Afill",
+              "name": "填充介质截面积",
+              "unit": "mm²"
+            },
+            "Router": {
+              "symbol": "Router",
+              "name": "过孔外径半径",
+              "unit": "mm",
+              "desc": "外径D/2"
+            },
+            "Rinner": {
+              "symbol": "Rinner",
+              "name": "过孔内径半径",
+              "unit": "mm",
+              "desc": "Router - 铜厚"
+            }
+          }
+        },
+        {
+          "id": "via_thermal_resistance",
+          "name": "单孔/阵列热阻",
+          "formula": "Rsingle = H / (kcu*Acu + kfill*Afill)  ;  Rtotal = Rsingle / N",
+          "parameters": {
+            "Rsingle": {
+              "symbol": "Rsingle",
+              "name": "单孔热阻",
+              "unit": "K/W (或 °C/W)"
+            },
+            "Rtotal": {
+              "symbol": "Rtotal",
+              "name": "阵列总热阻",
+              "unit": "K/W"
+            },
+            "H": {
+              "symbol": "H",
+              "name": "PCB板厚(过孔长度)",
+              "unit": "mm"
+            },
+            "kcu": {
+              "symbol": "kcu",
+              "name": "铜导热率",
+              "unit": "W/(m·K)",
+              "desc": "390 W/(m·K)"
+            },
+            "kfill": {
+              "symbol": "kfill",
+              "name": "填充介质导热率",
+              "unit": "W/(m·K)",
+              "desc": "空气0.026/焊锡50/树脂1.5/纯铜390"
+            },
+            "N": {
+              "symbol": "N",
+              "name": "过孔数量",
+              "unit": "个"
+            }
+          },
+          "notes": [
+            "热过孔应直接放在散热焊盘下方",
+            "孔径建议≤0.3mm防焊锡流失",
+            "大孔径建议做塞孔处理"
+          ]
+        }
+      ]
+    },
+    "impedance_crosstalk": {
+      "name": "PCB走线阻抗与串扰估算(3W原则)",
+      "source": "pcb-tools.cn/pcb_impedance_crosstalk_calculator.php",
+      "formulas": [
+        {
+          "id": "crosstalk_3w_rule",
+          "name": "3W串扰抑制原则",
+          "formula": "S >= 2 * W  (边缘间距≥2倍线宽)",
+          "parameters": {
+            "S": {
+              "symbol": "S",
+              "name": "并行走线边缘间距",
+              "unit": "mil (或 mm)"
+            },
+            "W": {
+              "symbol": "W",
+              "name": "走线线宽",
+              "unit": "mil (或 mm)"
+            }
+          },
+          "notes": [
+            "中心间距≥3W时耦合抑制达70%",
+            "靠近信号层的地平面能有效阻截电场力线"
+          ]
+        }
+      ]
+    },
+    "reactance": {
+      "name": "感抗与容抗计算",
+      "source": "pcb-tools.cn/reactance_calculator.php",
+      "formulas": [
+        {
+          "id": "inductive_reactance",
+          "name": "感抗",
+          "formula": "XL = 2π * f * L = ω * L",
+          "parameters": {
+            "XL": {
+              "symbol": "XL",
+              "name": "感抗",
+              "unit": "Ω"
+            },
+            "f": {
+              "symbol": "f",
+              "name": "频率",
+              "unit": "Hz"
+            },
+            "L": {
+              "symbol": "L",
+              "name": "电感量",
+              "unit": "H"
+            }
+          },
+          "notes": [
+            "直流(f=0)时XL=0(短路)",
+            "频率越高阻抗越大"
+          ]
+        },
+        {
+          "id": "capacitive_reactance",
+          "name": "容抗",
+          "formula": "XC = 1 / (2π * f * C) = 1 / (ω * C)",
+          "parameters": {
+            "XC": {
+              "symbol": "XC",
+              "name": "容抗",
+              "unit": "Ω"
+            },
+            "f": {
+              "symbol": "f",
+              "unit": "Hz"
+            },
+            "C": {
+              "symbol": "C",
+              "name": "电容量",
+              "unit": "F"
+            }
+          },
+          "notes": [
+            "直流时XC=∞(开路)",
+            "频率越高阻抗越小"
+          ]
+        },
+        {
+          "id": "resonance_reactance",
+          "name": "谐振条件(XL=XC)",
+          "formula": "XL = XC  →  f0 = 1 / (2π√LC)",
+          "parameters": {
+            "f0": {
+              "symbol": "f0",
+              "name": "谐振频率",
+              "unit": "Hz"
+            }
+          },
+          "notes": [
+            "并联谐振阻抗最大",
+            "串联谐振阻抗最小"
+          ]
+        }
+      ]
+    },
+    "frequency_wavelength": {
+      "name": "频率与波长换算",
+      "source": "pcb-tools.cn/frequency_wavelength_calculator.php",
+      "formulas": [
+        {
+          "id": "wavelength_from_freq",
+          "name": "频率→波长",
+          "formula": "λ = c / f",
+          "parameters": {
+            "λ": {
+              "symbol": "λ",
+              "name": "波长",
+              "unit": "m"
+            },
+            "c": {
+              "symbol": "c",
+              "name": "真空光速",
+              "unit": "m/s",
+              "desc": "299,792,458 m/s"
+            },
+            "f": {
+              "symbol": "f",
+              "name": "频率",
+              "unit": "Hz"
+            }
+          }
+        },
+        {
+          "id": "freq_from_wavelength",
+          "name": "波长→频率",
+          "formula": "f = c / λ",
+          "parameters": {
+            "f": {
+              "symbol": "f",
+              "unit": "Hz"
+            },
+            "λ": {
+              "symbol": "λ",
+              "unit": "m"
+            }
+          },
+          "notes": [
+            "λ/4: 单极天线参考尺寸",
+            "λ/2: 偶极子天线参考尺寸",
+            "PCB天线实际长度需×缩短系数(0.6~0.9)",
+            "1/4波长单极天线≈1.5dBi",
+            "1/2波长偶极子≈2.15dBi"
+          ]
+        }
+      ]
+    },
+    "battery_life": {
+      "name": "电池续航时间计算",
+      "source": "pcb-tools.cn/battery_life_calculator.php",
+      "formulas": [
+        {
+          "id": "battery_life_simple",
+          "name": "电池续航(恒流)",
+          "formula": "Tlife = Battery_Capacity / Load_Current",
+          "parameters": {
+            "Tlife": {
+              "symbol": "Tlife",
+              "name": "续航时间",
+              "unit": "h"
+            },
+            "Battery_Capacity": {
+              "symbol": "Capacity",
+              "name": "电池容量",
+              "unit": "mAh (或 Ah)"
+            },
+            "Load_Current": {
+              "symbol": "Iload",
+              "name": "负载平均电流",
+              "unit": "mA (或 A)"
+            }
+          },
+          "notes": [
+            "理论值，实际受温度/老化/放电速率影响",
+            "1Ah=1000mAh",
+            "Wh转换: Ah=Wh/V"
+          ]
+        }
+      ]
+    },
+    "battery_charging": {
+      "name": "电池充电时间计算",
+      "source": "pcb-tools.cn/battery_charging_time_calculator.php",
+      "formulas": [
+        {
+          "id": "battery_charge_time",
+          "name": "充电时间",
+          "formula": "Tcharge = (Target% - Current%) * Battery_Capacity / (Icharge * (1 - Loss%))",
+          "parameters": {
+            "Tcharge": {
+              "symbol": "Tcharge",
+              "name": "充电时间",
+              "unit": "h"
+            },
+            "Target": {
+              "symbol": "Target%",
+              "name": "目标电量百分比",
+              "unit": "%"
+            },
+            "Current": {
+              "symbol": "Current%",
+              "name": "当前电量百分比",
+              "unit": "%"
+            },
+            "Battery_Capacity": {
+              "symbol": "Capacity",
+              "name": "电池容量",
+              "unit": "mAh"
+            },
+            "Icharge": {
+              "symbol": "Icharge",
+              "name": "充电电流",
+              "unit": "mA"
+            },
+            "Loss": {
+              "symbol": "Loss%",
+              "name": "充电损耗",
+              "unit": "%",
+              "desc": "线性10~20%, 开关5~15%, 无线15~30%"
+            }
+          }
+        }
+      ]
+    },
+    "electric_power": {
+      "name": "电功率与欧姆定律全关系",
+      "source": "pcb-tools.cn/electric_power_calculator.php",
+      "formulas": [
+        {
+          "id": "power_vi",
+          "name": "功率(P=V×I)",
+          "formula": "P = V * I",
+          "parameters": {
+            "P": {
+              "symbol": "P",
+              "name": "功率",
+              "unit": "W"
+            },
+            "V": {
+              "symbol": "V",
+              "name": "电压",
+              "unit": "V"
+            },
+            "I": {
+              "symbol": "I",
+              "name": "电流",
+              "unit": "A"
+            }
+          }
+        },
+        {
+          "id": "power_i2r",
+          "name": "功率(P=I²R)",
+          "formula": "P = I^2 * R",
+          "parameters": {
+            "P": {
+              "symbol": "P",
+              "unit": "W"
+            },
+            "I": {
+              "symbol": "I",
+              "unit": "A"
+            },
+            "R": {
+              "symbol": "R",
+              "unit": "Ω"
+            }
+          }
+        },
+        {
+          "id": "power_v2r",
+          "name": "功率(P=V²/R)",
+          "formula": "P = V^2 / R",
+          "parameters": {
+            "P": {
+              "symbol": "P",
+              "unit": "W"
+            },
+            "V": {
+              "symbol": "V",
+              "unit": "V"
+            },
+            "R": {
+              "symbol": "R",
+              "unit": "Ω"
+            }
+          }
+        },
+        {
+          "id": "ohms_law_table",
+          "name": "欧姆定律互推全表",
+          "formula": "V=I*R, I=V/R, R=V/I, V=P/I, I=P/V, R=V²/P, V=√(P*R), I=√(P/R), R=P/I²",
+          "parameters": {},
+          "notes": [
+            "SMD封装功率: 0402(0.063W), 0603(0.1W), 0805(0.125W), 1206(0.25W), 2512(1W)"
+          ]
+        }
+      ]
+    },
+    "series_capacitor": {
+      "name": "电容串联计算",
+      "source": "pcb-tools.cn/series_capacitor_calculator.php",
+      "formulas": [
+        {
+          "id": "series_cap_n",
+          "name": "多电容串联等效值",
+          "formula": "1/Ceq = 1/C1 + 1/C2 + ... + 1/Cn",
+          "parameters": {
+            "Ceq": {
+              "symbol": "Ceq",
+              "name": "串联等效电容",
+              "unit": "F"
+            },
+            "C1~Cn": {
+              "symbol": "C1~Cn",
+              "name": "各电容值",
+              "unit": "F"
+            }
+          },
+          "notes": [
+            "串联总容量始终小于最小单个电容",
+            "总耐压 = 各电容耐压之和"
+          ]
+        },
+        {
+          "id": "series_cap_2",
+          "name": "两电容串联简化",
+          "formula": "Ceq = (C1 * C2) / (C1 + C2)",
+          "parameters": {
+            "Ceq": {
+              "symbol": "Ceq",
+              "unit": "F"
+            },
+            "C1": {
+              "symbol": "C1",
+              "unit": "F"
+            },
+            "C2": {
+              "symbol": "C2",
+              "unit": "F"
+            }
+          }
+        },
+        {
+          "id": "series_cap_voltage_div",
+          "name": "电容串联电压分配",
+          "formula": "Vn = Q / Cn = (Ceq * Vtotal) / Cn",
+          "parameters": {
+            "Vn": {
+              "symbol": "Vn",
+              "name": "第n个电容分压",
+              "unit": "V"
+            },
+            "Q": {
+              "symbol": "Q",
+              "name": "电荷量(各电容相等)",
+              "unit": "C"
+            },
+            "Vtotal": {
+              "symbol": "Vtotal",
+              "name": "总外加电压",
+              "unit": "V"
+            }
+          },
+          "notes": [
+            "小电容承受更高电压，需核对额定耐压",
+            "电解电容串联注意极性",
+            "高压电路建议并联均压电阻"
+          ]
+        }
+      ]
+    },
+    "metal_weight": {
+      "name": "金属材料重量计算",
+      "source": "pcb-tools.cn/metal_weight_calculator.php",
+      "formulas": [
+        {
+          "id": "metal_weight",
+          "name": "金属重量",
+          "formula": "Weight(g) = L(cm) * W(cm) * T(cm) * ρ(g/cm³)",
+          "parameters": {
+            "Weight": {
+              "symbol": "W",
+              "name": "重量",
+              "unit": "g"
+            },
+            "L": {
+              "symbol": "L",
+              "name": "长度",
+              "unit": "cm"
+            },
+            "W": {
+              "symbol": "W",
+              "name": "宽度",
+              "unit": "cm"
+            },
+            "T": {
+              "symbol": "T",
+              "name": "厚度",
+              "unit": "cm"
+            },
+            "ρ": {
+              "symbol": "ρ",
+              "name": "密度",
+              "unit": "g/cm³"
+            }
+          },
+          "notes": [
+            "紫铜8.96, H62黄铜8.50, H65黄铜8.30, 铝2.70, 钢7.85, 不锈钢7.93, 铅11.34"
+          ]
+        }
+      ]
+    },
+    "emc_converter": {
+      "name": "EMC单位换算(dB/dBm/dBuV/dBW)",
+      "source": "pcb-tools.cn/emc_unit_converter.php",
+      "formulas": [
+        {
+          "id": "emc_voltage_db",
+          "name": "电压→dBV/dBuV",
+          "formula": "dBV = 20*log10(V)  ;  dBuV = dBV + 120",
+          "parameters": {
+            "dBV": {
+              "symbol": "dBV",
+              "name": "分贝伏(参考1V)",
+              "unit": "dBV"
+            },
+            "dBuV": {
+              "symbol": "dBuV",
+              "name": "分贝微伏(参考1µV)",
+              "unit": "dBuV"
+            },
+            "V": {
+              "symbol": "V",
+              "name": "电压",
+              "unit": "V"
+            }
+          }
+        },
+        {
+          "id": "emc_power_db",
+          "name": "功率→dBm/dBW",
+          "formula": "dBm = 10*log10(P(mW))  ;  dBW = 10*log10(P(W))  ;  dBm = dBW + 30",
+          "parameters": {
+            "dBm": {
+              "symbol": "dBm",
+              "name": "分贝毫瓦(参考1mW)",
+              "unit": "dBm"
+            },
+            "dBW": {
+              "symbol": "dBW",
+              "name": "分贝瓦(参考1W)",
+              "unit": "dBW"
+            },
+            "P": {
+              "symbol": "P",
+              "name": "功率",
+              "unit": "W 或 mW"
+            }
+          },
+          "notes": [
+            "电压用20*log, 功率用10*log(因为P∝V²)",
+            "@50Ω: dBuV≈dBm+107",
+            "0dBm=1mW@50Ω≈107dBuV"
+          ]
+        }
+      ]
+    },
+    "lc_resonance": {
+      "name": "LC谐振频率计算(含反向求解)",
+      "source": "pcb-tools.cn/lc_resonance_calculator.php",
+      "formulas": [
+        {
+          "id": "lc_resonance_f",
+          "name": "已知L,C求谐振频率",
+          "formula": "f = 1 / (2π√(L*C))",
+          "parameters": {
+            "f": {
+              "symbol": "f",
+              "name": "谐振频率",
+              "unit": "Hz"
+            },
+            "L": {
+              "symbol": "L",
+              "name": "电感",
+              "unit": "H"
+            },
+            "C": {
+              "symbol": "C",
+              "name": "电容",
+              "unit": "F"
+            }
+          }
+        },
+        {
+          "id": "lc_resonance_L",
+          "name": "已知f,C求电感",
+          "formula": "L = 1 / ((2πf)^2 * C)",
+          "parameters": {
+            "L": {
+              "symbol": "L",
+              "unit": "H"
+            },
+            "f": {
+              "symbol": "f",
+              "unit": "Hz"
+            },
+            "C": {
+              "symbol": "C",
+              "unit": "F"
+            }
+          }
+        },
+        {
+          "id": "lc_resonance_C",
+          "name": "已知f,L求电容",
+          "formula": "C = 1 / ((2πf)^2 * L)",
+          "parameters": {
+            "C": {
+              "symbol": "C",
+              "unit": "F"
+            },
+            "f": {
+              "symbol": "f",
+              "unit": "Hz"
+            },
+            "L": {
+              "symbol": "L",
+              "unit": "H"
+            }
+          },
+          "notes": [
+            "实际元件含寄生参数(ESR/DCR)，谐振频率略有偏移",
+            "高Q值电路对元件精度要求高"
+          ]
+        }
+      ]
+    },
+    "pwm_duty_cycle": {
+      "name": "PWM占空比与频率计算",
+      "source": "pcb-tools.cn/pwm_duty_cycle_calculator.php",
+      "formulas": [
+        {
+          "id": "pwm_period",
+          "name": "周期与频率",
+          "formula": "T = 1 / f",
+          "parameters": {
+            "T": {
+              "symbol": "T",
+              "name": "周期",
+              "unit": "s"
+            },
+            "f": {
+              "symbol": "f",
+              "name": "频率",
+              "unit": "Hz"
+            }
+          }
+        },
+        {
+          "id": "pwm_ton_toff",
+          "name": "占空比→Ton/Toff",
+          "formula": "Ton = T * D%  ;  Toff = T * (1 - D%)",
+          "parameters": {
+            "Ton": {
+              "symbol": "Ton",
+              "name": "高电平时间",
+              "unit": "s"
+            },
+            "Toff": {
+              "symbol": "Toff",
+              "name": "低电平时间",
+              "unit": "s"
+            },
+            "D": {
+              "symbol": "D%",
+              "name": "占空比",
+              "unit": "%"
+            }
+          }
+        },
+        {
+          "id": "pwm_duty_from_times",
+          "name": "时间→占空比",
+          "formula": "D = Ton / (Ton + Toff) * 100%",
+          "parameters": {
+            "D": {
+              "symbol": "D",
+              "unit": "%"
+            },
+            "Ton": {
+              "symbol": "Ton",
+              "unit": "s"
+            },
+            "Toff": {
+              "symbol": "Toff",
+              "unit": "s"
+            }
+          },
+          "notes": [
+            "LED调光: 1kHz, 0~100%",
+            "电机调速: 5~20kHz, 20~100%",
+            "舵机: 50Hz, 5~10%",
+            "开关电源: 20kHz~1MHz, 20~80%",
+            "D类功放: 250kHz~1MHz, 50%"
+          ]
+        }
+      ]
+    },
+    "via_size": {
+      "name": "PCB过孔尺寸计算(设计参考)",
+      "source": "pcb-tools.cn/via_size_calculator.php",
+      "formulas": [
+        {
+          "id": "via_current_capacity",
+          "name": "过孔载流能力(经验)",
+          "formula": "单个过孔载流≈外层同等线宽载流的80% (因孔壁镀铜)",
+          "parameters": {},
+          "notes": [
+            "大电流用多个并联过孔",
+            "注意过孔长宽比，保证可靠电镀",
+            "高速信号注意过孔寄生C/L(参见via_parasitic)"
+          ]
+        }
+      ]
+    },
+    "differential_pair": {
+      "name": "PCB差分对阻抗设计参考",
+      "source": "pcb-tools.cn/differential_pair_calculator.php",
+      "formulas": [
+        {
+          "id": "diff_pair_edge_coupled_microstrip",
+          "name": "边缘耦合微带线差分阻抗(通用参考)",
+          "formula": "Zdiff = 2*Z0 * (1 - 0.48*exp(-0.96*S/H))",
+          "parameters": {
+            "Zdiff": {
+              "symbol": "Zdiff",
+              "name": "差分阻抗",
+              "unit": "Ω"
+            },
+            "Z0": {
+              "symbol": "Z0",
+              "name": "单端特性阻抗",
+              "unit": "Ω"
+            },
+            "S": {
+              "symbol": "S",
+              "name": "走线间距",
+              "unit": "mm (或 mil)"
+            },
+            "H": {
+              "symbol": "H",
+              "name": "介质层高度",
+              "unit": "mm (或 mil)"
+            }
+          }
+        },
+        {
+          "id": "diff_pair_edge_coupled_stripline",
+          "name": "边缘耦合带状线差分阻抗(通用参考)",
+          "formula": "Zdiff = 2*Z0 * (1 - 0.347*exp(-2.9*S/B))",
+          "parameters": {
+            "Zdiff": {
+              "symbol": "Zdiff",
+              "unit": "Ω"
+            },
+            "Z0": {
+              "symbol": "Z0",
+              "unit": "Ω"
+            },
+            "S": {
+              "symbol": "S",
+              "unit": "mm (或 mil)"
+            },
+            "B": {
+              "symbol": "B",
+              "name": "两参考平面间距",
+              "unit": "mm (或 mil)"
+            }
+          },
+          "notes": [
+            "保持差分对走线长度匹配",
+            "避免差分对走线交叉",
+            "可用蛇形线调整长度",
+            "注意差分对阻抗匹配",
+            "以上为通用参考公式，pcb-tools.cn实际计算逻辑在服务端"
+          ]
+        }
+      ]
+    },
+    "opamp_filter": {
+      "name": "运放有源滤波器(Sallen-Key / 一阶/二阶)",
+      "source": "pcb-tools.cn/opamp_filter_calculator.php",
+      "formulas": [
+        {
+          "id": "opamp_filter_1st_order",
+          "name": "一阶LP/HP截止频率",
+          "formula": "fc = 1 / (2π * R * C)",
+          "parameters": {
+            "fc": {
+              "symbol": "fc",
+              "name": "截止频率",
+              "unit": "Hz"
+            },
+            "R": {
+              "symbol": "R",
+              "name": "电阻",
+              "unit": "Ω"
+            },
+            "C": {
+              "symbol": "C",
+              "name": "电容",
+              "unit": "F"
+            }
+          },
+          "notes": [
+            "反算: R = 1/(2π*fc*C)",
+            "斜率: -20dB/decade",
+            "典型应用: 简单去耦、ADC输入"
+          ]
+        },
+        {
+          "id": "opamp_filter_sallen_key",
+          "name": "二阶Sallen-Key Butterworth (R1=R2=R, C1=C2=C)",
+          "formula": "fc = 1 / (2π * R * C),  Q = 0.7071 (Butterworth)",
+          "parameters": {
+            "fc": {
+              "symbol": "fc",
+              "unit": "Hz"
+            },
+            "R": {
+              "symbol": "R",
+              "name": "两个电阻相等",
+              "unit": "Ω"
+            },
+            "C": {
+              "symbol": "C",
+              "name": "两个电容相等",
+              "unit": "F"
+            },
+            "Q": {
+              "symbol": "Q",
+              "name": "品质因数",
+              "unit": "-",
+              "desc": "Butterworth=0.7071"
+            }
+          },
+          "notes": [
+            "斜率: -40dB/decade",
+            "运放GBW需≥10~100倍fc",
+            "建议1%精度电阻(E96系列)",
+            "电容优先选标准值(10nF/100nF)再反算电阻"
+          ]
+        }
+      ]
+    },
+    "buck_converter": {
+      "name": "Buck降压转换器(电感/电容/占空比)计算",
+      "source": "pcb-tools.cn/buck_converter_calculator.php",
+      "formulas": [
+        {
+          "id": "buck_duty_cycle",
+          "name": "Buck占空比",
+          "formula": "D = (Vout + Vf) / (Vin + Vf)",
+          "parameters": {
+            "D": {
+              "symbol": "D",
+              "name": "占空比",
+              "unit": "- (或%)"
+            },
+            "Vin": {
+              "symbol": "Vin",
+              "name": "输入电压",
+              "unit": "V"
+            },
+            "Vout": {
+              "symbol": "Vout",
+              "name": "输出电压",
+              "unit": "V"
+            },
+            "Vf": {
+              "symbol": "Vf",
+              "name": "续流二极管正向压降",
+              "unit": "V",
+              "desc": "肖特基≈0.4~0.6V, 同步整流=0"
+            }
+          }
+        },
+        {
+          "id": "buck_inductor_min",
+          "name": "最小电感量",
+          "formula": "Lmin = (Vin - Vout) * D / (fsw * ΔIL)",
+          "parameters": {
+            "Lmin": {
+              "symbol": "Lmin",
+              "name": "最小电感量",
+              "unit": "H"
+            },
+            "fsw": {
+              "symbol": "fsw",
+              "name": "开关频率",
+              "unit": "Hz",
+              "desc": "常见50kHz~2MHz"
+            },
+            "ΔIL": {
+              "symbol": "ΔIL",
+              "name": "纹波电流",
+              "unit": "A",
+              "desc": "典型为Iout的20~40%"
+            }
+          },
+          "notes": [
+            "电感额定电流>峰值电流+20%余量"
+          ]
+        },
+        {
+          "id": "buck_output_cap",
+          "name": "输出电容最小值",
+          "formula": "Co = ΔIL / (8 * fsw * ΔVout)",
+          "parameters": {
+            "Co": {
+              "symbol": "Co",
+              "name": "最小输出电容",
+              "unit": "F"
+            },
+            "ΔVout": {
+              "symbol": "ΔVout",
+              "name": "允许输出纹波电压",
+              "unit": "V"
+            }
+          },
+          "notes": [
+            "高频→电感电容更小但开关损耗增加",
+            "同步整流可提效至95%+",
+            "推荐低ESR铝电解或MLCC"
+          ]
+        }
+      ]
+    },
+    "rated_current_quick": {
+      "name": "额定电流速算(变压器/电机)",
+      "source": "pcb-tools.cn/rated_current_quick_table.php",
+      "formulas": [
+        {
+          "id": "transformer_rated_current",
+          "name": "配电变压器额定电流速算",
+          "formula": "I1e ≈ S / (√3 * U1)  ;  I2e = S / (√3 * U2)",
+          "parameters": {
+            "S": {
+              "symbol": "S",
+              "name": "变压器容量",
+              "unit": "kVA"
+            },
+            "U1": {
+              "symbol": "U1",
+              "name": "一次侧电压",
+              "unit": "kV"
+            },
+            "U2": {
+              "symbol": "U2",
+              "name": "二次侧电压",
+              "unit": "kV"
+            },
+            "I1e": {
+              "symbol": "I1e",
+              "name": "一次侧额定电流",
+              "unit": "A"
+            },
+            "I2e": {
+              "symbol": "I2e",
+              "name": "二次侧额定电流",
+              "unit": "A"
+            }
+          },
+          "notes": [
+            "0.4kV二次侧速算: I2e≈1.443*S",
+            "40.5kV一次侧: I1e≈0.017*S",
+            "12kV一次侧: I1e≈0.06*S"
+          ]
+        },
+        {
+          "id": "motor_3phase_current",
+          "name": "三相电机(0.4kV)额定电流速算",
+          "formula": "Ie ≈ 0.76 * P / U(kV)  →  0.4kV时 I≈1.9*P(kW)",
+          "parameters": {
+            "Ie": {
+              "symbol": "Ie",
+              "name": "额定电流",
+              "unit": "A"
+            },
+            "P": {
+              "symbol": "P",
+              "name": "电机功率",
+              "unit": "kW"
+            },
+            "U": {
+              "symbol": "U",
+              "name": "线电压",
+              "unit": "kV"
+            }
+          },
+          "notes": [
+            "含功率因数和效率综合因子",
+            "0.4kV系统: I≈1.9*P (A)"
+          ]
+        },
+        {
+          "id": "motor_1phase_current",
+          "name": "单相电机(220V)额定电流速算",
+          "formula": "Ie ≈ 5.7 * P(kW)  (220V系统)",
+          "parameters": {
+            "Ie": {
+              "symbol": "Ie",
+              "unit": "A"
+            },
+            "P": {
+              "symbol": "P",
+              "unit": "kW"
+            }
+          },
+          "notes": [
+            "经验估算, 实际以产品样本为准"
+          ]
+        }
+      ]
+    }
+  },
+  "unit_conversions": {
+    "length": {
+      "1_inch": "25.4 mm",
+      "1_mil": "0.001 inch = 0.0254 mm",
+      "1_mm": "39.37 mil",
+      "1_μm": "0.001 mm"
+    },
+    "copper_thickness": {
+      "1_oz": "35 μm ≈ 1.4 mil",
+      "0.5_oz": "17.5 μm ≈ 0.7 mil",
+      "2_oz": "70 μm ≈ 2.8 mil",
+      "3_oz": "105 μm ≈ 4.2 mil"
+    },
+    "frequency": {
+      "1 kHz": "1000 Hz",
+      "1 MHz": "1,000,000 Hz",
+      "1 GHz": "1,000,000,000 Hz"
+    },
+    "capacitance": {
+      "1 F": "1,000,000 μF = 10⁹ nF = 10¹² pF"
+    },
+    "inductance": {
+      "1 H": "1000 mH = 10⁶ μH = 10⁹ nH"
+    },
+    "power": {
+      "1 kW": "1000 W",
+      "1 MW": "1000 kW",
+      "1 hp": "约 0.746 kW"
+    }
+  },
+  "integration_guide": {
+    "description": "以下为推荐的计算函数命名和参数接口设计，方便集成到 Agent 工具链",
+    "function_examples": [
+      {
+        "function_name": "calc_trace_current(width_mil, copper_thickness_oz, temp_rise_c, layer)",
+        "description": "计算PCB走线载流量",
+        "params": {
+          "width_mil": "走线宽度(mil)",
+          "copper_thickness_oz": "铜厚(oz)",
+          "temp_rise_c": "允许温升(℃)",
+          "layer": "'outer' | 'inner'"
+        },
+        "returns": "current_A (float)"
+      },
+      {
+        "function_name": "calc_trace_width_needed(current_a, copper_thickness_oz, temp_rise_c, layer)",
+        "description": "根据所需电流计算最小线宽",
+        "params": {
+          "current_a": "所需电流(A)",
+          "copper_thickness_oz": "铜厚(oz)",
+          "temp_rise_c": "允许温升(℃)",
+          "layer": "'outer' | 'inner'"
+        },
+        "returns": "width_mil (float)"
+      },
+      {
+        "function_name": "calc_microstrip_impedance(w_mm, h_mm, t_mm, er)",
+        "description": "计算微带线特性阻抗",
+        "params": {
+          "w_mm": "线宽(mm)",
+          "h_mm": "介质层高度(mm)",
+          "t_mm": "铜厚(mm)",
+          "er": "介电常数"
+        },
+        "returns": "z0_ohm (float)"
+      },
+      {
+        "function_name": "calc_stripline_impedance(w_mm, h_mm, t_mm, er)",
+        "description": "计算带状线特性阻抗",
+        "returns": "z0_ohm (float)"
+      },
+      {
+        "function_name": "calc_skin_depth(freq_hz, resistivity, mur)",
+        "description": "计算趋肤深度",
+        "params": {
+          "freq_hz": "频率(Hz)",
+          "resistivity": "电阻率(Ω·m)，铜默认1.72e-8",
+          "mur": "相对磁导率，非磁性=1"
+        },
+        "returns": "skin_depth_m (float)"
+      },
+      {
+        "function_name": "calc_junction_temp(pd_w, ta_c, rjc, rcs, rsa)",
+        "description": "计算功率器件结温",
+        "returns": "tj_c (float)"
+      },
+      {
+        "function_name": "calc_ldo_thermal(vin_v, vout_v, iout_a, package_type, ta_c)",
+        "description": "LDO热分析（含推荐散热铜面积）",
+        "returns": "{pd_w, efficiency, tj_c, copper_area_cm2, is_safe}"
+      },
+      {
+        "function_name": "calc_pdn_target_impedance(vdd_v, ripple_pct, delta_i_a)",
+        "description": "计算PDN目标阻抗",
+        "returns": "z_target_ohm (float)"
+      },
+      {
+        "function_name": "calc_snubber_rc(fring1_mhz, fring2_mhz, ctest_pf, vin_v, fsw_khz)",
+        "description": "双频法计算Snubber RC参数",
+        "returns": "{cp_pf, lp_nh, r_snub_ohm, c_snub_pf, pr_w}"
+      },
+      {
+        "function_name": "calc_smps_efficiency(vin_v, vout_v, iout_a, fsw_khz, rdson_mohm, qg_nc, vg_v, vd_v, dcr_mohm, topology)",
+        "description": "计算开关电源效率与损耗分解",
+        "topology": "'buck' | 'boost' | 'flyback'",
+        "returns": "{duty, p_cond_w, p_sw_w, p_diode_w, p_dcr_w, p_loss_w, p_in_w, efficiency}"
+      },
+      {
+        "function_name": "calc_opamp_gain_bandwidth(r1_ohm, rf_ohm, gbw_hz, topology)",
+        "description": "运放增益与带宽计算",
+        "topology": "'non_inverting' | 'inverting'",
+        "returns": "{av_vv, gain_db, bw_hz, noise_gain}"
+      },
+      {
+        "function_name": "calc_adc_performance(bits, vref_v, gain)",
+        "description": "ADC性能参数计算",
+        "returns": "{lsb_v, snr_db, dr_db, fullscale_counts}"
+      },
+      {
+        "function_name": "calc_crystal_caps(cl_pf, cstray_pf, cin_pf)",
+        "description": "计算晶振匹配电容",
+        "returns": "{c1_pf, c2_pf, recommended_e24_pf, frequency_deviation}"
+      },
+      {
+        "function_name": "calc_rs485(max_distance_m, baudrate_bps, cable_impedance_ohm)",
+        "description": "RS-485总线参数计算",
+        "returns": "{terminal_r_ohm, feasible_distance_m, feasible_baudrate}"
+      },
+      {
+        "function_name": "calc_led_resistor(vcc_v, vf_v, if_ma, led_count)",
+        "description": "LED限流电阻计算",
+        "returns": "{r_ohm, e24_value_ohm, actual_current_ma, pr_w, recommended_package}"
+      },
+      {
+        "function_name": "calc_voltage_divider(v1_v, v2_v, r1_ohm, r2_ohm)",
+        "description": "通用电阻分压计算",
+        "returns": "{vr_v, i_a, p1_w, p2_w}"
+      },
+      {
+        "function_name": "calc_copper_busbar_current(width_mm, height_mm, temp_rise_c, orientation)",
+        "description": "铜排载流量（牛顿散热法）",
+        "orientation": "'edge' | 'flat'",
+        "returns": "current_a (float)"
+      },
+      {
+        "function_name": "calc_iot_battery_life(itx_ma, ttx_ms, irx_ma, trx_ms, imcu_ma, tmcu_ms, isleep_ua, tcycle_s, cap_mah)",
+        "description": "IoT设备电池寿命估算",
+        "returns": "{iavg_ua, pavg_mw, life_days, life_years}"
+      },
+      {
+        "function_name": "calc_smd_pad(l_mm, w_mm, t_mm, density_level)",
+        "description": "SMD焊盘尺寸计算(IPC-7351)",
+        "density_level": "'most' | 'nominal' | 'least'",
+        "returns": "{wpad_mm, lpad_mm, gap_mm, total_span_mm}"
+      },
+      {
+        "function_name": "calc_lc_filter(l_h, c_f, zl_ohm)",
+        "description": "LC滤波器参数计算",
+        "returns": "{fc_hz, f0_hz, z0_ohm, q_factor, response_type}"
+      },
+      {
+        "function_name": "calc_three_phase_power(ul_v, il_a, cos_phi, connection)",
+        "description": "三相电功率计算",
+        "connection": "'star' | 'delta'",
+        "returns": "{p_kw, q_kvar, s_kva, u_phase_v, i_phase_a}"
+      },
+      {
+        "function_name": "calc_555_astable(r1_ohm, r2_ohm, c_farad)",
+        "description": "555非稳态振荡器计算",
+        "returns": "{f_hz, th_s, tl_s, period_s, duty_pct}"
+      },
+      {
+        "function_name": "calc_rc_circuit(r_ohm, c_farad, mode)",
+        "description": "RC电路参数计算",
+        "mode": "'frequency' | 'time_constant' | 'transient'",
+        "returns": "{tau_s, fc_hz, ...}"
+      },
+      {
+        "function_name": "calc_lm317_vout(r1_ohm, r2_ohm, iadj_ua)",
+        "description": "LM317输出电压计算",
+        "returns": "{vout_v, vout_simple_v}"
+      },
+      {
+        "function_name": "calc_parallel_resistance(resistors_ohm_array, v_applied_v)",
+        "description": "并联电阻等效值和电流分配",
+        "returns": "{req_ohm, branch_currents_a, total_power_w}"
+      },
+      {
+        "function_name": "calc_transistor_bias(vcc_v, rb_ohm, rc_ohm, beta, bias_type)",
+        "description": "三极管静态工作点",
+        "bias_type": "'fixed' | 'divider'",
+        "returns": "{ib_ua, ic_ma, vce_v, region}"
+      },
+      {
+        "function_name": "calc_zener_resistor(vs_v, vz_v, iz_ma, rl_ohm)",
+        "description": "稳压管限流电阻计算",
+        "returns": "{r_ohm, pr_w, pz_w, il_ma}"
+      },
+      {
+        "function_name": "calc_vswr(vswr_or_gamma, mode)",
+        "description": "VSWR/反射系数/回波损耗互算",
+        "mode": "'vswr_to_gamma' | 'gamma_to_vswr'",
+        "returns": "{vswr, gamma, rl_db, ml_db}"
+      },
+      {
+        "function_name": "calc_supercapacitor(c_f, v0_v, vcut_v, load_ma, load_type)",
+        "description": "超级电容工作时间",
+        "load_type": "'constant_current' | 'constant_power'",
+        "returns": "{energy_j, time_s, time_min}"
+      },
+      {
+        "function_name": "calc_wire_voltage_drop(area_mm2, length_m, current_a, material, mode)",
+        "description": "导线压降计算",
+        "material": "'copper' | 'aluminum'",
+        "mode": "'round_trip' | 'one_way'",
+        "returns": "{r_ohm, dv_v, dv_pct, ploss_w}"
+      },
+      {
+        "function_name": "calc_i2c_pullup(vcc_v, cb_pf, tr_ns, iol_ma)",
+        "description": "I2C上拉电阻范围",
+        "returns": "{rp_max_ohm, rp_min_ohm, recommended_rp_ohm}"
+      },
+      {
+        "function_name": "calc_wheatstone_bridge(vex_v, r1, r2, r3, r4, mode)",
+        "description": "惠斯通电桥计算",
+        "mode": "'vout' | 'balance_check' | 'find_r4'",
+        "returns": "{vout_mv, balanced, r4_balanced}"
+      },
+      {
+        "function_name": "calc_via_thermal_resistance(d_outer_mm, cu_thickness_um, pcb_thickness_mm, n_vias, fill_type)",
+        "description": "热过孔热阻计算",
+        "fill_type": "'air' | 'solder' | 'resin' | 'solid_copper'",
+        "returns": "{rsingle_cw, rtotal_cw}"
+      },
+      {
+        "function_name": "calc_reactance(f_hz, l_h, c_f)",
+        "description": "感抗容抗计算",
+        "returns": "{xl_ohm, xc_ohm, f0_hz, resonant}"
+      },
+      {
+        "function_name": "calc_opamp_filter(fc_hz, c_farad, filter_type)",
+        "description": "运放有源滤波器参数计算",
+        "filter_type": "'1st_lp' | '1st_hp' | '2nd_lp_butterworth' | '2nd_hp_butterworth' | 'bandpass'",
+        "returns": "{r_ohm, fc_hz, q_factor, slope_db_per_decade}"
+      },
+      {
+        "function_name": "calc_buck_converter(vin_v, vout_v, iout_a, fsw_khz, ripple_pct, vf_v)",
+        "description": "Buck降压转换器核心参数计算",
+        "returns": "{duty_pct, lmin_uh, co_min_uf, ipeak_a}"
+      },
+      {
+        "function_name": "lookup_copper_busbar_ampacity(t_mm, w_mm, temp_rise_c)",
+        "description": "查铜排载流量对照表(ASTM B187数据)",
+        "temp_rise_c": "30 | 50 | 65",
+        "returns": "{amps, area_mm2, weight_kg_per_m, se_coeff, resistance_uOhm_per_ft2}"
+      },
+      {
+        "function_name": "decode_resistor_color(bands_array, band_count)",
+        "description": "电阻色码解码",
+        "band_count": "4 | 5 | 6",
+        "returns": "{resistance_ohm, tolerance_pct, temp_coeff_ppm}"
+      },
+      {
+        "function_name": "calc_rated_current_quick(type, param)",
+        "description": "额定电流速算",
+        "type": "'transformer' | '3phase_motor' | '1phase_motor'",
+        "returns": "{rated_current_a}"
+      }
+    ]
+  },
+  "eda365_notes": {
+    "source_description": "eda365论坛(bbs.eda365.com)提供的内容为补充参考，包含经验公式和设计讨论",
+    "key_insights": [
+      "PCB走线阻抗近似公式: 0.0005 × L/W (线长/线宽，inch/mil)",
+      "电流密度经验值: 15~25 A/mm²",
+      "1oz铜 1mm宽一般作1~3A电流计",
+      "10mil线宽@1oz外层 约1A电流",
+      "250mil线宽@1oz外层 约8.3A",
+      "50mil@1oz 温升1060℃(铜熔点) 电流22.8A",
+      "微带线阻抗公式已采用IPC-2141标准",
+      "带状线阻抗公式适用条件: W/H<0.35, T/H<0.25",
+      "差分信号中间不能加地线，会破坏耦合效应",
+      "高速设计建议: 控制阻抗连续/匹配，走线间距≥2倍线宽，避免上下层平行走线重叠"
+    ],
+    "cannot_crawl_reason": "bbs.eda365.com有Cloudflare安全验证，无法直接爬取完整文章内容"
+  },
+  "tables": {
+    "copper_busbar_ampacity": {
+      "name": "铜排载流量对照表 (ASTM B187/B187M, C11000紫铜, 环境40°C, 水平放置)",
+      "source": "pcb-tools.cn/copper_ampacity_table.php",
+      "test_conditions": {
+        "ambient_temp": "40°C",
+        "mounting": "水平放置",
+        "material": "C11000紫铜",
+        "emissivity": 0.4,
+        "standard": "ASTM B187/B187M",
+        "note": "工业环境60天实测值"
+      },
+      "columns": [
+        "T_mm",
+        "W_mm",
+        "area_mm2",
+        "CM",
+        "weight_kg_per_m",
+        "resistance_uOhm_per_ft2",
+        "SE_30C",
+        "amps_30C",
+        "SE_50C",
+        "amps_50C",
+        "SE_65C",
+        "amps_65C"
+      ],
+      "data": [
+        [
+          1.6,
+          12.7,
+          20.1,
+          39.7,
+          0.18,
+          264,
+          1,
+          103,
+          1,
+          136,
+          1,
+          157
+        ],
+        [
+          1.6,
+          19.1,
+          30.3,
+          59.7,
+          0.27,
+          175,
+          1,
+          145,
+          1,
+          193,
+          1,
+          225
+        ],
+        [
+          1.6,
+          25.4,
+          40.3,
+          79.6,
+          0.36,
+          132,
+          1,
+          187,
+          1,
+          250,
+          1,
+          285
+        ],
+        [
+          1.6,
+          38.1,
+          60.5,
+          119,
+          0.54,
+          87.7,
+          1,
+          270,
+          1,
+          355,
+          1,
+          410
+        ],
+        [
+          1.6,
+          50.8,
+          80.6,
+          159,
+          0.72,
+          65.8,
+          1.01,
+          345,
+          1.01,
+          460,
+          1.01,
+          530
+        ],
+        [
+          3.2,
+          12.7,
+          40.3,
+          79.6,
+          0.36,
+          132,
+          1,
+          153,
+          1,
+          205,
+          1,
+          235
+        ],
+        [
+          3.2,
+          19.1,
+          60.5,
+          119,
+          0.54,
+          87.7,
+          1,
+          215,
+          1,
+          285,
+          1,
+          325
+        ],
+        [
+          3.2,
+          25.4,
+          80.6,
+          159,
+          0.72,
+          65.8,
+          1.01,
+          270,
+          1.01,
+          360,
+          1.01,
+          415
+        ],
+        [
+          3.2,
+          38.1,
+          121.3,
+          239,
+          1.08,
+          43.8,
+          1.01,
+          385,
+          1.01,
+          510,
+          1.01,
+          590
+        ],
+        [
+          3.2,
+          50.8,
+          161.3,
+          318,
+          1.44,
+          32.9,
+          1.02,
+          495,
+          1.02,
+          660,
+          1.02,
+          760
+        ],
+        [
+          3.2,
+          63.5,
+          201.3,
+          397,
+          1.8,
+          26.4,
+          1.02,
+          600,
+          1.02,
+          800,
+          1.02,
+          920
+        ],
+        [
+          3.2,
+          76.2,
+          241.9,
+          477,
+          2.16,
+          21.9,
+          1.03,
+          710,
+          1.03,
+          940,
+          1.03,
+          1100
+        ],
+        [
+          3.2,
+          88.9,
+          282.6,
+          558,
+          2.51,
+          18.8,
+          1.04,
+          810,
+          1.03,
+          1100,
+          1.03,
+          1250
+        ],
+        [
+          3.2,
+          101.6,
+          322.6,
+          636,
+          2.87,
+          16.5,
+          1.04,
+          910,
+          1.04,
+          1200,
+          1.04,
+          1400
+        ],
+        [
+          4.8,
+          12.7,
+          60.5,
+          119,
+          0.54,
+          87.7,
+          1,
+          195,
+          1,
+          260,
+          1,
+          300
+        ],
+        [
+          4.8,
+          19.1,
+          91,
+          179,
+          0.81,
+          58.4,
+          1.01,
+          270,
+          1.01,
+          360,
+          1.01,
+          415
+        ],
+        [
+          4.8,
+          25.4,
+          121.3,
+          239,
+          1.08,
+          43.8,
+          1.01,
+          340,
+          1.01,
+          455,
+          1.01,
+          520
+        ],
+        [
+          4.8,
+          38.1,
+          181.3,
+          358,
+          1.62,
+          29.3,
+          1.02,
+          480,
+          1.02,
+          630,
+          1.02,
+          730
+        ],
+        [
+          4.8,
+          50.8,
+          241.9,
+          477,
+          2.16,
+          21.9,
+          1.03,
+          610,
+          1.03,
+          810,
+          1.03,
+          940
+        ],
+        [
+          4.8,
+          63.5,
+          302.6,
+          597,
+          2.69,
+          17.5,
+          1.04,
+          740,
+          1.04,
+          980,
+          1.03,
+          1150
+        ],
+        [
+          4.8,
+          76.2,
+          362.6,
+          715,
+          3.23,
+          14.6,
+          1.05,
+          870,
+          1.05,
+          1150,
+          1.04,
+          1350
+        ],
+        [
+          4.8,
+          88.9,
+          423.2,
+          835,
+          3.76,
+          12.5,
+          1.07,
+          990,
+          1.06,
+          1300,
+          1.06,
+          1500
+        ],
+        [
+          4.8,
+          101.6,
+          483.9,
+          955,
+          4.32,
+          11,
+          1.09,
+          1100,
+          1.08,
+          1450,
+          1.07,
+          1700
+        ],
+        [
+          6.4,
+          12.7,
+          80.6,
+          159,
+          0.72,
+          65.8,
+          1.01,
+          240,
+          1.01,
+          315,
+          1.01,
+          360
+        ],
+        [
+          6.4,
+          19.1,
+          121.3,
+          239,
+          1.08,
+          43.8,
+          1.01,
+          320,
+          1.01,
+          425,
+          1.01,
+          490
+        ],
+        [
+          6.4,
+          25.4,
+          161.3,
+          318,
+          1.44,
+          32.9,
+          1.02,
+          400,
+          1.02,
+          530,
+          1.02,
+          620
+        ],
+        [
+          6.4,
+          38.1,
+          241.9,
+          477,
+          2.16,
+          21.9,
+          1.03,
+          560,
+          1.03,
+          740,
+          1.03,
+          860
+        ],
+        [
+          6.4,
+          50.8,
+          322.6,
+          637,
+          2.87,
+          16.5,
+          1.04,
+          710,
+          1.04,
+          940,
+          1.04,
+          1100
+        ],
+        [
+          6.4,
+          63.5,
+          403.2,
+          796,
+          3.59,
+          13.2,
+          1.06,
+          850,
+          1.06,
+          1150,
+          1.06,
+          1300
+        ],
+        [
+          6.4,
+          76.2,
+          483.9,
+          955,
+          4.32,
+          11,
+          1.08,
+          990,
+          1.08,
+          1300,
+          1.07,
+          1550
+        ],
+        [
+          6.4,
+          88.9,
+          564.5,
+          1110,
+          5.03,
+          9.4,
+          1.1,
+          1150,
+          1.09,
+          1500,
+          1.09,
+          1750
+        ],
+        [
+          6.4,
+          101.6,
+          645.2,
+          1270,
+          5.74,
+          8.23,
+          1.12,
+          1250,
+          1.11,
+          1700,
+          1.1,
+          1950
+        ],
+        [
+          6.4,
+          127,
+          806.5,
+          1590,
+          7.19,
+          6.58,
+          1.16,
+          1500,
+          1.15,
+          2000,
+          1.14,
+          2350
+        ],
+        [
+          6.4,
+          152.4,
+          967.7,
+          1910,
+          8.63,
+          5.49,
+          1.18,
+          1750,
+          1.17,
+          2350,
+          1.17,
+          2700
+        ],
+        [
+          9.5,
+          19.1,
+          181.3,
+          358,
+          1.62,
+          29.3,
+          1.02,
+          415,
+          1.02,
+          550,
+          1.02,
+          630
+        ],
+        [
+          9.5,
+          25.4,
+          241.9,
+          477,
+          2.16,
+          21.9,
+          1.03,
+          510,
+          1.03,
+          680,
+          1.03,
+          790
+        ],
+        [
+          9.5,
+          38.1,
+          362.6,
+          715,
+          3.23,
+          14.6,
+          1.05,
+          710,
+          1.04,
+          940,
+          1.04,
+          1100
+        ],
+        [
+          9.5,
+          50.8,
+          483.9,
+          955,
+          4.32,
+          11,
+          1.08,
+          880,
+          1.08,
+          1150,
+          1.07,
+          1350
+        ],
+        [
+          9.5,
+          63.5,
+          605.2,
+          1190,
+          5.39,
+          8.77,
+          1.12,
+          1050,
+          1.1,
+          1400,
+          1.09,
+          1600
+        ],
+        [
+          9.5,
+          76.2,
+          722.6,
+          1430,
+          6.47,
+          7.35,
+          1.15,
+          1200,
+          1.14,
+          1600,
+          1.13,
+          1850
+        ],
+        [
+          9.5,
+          88.9,
+          845.2,
+          1670,
+          7.53,
+          6.38,
+          1.18,
+          1350,
+          1.16,
+          1800,
+          1.15,
+          2100
+        ],
+        [
+          9.5,
+          101.6,
+          967.7,
+          1910,
+          8.63,
+          5.49,
+          1.2,
+          1500,
+          1.19,
+          2000,
+          1.18,
+          2350
+        ],
+        [
+          9.5,
+          127,
+          1212.9,
+          2390,
+          10.8,
+          4.38,
+          1.24,
+          1800,
+          1.23,
+          2400,
+          1.22,
+          2800
+        ],
+        [
+          9.5,
+          152.4,
+          1451.6,
+          2860,
+          12.93,
+          3.66,
+          1.27,
+          2100,
+          1.26,
+          2800,
+          1.24,
+          3250
+        ],
+        [
+          12.7,
+          25.4,
+          322.6,
+          637,
+          2.87,
+          16.5,
+          1.04,
+          620,
+          1.04,
+          820,
+          1.04,
+          940
+        ],
+        [
+          12.7,
+          38.1,
+          483.9,
+          955,
+          4.32,
+          11,
+          1.08,
+          830,
+          1.08,
+          1100,
+          1.07,
+          1250
+        ],
+        [
+          12.7,
+          50.8,
+          645.2,
+          1270,
+          5.74,
+          8.23,
+          1.12,
+          1000,
+          1.11,
+          1350,
+          1.1,
+          1550
+        ],
+        [
+          12.7,
+          63.5,
+          806.5,
+          1590,
+          7.19,
+          6.58,
+          1.16,
+          1200,
+          1.15,
+          1600,
+          1.14,
+          1850
+        ],
+        [
+          12.7,
+          76.2,
+          967.7,
+          1910,
+          8.63,
+          5.49,
+          1.2,
+          1400,
+          1.19,
+          1850,
+          1.18,
+          2150
+        ],
+        [
+          12.7,
+          88.9,
+          1129,
+          2230,
+          10.06,
+          4.7,
+          1.24,
+          1550,
+          1.22,
+          2100,
+          1.21,
+          2400
+        ],
+        [
+          12.7,
+          101.6,
+          1290.3,
+          2550,
+          11.5,
+          4.11,
+          1.26,
+          1700,
+          1.25,
+          2300,
+          1.24,
+          2650
+        ],
+        [
+          12.7,
+          127,
+          1612.9,
+          3180,
+          14.37,
+          3.29,
+          1.32,
+          2050,
+          1.3,
+          2750,
+          1.29,
+          3150
+        ],
+        [
+          12.7,
+          152.4,
+          1935.5,
+          3820,
+          17.26,
+          2.74,
+          1.36,
+          2400,
+          1.34,
+          3150,
+          1.33,
+          3650
+        ],
+        [
+          12.7,
+          203.2,
+          2580.6,
+          5090,
+          23.06,
+          2.06,
+          1.42,
+          3000,
+          1.4,
+          4000,
+          1.39,
+          4600
+        ]
+      ]
+    },
+    "resistor_color_code": {
+      "name": "电阻色码完整对照表(4环/5环/6环)",
+      "source": "pcb-tools.cn/resistor_color_code_calculator.php",
+      "color_map": [
+        {
+          "color": "黑色",
+          "color_en": "Black",
+          "value": 0,
+          "multiplier": 1,
+          "tolerance": null,
+          "temp_coeff": null
+        },
+        {
+          "color": "棕色",
+          "color_en": "Brown",
+          "value": 1,
+          "multiplier": 10,
+          "tolerance": "±1%",
+          "temp_coeff": 100
+        },
+        {
+          "color": "红色",
+          "color_en": "Red",
+          "value": 2,
+          "multiplier": 100,
+          "tolerance": "±2%",
+          "temp_coeff": 50
+        },
+        {
+          "color": "橙色",
+          "color_en": "Orange",
+          "value": 3,
+          "multiplier": 1000,
+          "tolerance": null,
+          "temp_coeff": 15
+        },
+        {
+          "color": "黄色",
+          "color_en": "Yellow",
+          "value": 4,
+          "multiplier": 10000,
+          "tolerance": null,
+          "temp_coeff": 25
+        },
+        {
+          "color": "绿色",
+          "color_en": "Green",
+          "value": 5,
+          "multiplier": 100000,
+          "tolerance": "±0.5%",
+          "temp_coeff": 20
+        },
+        {
+          "color": "蓝色",
+          "color_en": "Blue",
+          "value": 6,
+          "multiplier": 1000000,
+          "tolerance": "±0.25%",
+          "temp_coeff": 10
+        },
+        {
+          "color": "紫色",
+          "color_en": "Violet",
+          "value": 7,
+          "multiplier": 10000000,
+          "tolerance": "±0.1%",
+          "temp_coeff": 5
+        },
+        {
+          "color": "灰色",
+          "color_en": "Gray",
+          "value": 8,
+          "multiplier": 100000000,
+          "tolerance": "±0.05%",
+          "temp_coeff": 1
+        },
+        {
+          "color": "白色",
+          "color_en": "White",
+          "value": 9,
+          "multiplier": 1000000000,
+          "tolerance": null,
+          "temp_coeff": null
+        },
+        {
+          "color": "金色",
+          "color_en": "Gold",
+          "value": null,
+          "multiplier": 0.1,
+          "tolerance": "±5%",
+          "temp_coeff": null
+        },
+        {
+          "color": "银色",
+          "color_en": "Silver",
+          "value": null,
+          "multiplier": 0.01,
+          "tolerance": "±10%",
+          "temp_coeff": null
+        }
+      ],
+      "reading_rule": {
+        "4环": "环1(数字)+环2(数字)+环3(倍率)+环4(误差), 从金/银色环反方向开始读",
+        "5环": "环1+环2+环3(三位有效数字)+环4(倍率)+环5(误差), 间距大的方向为误差环",
+        "6环": "同5环, 第6环为温度系数(ppm/°C)"
+      }
+    }
+  }
+}

@@ -1,0 +1,107 @@
+{
+  "name": "电阻色码完整对照表(4环/5环/6环)",
+  "source": "pcb-tools.cn/resistor_color_code_calculator.php",
+  "color_map": [
+    {
+      "color": "黑色",
+      "color_en": "Black",
+      "value": 0,
+      "multiplier": 1,
+      "tolerance": null,
+      "temp_coeff": null
+    },
+    {
+      "color": "棕色",
+      "color_en": "Brown",
+      "value": 1,
+      "multiplier": 10,
+      "tolerance": "±1%",
+      "temp_coeff": 100
+    },
+    {
+      "color": "红色",
+      "color_en": "Red",
+      "value": 2,
+      "multiplier": 100,
+      "tolerance": "±2%",
+      "temp_coeff": 50
+    },
+    {
+      "color": "橙色",
+      "color_en": "Orange",
+      "value": 3,
+      "multiplier": 1000,
+      "tolerance": null,
+      "temp_coeff": 15
+    },
+    {
+      "color": "黄色",
+      "color_en": "Yellow",
+      "value": 4,
+      "multiplier": 10000,
+      "tolerance": null,
+      "temp_coeff": 25
+    },
+    {
+      "color": "绿色",
+      "color_en": "Green",
+      "value": 5,
+      "multiplier": 100000,
+      "tolerance": "±0.5%",
+      "temp_coeff": 20
+    },
+    {
+      "color": "蓝色",
+      "color_en": "Blue",
+      "value": 6,
+      "multiplier": 1000000,
+      "tolerance": "±0.25%",
+      "temp_coeff": 10
+    },
+    {
+      "color": "紫色",
+      "color_en": "Violet",
+      "value": 7,
+      "multiplier": 10000000,
+      "tolerance": "±0.1%",
+      "temp_coeff": 5
+    },
+    {
+      "color": "灰色",
+      "color_en": "Gray",
+      "value": 8,
+      "multiplier": 100000000,
+      "tolerance": "±0.05%",
+      "temp_coeff": 1
+    },
+    {
+      "color": "白色",
+      "color_en": "White",
+      "value": 9,
+      "multiplier": 1000000000,
+      "tolerance": null,
+      "temp_coeff": null
+    },
+    {
+      "color": "金色",
+      "color_en": "Gold",
+      "value": null,
+      "multiplier": 0.1,
+      "tolerance": "±5%",
+      "temp_coeff": null
+    },
+    {
+      "color": "银色",
+      "color_en": "Silver",
+      "value": null,
+      "multiplier": 0.01,
+      "tolerance": "±10%",
+      "temp_coeff": null
+    }
+  ],
+  "reading_rule": {
+    "4环": "环1(数字)+环2(数字)+环3(倍率)+环4(误差), 从金/银色环反方向开始读",
+    "5环": "环1+环2+环3(三位有效数字)+环4(倍率)+环5(误差), 间距大的方向为误差环",
+    "6环": "同5环, 第6环为温度系数(ppm/°C)"
+  }
+}
