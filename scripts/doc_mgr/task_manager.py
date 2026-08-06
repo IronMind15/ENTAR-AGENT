@@ -282,11 +282,18 @@ class TaskManager:
 # ===== 全局单例 =====
 
 _manager: Optional[TaskManager] = None
+_manager_lock = threading.Lock()
 
 
 def get_manager() -> TaskManager:
-    """获取全局 TaskManager 单例"""
+    """获取全局 TaskManager 单例（线程安全双检锁）
+
+    v1.6.0 起消息处理放线程池，首次调用可能并发创建线程池
+    （重复 ThreadPoolExecutor 会泄漏线程），加锁保护（v1.6.1）。
+    """
     global _manager
     if _manager is None:
-        _manager = TaskManager()
+        with _manager_lock:
+            if _manager is None:
+                _manager = TaskManager()
     return _manager

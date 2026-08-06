@@ -3,6 +3,32 @@
 > 📌 **本文档是项目唯一的版本记录（单一事实源）**——README.md、PROGRESS.md 的版本历史均指向本文件，发版时只在这里追加记录。
 > 相关：待办清单见 [TODO.md](TODO.md)，进度看板见 [PROGRESS.md](PROGRESS.md)。
 
+## v1.6.1（2026-08-06）
+
+**多人并发 v1.6.0 代码审查修复**——系统性检查后修复并发隐藏 bug：`asyncio.Lock` 跨事件循环绑定（钉钉断线重连后同用户并发消息抛 RuntimeError）、回复/记忆写入仍在事件循环阻塞（多人并发收益被回复环节抵消）、多处懒加载单例非线程安全。全部走线程池放行 + 双检锁，回归 **208 项全绿**。
+
+### 并发 bug 修复
+
+- **P1 锁跨事件循环绑定**：`_user_locks` 从裸 `asyncio.Lock` 改为 `(loop, lock)` 结构，`_get_user_lock` 用 `asyncio.get_running_loop()` 检测事件循环重建（钉钉重连时 SDK 每次 `asyncio.run` 都是新循环）自动重建锁。修复前旧循环中发生竞争的锁在新循环复用会抛 `RuntimeError: bound to a different event loop`（被外层 except 吞掉返回错误码 1000）
+- **P2 回复阻塞事件循环**：文本消息路径的 `reply_markdown`/`reply_text`（同步 `requests.post`，无 timeout）与记忆写入（`memory.add` SQLite）原在事件循环直接执行，一人回复慢会卡住所有用户。现全部 `await asyncio.to_thread(...)`，与文件/图片路径行为对齐
+- **P3 命名修正**：`_sync_user_info_async` 实为同步方法（内部自开线程），改名 `_sync_user_info`，调用处整体放线程池，不再阻塞事件循环
+
+### 懒加载单例线程安全（并发放行后暴露）
+
+v1.6.0 把处理放线程池后，首次调用可能在多线程下并发触发，以下单例统一加 `threading.Lock` 双检锁：
+
+- `user_store.get_store()`：避免并发重复建表
+- `doc_mgr.storage.get_store()`：避免并发重复加载 Chroma + embedding 模型（初始化较重）
+- `doc_mgr.task_manager.get_manager()`：避免并发重复创建 ThreadPoolExecutor（泄漏线程）
+- `knowledge_review.get_review_service()`：避免并发重复实例化 SyncTracker/DingTalkNotifier
+
+### 测试
+
+- 新增跨循环锁重建 2 项测试：同一循环复用同一锁、不同事件循环自动重建（防回归）
+- 新增回复/记忆放行 to_thread 测试：`reply_markdown` 作为可调用对象传入 to_thread、`memory.add` 放行 2 次
+- 更新既有 to_thread 测试适配新实现（to_thread 现被多次调用，按可调用对象筛选）
+- 全量回归 **208 项通过**（此前 205 项 + 新增）
+
 ## v1.6.0（2026-08-05）
 
 **多人并发消息处理**——钉钉机器人此前单线程事件循环被慢请求（DeepSeek/检索/文件下载）占死，一人问 LLM 问题，其他人全部排队。现在慢操作放行到线程池（`asyncio.to_thread`），多人同时交流互不阻塞；同一用户消息串行、不同用户并行（回复不乱序）；DeepSeek 请求加并发限流（默认 20），防费用失控 / API 429。

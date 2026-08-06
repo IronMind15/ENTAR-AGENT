@@ -395,10 +395,15 @@ class ChromaStore(VectorStore):
 
 # ===== 全局单例 =====
 _store: Optional[VectorStore] = None
+_store_lock = threading.Lock()
 
 
 def get_store(store_type: str = "chroma") -> VectorStore:
-    """获取存储实例（单例，整个应用共享同一个 store）
+    """获取存储实例（单例，线程安全双检锁）
+
+    整个应用共享同一个 store。v1.6.0 起消息处理放线程池，
+    首次调用可能在多线程下并发加载 ChromaStore（含 embedding 模型，
+    初始化较重），加锁避免重复实例化（v1.6.1）。
 
     Args:
         store_type: 存储类型，当前仅支持 "chroma"
@@ -408,8 +413,10 @@ def get_store(store_type: str = "chroma") -> VectorStore:
     """
     global _store
     if _store is None:
-        if store_type == "chroma":
-            _store = ChromaStore()
-        else:
-            raise ValueError(f"不支持的存储类型: {store_type}")
+        with _store_lock:
+            if _store is None:
+                if store_type == "chroma":
+                    _store = ChromaStore()
+                else:
+                    raise ValueError(f"不支持的存储类型: {store_type}")
     return _store

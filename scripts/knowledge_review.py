@@ -346,12 +346,20 @@ class KnowledgeReviewService:
 
 
 _service: Optional[KnowledgeReviewService] = None
+_service_lock = threading.Lock()
 
 
 def get_review_service() -> KnowledgeReviewService:
+    """获取全局审核服务实例（单例，线程安全双检锁）
+
+    v1.6.0 起消息处理放线程池，首次调用可能并发创建
+    SyncTracker + DingTalkNotifier，加锁避免重复实例化（v1.6.1）。
+    """
     global _service
     if _service is None:
-        _service = KnowledgeReviewService()
+        with _service_lock:
+            if _service is None:
+                _service = KnowledgeReviewService()
     return _service
 
 

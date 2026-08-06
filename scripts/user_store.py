@@ -1047,13 +1047,20 @@ class SQLiteUserStore(UserStore):
 
 # ===== 全局单例 =====
 _store: Optional[SQLiteUserStore] = None
+_store_lock = threading.Lock()
 
 
 def get_store() -> SQLiteUserStore:
-    """获取全局用户存储实例（单例）"""
+    """获取全局用户存储实例（单例，线程安全双检锁）
+
+    v1.6.0 起消息处理放线程池，首次调用可能在多线程下并发，
+    加锁避免重复建表/重复实例化（v1.6.1）。
+    """
     global _store
     if _store is None:
-        _store = SQLiteUserStore()
+        with _store_lock:
+            if _store is None:
+                _store = SQLiteUserStore()
     return _store
 
 

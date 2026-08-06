@@ -71,8 +71,11 @@ def _is_fast_operation(text: str) -> bool:
 
 
 # 每用户处理锁：同一用户消息串行处理（回复不乱序），不同用户各自并行（v1.6.0）
+# 存 (loop, lock) 而非裸 lock：钉钉断线重连会重建事件循环（SDK start_forever
+# 每次 asyncio.run 都是新循环），旧锁若在旧循环中发生过竞争会绑定旧循环，
+# 新循环复用会抛 "bound to a different event loop" —— 按循环存锁，循环变化自动重建（v1.6.1）
 # 内部工具用户量小，锁字典不主动清理（单个 asyncio.Lock 内存可忽略）
-_user_locks: dict[str, asyncio.Lock] = {}
+_user_locks: dict[str, tuple[asyncio.AbstractEventLoop, asyncio.Lock]] = {}
 
 
 class ErrorQueryHandler(ChatbotHandler):
@@ -96,8 +99,10 @@ class ErrorQueryHandler(ChatbotHandler):
         corp_id = str(bot_msg.sender_corp_id or "")
 
         # ---- 后台同步用户信息（首次或 24h 过期后自动更新） ----
+        # 方法内含 SQLite 查询，放线程池避免阻塞事件循环（v1.6.1）
         try:
-            self._sync_user_info_async(user_id, staff_id, corp_id, sender)
+            await asyncio.to_thread(
+                self._sync_user_info, user_id, staff_id, corp_id, sender)
         except Exception as sync_err:
             logger.warning(f"同步用户信息异常（不影响主流程）: {sync_err}")
 
@@ -131,7 +136,8 @@ class ErrorQueryHandler(ChatbotHandler):
         # 慢操作（走 Agent/LLM）先回提示，避免用户干等
         if not is_fast:
             try:
-                self.reply_text(PENDING_HINT_TEXT, bot_msg)
+                # reply_text 是同步网络请求（requests.post），放线程池不阻塞事件循环（v1.6.1）
+                await asyncio.to_thread(self.reply_text, PENDING_HINT_TEXT, bot_msg)
                 logger.info(f"已发送处理提示: {text[:40]}")
             except Exception as hint_err:
                 logger.warning(f"发送处理提示失败: {hint_err}")
@@ -148,26 +154,28 @@ class ErrorQueryHandler(ChatbotHandler):
 
                 answer = result.get("answer", "") or "抱歉，我没有找到相关信息。"
 
-                # 回复 Markdown
-                self.reply_markdown(
-                    title="恩特小助手",
-                    text=answer,
-                    incoming_message=bot_msg,
+                # 回复 Markdown（reply_* 是同步 requests.post，放线程池避免阻塞事件循环；v1.6.1）
+                await asyncio.to_thread(
+                    self.reply_markdown,
+                    "恩特小助手",
+                    answer,
+                    bot_msg,
                 )
                 logger.info(f"回复成功: {answer[:50]}...")
 
-                # 记录到会话记忆
+                # 记录到会话记忆（SQLite 写入，放线程池与处理对齐；v1.6.1）
                 try:
                     from skills import memory
-                    memory.add(user_id, "user", text)
-                    memory.add(user_id, "assistant", answer)
+                    await asyncio.to_thread(memory.add, user_id, "user", text)
+                    await asyncio.to_thread(memory.add, user_id, "assistant", answer)
                 except Exception as mem_err:
                     logger.warning(f"记录记忆失败: {mem_err}")
 
         except Exception as e:
             logger.exception(f"处理钉钉消息异常: {e}")
             try:
-                self.reply_text(
+                await asyncio.to_thread(
+                    self.reply_text,
                     ERROR_MESSAGE.format(code=ERROR_CODE_INTERNAL),
                     bot_msg,
                 )
@@ -177,15 +185,22 @@ class ErrorQueryHandler(ChatbotHandler):
         return AckMessage.STATUS_OK, "ok"
 
     def _get_user_lock(self, user_id: str) -> asyncio.Lock:
-        """获取该用户的处理锁（懒创建）
+        """获取该用户的处理锁（懒创建，随事件循环重建）
 
         同一用户消息串行处理（回复不乱序），不同用户各自独立（并行）。
         锁在事件循环内使用，仅阻塞同用户后续消息，不影响其他用户并发。
+
+        关键点：asyncio.Lock 在发生竞争（有 waiter）时才绑定当前事件循环。
+        钉钉断线重连后 SDK 用全新事件循环，若直接复用旧锁会在竞争时抛
+        RuntimeError "bound to a different event loop"。因此按 (loop, lock)
+        存储：检测到当前运行循环与锁绑定循环不一致时自动重建锁。
         """
-        lock = _user_locks.get(user_id)
-        if lock is None:
-            lock = asyncio.Lock()
-            _user_locks[user_id] = lock
+        loop = asyncio.get_running_loop()
+        entry = _user_locks.get(user_id)
+        if entry is not None and entry[0] is loop:
+            return entry[1]
+        lock = asyncio.Lock()
+        _user_locks[user_id] = (loop, lock)
         return lock
 
     def _process_text(self, text: str, user_id: str, staff_id: str) -> dict:
@@ -355,10 +370,12 @@ class ErrorQueryHandler(ChatbotHandler):
 
         return AckMessage.STATUS_OK, "ok"
 
-    def _sync_user_info_async(self, user_id: str, staff_id: str, corp_id: str, nick: str = ""):
-        """后台线程同步钉钉用户信息（不阻塞消息处理）
+    def _sync_user_info(self, user_id: str, staff_id: str, corp_id: str, nick: str = ""):
+        """同步钉钉用户信息（同步方法，由调用方放线程池执行）
 
         仅首次或超过 24h 才调用 API，通过 user_store 缓存。
+        注意：本方法为普通同步方法（非 async），内部已自带后台线程做 API 同步；
+        v1.6.1 起调用方用 asyncio.to_thread 放行外层 SQLite 查询，不再阻塞事件循环。
         """
         if not user_id:
             return
@@ -415,7 +432,7 @@ class ErrorQueryHandler(ChatbotHandler):
             logger.info(f"已启动钉钉同步: user={user_id[:20]}... staff={staff_id}")
 
         except Exception as e:
-            logger.warning(f"_sync_user_info_async 异常: {e}")
+            logger.warning(f"_sync_user_info 异常: {e}")
 
 
 def create_bot() -> DingTalkStreamClient:
