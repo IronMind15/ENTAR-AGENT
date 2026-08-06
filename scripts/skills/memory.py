@@ -93,12 +93,15 @@ def get_context(user_id: str) -> list[dict]:
     return _memories.get(user_id, [])
 
 
-def format_context(user_id: str, max_content: int = 200, total_max: int = 12000) -> str:
+def format_context(user_id: str, max_content: int = 200,
+                   total_max: int | None = None) -> str:
     """格式化最近对话为文字（供拼进 system prompt）
 
     max_content: 单条截断长度；None 表示单条不截断（存储已完整，注入按总预算压缩）
-    total_max: 总字数预算，超出时从最早的对话开始丢弃（保护上下文窗口）
+    total_max: 总字数预算，超出时从最早的对话开始丢弃（保护上下文窗口）；None 用配置 MEMORY_BUDGET_TOKENS
     """
+    if total_max is None:
+        total_max = int(_get_config_flag("MEMORY_BUDGET_TOKENS", 20000))
     if _get_backend() == "sqlite":
         try:
             store = _get_sqlite_store()
@@ -143,7 +146,8 @@ def _get_config_flag(name, default):
 def _maybe_schedule_compress(user_id: str):
     """写入后检查是否触发异步压缩（非阻塞、防抖）
 
-    条件：长期记忆开关开启 + 该用户不在压缩中 + 未压缩消息超过阈值。
+    条件：长期记忆开关开启 + 该用户不在压缩中 + 滚动点之前有未压缩对话
+    （即窗口批量滚动后「被释放的旧轮」待压缩）。
     压缩在 task_manager 后台线程执行，不阻塞回复。
     """
     try:
@@ -153,8 +157,8 @@ def _maybe_schedule_compress(user_id: str):
         if memory_compress.is_pending(user_id):
             return
         store = _get_sqlite_store()
-        max_session_rounds = int(_get_config_flag("MAX_SESSION_ROUNDS", 12))
-        if store.count_uncompressed(user_id) <= max_session_rounds * 2:
+        # 触发条件：滚动点前有未压缩对话（释放后待压缩的旧轮）
+        if not store.has_outside_uncompressed(user_id):
             return
         if not memory_compress.add_pending(user_id):
             return

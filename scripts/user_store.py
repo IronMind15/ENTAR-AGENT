@@ -55,11 +55,11 @@ class UserStore(ABC):
 
     @abstractmethod
     def format_context(self, user_id: str, max_rounds: int = 5,
-                       max_content: int = 200, total_max: int = 12000) -> str:
+                       max_content: int = 200, total_max: int | None = None) -> str:
         """格式化最近对话为文字（供拼进 system prompt）
 
         max_content: 单条截断；None 不截断单条
-        total_max: 总字数预算，超出从最早丢弃
+        total_max: 总字数预算，超出从最早丢弃；None 用配置 MEMORY_BUDGET_TOKENS
         """
         ...
 
@@ -254,6 +254,13 @@ class SQLiteUserStore(UserStore):
                 updated_at  TEXT DEFAULT (datetime('now','localtime')),
                 FOREIGN KEY (user_id) REFERENCES users(user_id)
             );
+
+            CREATE TABLE IF NOT EXISTS user_window (
+                user_id    TEXT PRIMARY KEY,
+                start_id   INTEGER DEFAULT 0,
+                updated_at TEXT DEFAULT (datetime('now','localtime')),
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+            );
         """)
         conn.commit()
         # 迁移：给旧表加 center 字段
@@ -335,13 +342,80 @@ class SQLiteUserStore(UserStore):
             logger.warning(f"读取对话记录失败: {e}")
             return []
 
+    # ── 窗口滚动（批量释放：窗口 N 轮 + 释放 1/2） ──────────
+
+    def get_window_start(self, user_id: str) -> int:
+        """当前窗口起点（滚动点）id；0 = 从未滚动，取全部"""
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT start_id FROM user_window WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        return row["start_id"] if row else 0
+
+    def set_window_start(self, user_id: str, start_id: int):
+        """更新窗口起点（批量滚动后调用）"""
+        conn = self._get_conn()
+        with self._lock:
+            conn.execute(
+                "INSERT INTO user_window (user_id, start_id, updated_at) "
+                "VALUES (?, ?, datetime('now','localtime')) "
+                "ON CONFLICT(user_id) DO UPDATE SET "
+                "start_id = excluded.start_id, updated_at = excluded.updated_at",
+                (user_id, start_id),
+            )
+            conn.commit()
+
+    def get_window_context(self, user_id: str, max_rounds: int) -> list[dict]:
+        """从窗口起点取最近对话，满 max_rounds 轮时批量滚动（释放前一半）
+
+        返回正序 [{"role","content"}]，供 agent 直接作为历史轮次回放。
+        滚动点持久化 → 两次滚动之间 messages 前缀稳定（KV Cache 友好），
+        而非「每轮取最新 N 轮」的每轮滑动（那会让前缀每轮断裂）。
+        """
+        conn = self._get_conn()
+        max_items = max_rounds * 2
+        keep_items = max_items // 2  # 释放 1/2 → 保留最近一半
+        start_id = self.get_window_start(user_id)
+        try:
+            rows = conn.execute(
+                "SELECT id, role, content FROM conversations "
+                "WHERE user_id = ? AND id >= ? AND compressed = 0 "
+                "ORDER BY id DESC LIMIT ?",
+                (user_id, start_id, max_items),
+            ).fetchall()
+            rows = list(reversed(rows))
+            if len(rows) >= max_items:
+                # 窗口满 → 批量滚动：保留最近 keep_items 条，滚动点前移到其最早 id
+                keep = rows[-keep_items:]
+                self.set_window_start(user_id, keep[0][0])
+                rows = keep
+            return [{"role": r[1], "content": r[2]} for r in rows]
+        except Exception as e:
+            logger.warning(f"读取窗口对话失败: {e}")
+            return []
+
+    def has_outside_uncompressed(self, user_id: str) -> bool:
+        """滚动点之前（窗口外）是否有未压缩对话 —— 决定是否触发压缩"""
+        conn = self._get_conn()
+        start_id = self.get_window_start(user_id)
+        if start_id <= 0:
+            return False
+        row = conn.execute(
+            "SELECT 1 FROM conversations "
+            "WHERE user_id = ? AND compressed = 0 AND id < ? LIMIT 1",
+            (user_id, start_id),
+        ).fetchone()
+        return row is not None
+
     def format_context(self, user_id: str, max_rounds: int = 5,
-                       max_content: int = 200, total_max: int = 12000) -> str:
+                       max_content: int = 200, total_max: int | None = None) -> str:
         """格式化最近对话为文字（供拼进 system prompt）
 
         max_content: 单条截断；None 不截断单条
-        total_max: 总字数预算，超出时从最早的对话开始丢弃（保护上下文窗口）
+        total_max: 总字数预算，超出时从最早的对话开始丢弃（保护上下文窗口）；None 用配置 MEMORY_BUDGET_TOKENS
         """
+        if total_max is None:
+            total_max = getattr(__import__("config"), "MEMORY_BUDGET_TOKENS", 20000)
         context = self.get_context(user_id, max_rounds)
         if not context:
             return ""
@@ -407,13 +481,21 @@ class SQLiteUserStore(UserStore):
             return 0
 
     def get_compress_batch(self, user_id: str, batch: int) -> list[dict]:
-        """获取最旧 batch 条未压缩对话（id 升序，供压缩任务）"""
+        """获取「滚动点之前」最旧 batch 条未压缩对话（id 升序，供压缩任务）
+
+        滚动点 = get_window_context 批量滚动后保留的窗口起点；
+        滚动点之前的未压缩对话即「已被移出短期窗口」的部分，压缩它们不会
+        触碰窗口内对话（避免短期记忆被清空）。未滚动过（start=0）则无批次。
+        """
         conn = self._get_conn()
         try:
+            start_id = self.get_window_start(user_id)
+            if start_id <= 0:
+                return []
             rows = conn.execute(
                 "SELECT id, role, content, session_id FROM conversations "
-                "WHERE user_id = ? AND compressed = 0 ORDER BY id ASC LIMIT ?",
-                (user_id, batch),
+                "WHERE user_id = ? AND compressed = 0 AND id < ? ORDER BY id ASC LIMIT ?",
+                (user_id, start_id, batch),
             ).fetchall()
             return [
                 {"id": r["id"], "role": r["role"], "content": r["content"],
@@ -1079,7 +1161,7 @@ def get_context(user_id: str, max_rounds: int = 5) -> list[dict]:
 
 
 def format_context(user_id: str, max_rounds: int = 5,
-                   max_content: int = 200, total_max: int = 12000) -> str:
+                   max_content: int = 200, total_max: int | None = None) -> str:
     """兼容 memory.format_context() 接口"""
     return get_store().format_context(user_id, max_rounds, max_content, total_max)
 

@@ -62,8 +62,13 @@ def _get_cfg(name, default):
 
 # ===== LLM 调用 =====
 
-def _call_llm(messages: list[dict], max_tokens: int = 600) -> str | None:
-    """极简 LLM 调用（DeepSeek，不带 thinking，1 次重试 + 指数退避）"""
+def _call_llm(messages: list[dict], max_tokens: int = 1000) -> str | None:
+    """极简 LLM 调用（DeepSeek，关闭 thinking，1 次重试 + 指数退避）
+
+    必须关闭 thinking：V4 是思考型模型，压缩长对话时思考 token 会占满
+    max_tokens 把 content 挤空（此前长期记忆一直「无有效输出」的根因）。
+    压缩是结构化 JSON 任务，不需要思考，关闭后稳定返回 content。
+    """
     try:
         import httpx
         import importlib
@@ -82,6 +87,7 @@ def _call_llm(messages: list[dict], max_tokens: int = 600) -> str | None:
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": 0.3,
+            "thinking": {"type": "disabled"},  # 关思考，防 content 被挤空
         }
         for attempt in range(2):
             try:
@@ -193,12 +199,12 @@ def compress_user_history(user_id: str) -> dict:
     parsed = _parse_llm_json(result)
 
     if not parsed["facts"] and not parsed["summary"]:
-        # LLM 无有效输出：仍标记已压缩，避免同一批反复调 LLM 卡住
-        store.mark_compressed([m["id"] for m in batch])
-        logger.info(
-            f"[记忆压缩] 用户 {user_id}: LLM 无有效输出，直接标记 {len(batch)} 条"
+        # LLM 无有效输出：不标记 compressed，批次保留待下次调度重试，
+        # 避免「压缩失败却标记完成」导致旧对话被静默丢弃
+        logger.warning(
+            f"[记忆压缩] 用户 {user_id}: LLM 无有效输出，批次保留待重试"
         )
-        return {"compressed": len(batch), "facts": 0, "summary": ""}
+        return {"compressed": 0, "facts": 0, "summary": "", "reason": "llm_no_output"}
 
     # 批次全部来自同一会话时记录来源，便于追溯
     source_session = ""

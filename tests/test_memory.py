@@ -64,16 +64,20 @@ class TestShortWindow(MemoryTestBase):
         self.assertEqual(ctx[0]["content"], "q25")  # 正序，只含最近窗口
 
     def test_compressed_excluded(self):
-        self.store.add_memory("u1", "user", "旧消息")
-        self.store.add_memory("u1", "assistant", "旧回答")
-        self.store.add_memory("u1", "user", "新消息")
-        self.store.add_memory("u1", "assistant", "新回答")
-        batch = self.store.get_compress_batch("u1", 2)
-        self.assertEqual(len(batch), 2)
+        # 26 轮 = 52 条消息，超过窗口 20 轮（40 条）
+        for i in range(26):
+            self.store.add_memory("u1", "user", f"旧{i}")
+            self.store.add_memory("u1", "assistant", f"旧答{i}")
+        # 首次取窗口触发批量滚动：52 > 40 → 保留最近 20 条（释放 1/2）
+        win = self.store.get_window_context("u1", 20)
+        self.assertEqual(len(win), 20)
+        # 滚动后窗口外有 32 条未压缩，压缩只取最旧 4 条
+        batch = self.store.get_compress_batch("u1", 4)
+        self.assertEqual(len(batch), 4)
         self.store.mark_compressed([b["id"] for b in batch])
-        ctx = self.store.get_context("u1", 5)
-        self.assertEqual([m["content"] for m in ctx], ["新消息", "新回答"])
-        self.assertEqual(self.store.count_uncompressed("u1"), 2)
+        # 窗口内不受影响：再取窗口仍 20 条
+        win2 = self.store.get_window_context("u1", 20)
+        self.assertEqual(len(win2), 20)
 
 
 class TestSessionId(MemoryTestBase):
@@ -201,17 +205,19 @@ class TestParseJson(MemoryTestBase):
 class TestCompressFlow(MemoryTestBase):
     def test_compress_mocked(self):
         from skills import memory_compress as mc
-        for i in range(5):
+        for i in range(26):  # 26 轮 = 52 条 > 窗口 20 轮（40 条）
             self.store.add_memory("u2", "user", f"问题{i}")
             self.store.add_memory("u2", "assistant", f"回答{i}")
+        self.store.get_window_context("u2", 20)  # 触发批量滚动
         with mock.patch(
             "skills.memory_compress._call_llm",
             return_value='{"facts": ["负责项目A", "型号B"], "summary": "问了5轮"}',
         ) as m:
             res = mc.compress_user_history("u2")
-        self.assertEqual(res["compressed"], 10)
+        # 压缩窗口外（滚动点之前）最旧 COMPRESS_BATCH_ROUNDS*2=20 条
+        self.assertEqual(res["compressed"], 20)
         self.assertEqual(res["facts"], 2)
-        self.assertEqual(self.store.count_uncompressed("u2"), 0)
+        self.assertEqual(self.store.count_uncompressed("u2"), 32)  # 52-20
         items = self.store.get_long_term("u2")
         self.assertEqual(len(items), 3)  # 2 facts + 1 summary
         m.assert_called_once()
@@ -223,15 +229,17 @@ class TestCompressFlow(MemoryTestBase):
         self.assertEqual(res["compressed"], 0)
         m.assert_not_called()
 
-    def test_compress_llm_failure_marks_compressed(self):
+    def test_compress_llm_failure_keeps_batch(self):
         from skills import memory_compress as mc
-        self.store.add_memory("u2", "user", "q")
-        self.store.add_memory("u2", "assistant", "a")
+        for i in range(26):  # 26 轮 = 52 条 > 窗口 40 条
+            self.store.add_memory("u2", "user", f"q{i}")
+            self.store.add_memory("u2", "assistant", f"a{i}")
+        self.store.get_window_context("u2", 20)  # 触发滚动 → 窗口外有批次
         with mock.patch("skills.memory_compress._call_llm", return_value=None):
             res = mc.compress_user_history("u2")
-        # LLM 无有效输出仍标记已压缩，避免同一批反复调 LLM 卡住
-        self.assertEqual(res["compressed"], 2)
-        self.assertEqual(self.store.count_uncompressed("u2"), 0)
+        # LLM 无有效输出时不标记 compressed，批次保留待下次重试（避免静默丢记忆）
+        self.assertEqual(res["compressed"], 0)
+        self.assertEqual(self.store.count_uncompressed("u2"), 52)
         self.assertEqual(self.store.get_long_term_stats("u2")["total"], 0)
 
 
@@ -257,21 +265,18 @@ class TestSchedule(MemoryTestBase):
             gm.assert_not_called()
 
     def test_schedule_trigger(self):
-        import config
         from skills import memory
-        old_rounds = config.MAX_SESSION_ROUNDS
-        config.MAX_SESSION_ROUNDS = 1  # 阈值 = 2 条消息
-        try:
-            for i in range(3):
-                self.store.add_memory("u1", "user", f"q{i}")
-            with mock.patch(
-                "skills.memory_compress.add_pending", return_value=True
-            ) as ap, mock.patch("doc_mgr.task_manager.get_manager") as gm:
-                memory._maybe_schedule_compress("u1")
-                ap.assert_called_once_with("u1")
-                gm.return_value.run_async.assert_called_once()
-        finally:
-            config.MAX_SESSION_ROUNDS = old_rounds
+        # 26 轮 = 52 条 > 窗口 20 轮（40 条），触发滚动后窗口外有未压缩
+        for i in range(26):
+            self.store.add_memory("u1", "user", f"q{i}")
+            self.store.add_memory("u1", "assistant", f"a{i}")
+        self.store.get_window_context("u1", 20)  # 触发批量滚动
+        with mock.patch(
+            "skills.memory_compress.add_pending", return_value=True
+        ) as ap, mock.patch("doc_mgr.task_manager.get_manager") as gm:
+            memory._maybe_schedule_compress("u1")
+            ap.assert_called_once_with("u1")
+            gm.return_value.run_async.assert_called_once()
 
 
 class TestFormatLongTerm(MemoryTestBase):
@@ -312,7 +317,7 @@ class TestBackfill(MemoryTestBase):
                 updated_at TEXT
             );
         """)
-        for i in range(20):
+        for i in range(44):
             conn.execute(
                 "INSERT INTO conversations (user_id, role, content) "
                 "VALUES ('old', 'user', ?)", (f"旧消息{i}",)
@@ -336,8 +341,8 @@ class TestBackfill(MemoryTestBase):
             "AND name='long_term_memories'"
         ).fetchone()
         c.close()
-        self.assertEqual(keep, 16)  # 窗口保留
-        self.assertEqual(done, 4)   # 其余标记已压缩
+        self.assertEqual(keep, 40)  # 窗口 20 轮 = 40 条保留
+        self.assertEqual(done, 4)   # 其余 4 条标记已压缩
         self.assertTrue(has_table)
 
 

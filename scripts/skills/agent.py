@@ -21,7 +21,7 @@ if _PARENT not in sys.path:
 
 import httpx
 
-from config import DEEPSEEK_API_KEY, MAX_CONCURRENT_LLM
+from config import DEEPSEEK_API_KEY, MAX_CONCURRENT_LLM, MAX_CONTEXT_ROUNDS
 from skills import BaseSkill, register
 from tools import get_tool_definitions, execute_tool as _execute_registered_tool
 
@@ -105,7 +105,14 @@ def _call_deepseek(
             if r.status_code == 200:
                 data = r.json()
                 if data.get("choices"):
-                    logger.info(f"    DeepSeek 响应 {time.time() - _t0:.1f}s（本轮回合）")
+                    # 记录缓存命中（DeepSeek 前缀缓存观测，验证上下文工程收益）
+                    usage = data.get("usage", {}) or {}
+                    hit = int(usage.get("prompt_cache_hit_tokens", 0) or 0)
+                    miss = int(usage.get("prompt_cache_miss_tokens", 0) or 0)
+                    hit_rate = (hit / (hit + miss) * 100) if (hit + miss) else 0
+                    logger.info(
+                        f"    DeepSeek 响应 {time.time() - _t0:.1f}s（本轮回合）"
+                        f" 缓存命中 {hit} / 未命中 {miss}（命中率 {hit_rate:.0f}%）")
                     return data["choices"][0]["message"]
                 logger.warning("DeepSeek 返回空 choices")
                 return None
@@ -251,55 +258,52 @@ def _handle_impl(query: str, user_id: str = "") -> dict:
         except Exception as e:
             logger.warning(f"获取用户信息失败（不影响主流程）: {e}")
 
-    # 构建系统提示词，注入用户认知 + 记忆上下文
-    system_content = SYSTEM_PROMPT
+    # 构建 messages：静态 system + 历史独立轮次 + 动态上下文末尾
+    # （system 保持纯静态 → 前缀缓存稳定；历史作为独立轮次回放 → 追加式增长）
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
-    # 注入当前用户信息（让助手知道在跟谁说话）
+    # 历史轮次：从窗口滚动点取最近对话（窗口 N 轮 + 释放 1/2），
+    # 作为独立 user/assistant 消息回放，不再拼进 system
+    window_msgs = []
+    if user_id:
+        try:
+            from user_store import get_store as get_user_store
+            window_msgs = get_user_store().get_window_context(
+                user_id, MAX_CONTEXT_ROUNDS)
+            logger.info(f"已回放 {user_id} 的历史轮次 ({len(window_msgs)} 条)")
+        except Exception as e:
+            logger.warning(f"获取窗口对话失败（不影响主流程）: {e}")
+    messages.extend(window_msgs)
+
+    # 动态上下文（用户档案 + 长期记忆）放消息末尾，与当前问题合并，
+    # 不污染静态前缀（前缀 = system + 已回放历史，逐 token 稳定）
+    dynamic_parts = []
     if user_info_lines:
-        system_content += (
-            "\n\n【当前用户信息】\n"
+        dynamic_parts.append(
+            "【当前用户信息】\n"
             + "\n".join(user_info_lines)
             + "\n（用户问及身份、部门、中心时可参考上述信息回答；知识库查询时自动按归属中心过滤）"
         )
         logger.info(f"已注入用户档案 ({len(user_info_lines)} 条)")
-
-    # 注入最近对话记忆
-    context = ""
-    if user_id:
-        try:
-            from skills import memory
-            context = memory.format_context(user_id, max_content=None, total_max=12000)
-            if context:
-                system_content += (
-                    "\n\n【最近对话记录 - 请仔细参考】\n"
-                    "以下是你与当前用户最近的对话历史，用户的追问通常基于上文，请务必结合历史来理解当前问题：\n"
-                    + context
-                )
-                logger.info(f"已注入 {user_id} 的记忆上下文 ({len(context)}字)")
-        except Exception as e:
-            logger.warning(f"注入记忆失败: {e}")
-
-    # 注入长期记忆（历史事实 + 会话摘要，常驻）
     if user_id:
         try:
             from skills import memory
             long_term = memory.format_long_term(user_id)
             if long_term:
-                system_content += (
-                    "\n\n【长期记忆 - 用户历史背景】\n"
+                dynamic_parts.append(
+                    "【长期记忆 - 用户历史背景】\n"
                     "以下是你长期记录中关于该用户的重要事实与历史会话摘要，回答时若相关请主动引用：\n"
                     + long_term
                 )
                 logger.info(f"已注入 {user_id} 的长期记忆 ({len(long_term)}字)")
         except Exception as e:
             logger.warning(f"注入长期记忆失败: {e}")
+    final_q = ("\n\n".join(dynamic_parts) + "\n\n" + q) if dynamic_parts else q
+    messages.append({"role": "user", "content": final_q})
 
-    messages = [
-        {"role": "system", "content": system_content},
-        {"role": "user", "content": q},
-    ]
-
-    logger.info(f"Agent 处理: {q[:80]}" + (f" [{user_id}]" if user_id else ""))
+    logger.info(
+        f"Agent 处理: {q[:80]}" + (f" [{user_id}]" if user_id else "")
+        + f"（system {len(SYSTEM_PROMPT)} 字静态 + {len(window_msgs)} 条历史轮次）")
 
     # Agent 循环：允许 LLM 多次调用工具（搜不到自动降级到钉钉知识库）
     MAX_AGENT_LOOPS = 5  # 安全上限，防止死循环

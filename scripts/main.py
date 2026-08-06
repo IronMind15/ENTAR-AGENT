@@ -10,6 +10,14 @@ import threading
 from logging.handlers import RotatingFileHandler
 sys.path.insert(0, os.path.dirname(__file__))
 
+# 钉钉 SDK（dingtalk_stream）内部用 requests 且默认 trust_env=True 跟随系统代理。
+# 本机 Clash 开启时会把 api.dingtalk.com 劫持到 127.0.0.1:7890 → TLS 握手被中断
+# （SSL: UNEXPECTED_EOF_WHILE_READING），与 v1.5.6「国内 API 全直连」同源问题。
+# 设置 NO_PROXY 让 requests 对钉钉域名直连绕过代理（不影响本机其他流量）。
+# 注：服务器上无 Clash，此设置无害（NO_PROXY 仅在走代理时生效）。
+os.environ.setdefault("NO_PROXY", "api.dingtalk.com,oapi.dingtalk.com,wss-open-connection-union.dingtalk.com")
+os.environ.setdefault("no_proxy", "api.dingtalk.com,oapi.dingtalk.com,dingtalk.com,wss-open-connection-union.dingtalk.com")
+
 # Windows 终端 UTF-8（必须在日志配置之前，否则 StreamHandler 拿到 GBK 句柄）
 if sys.platform == "win32":
     sys.stdin.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
