@@ -36,6 +36,22 @@ def get_user_centers() -> list[str] | None:
     return _current_user_centers.get()
 
 
+# 当前请求发起者的钉钉员工 ID（staff_id），用于敏感字段（手机号/邮箱）权限判断。
+# 钉钉入口在 _process_text 中设置；Web 入口不设置 → 默认空串 → 非审核人 → 只返回基础信息。
+_current_staff_id: contextvars.ContextVar[str] = \
+    contextvars.ContextVar("tool_staff_id", default="")
+
+
+def set_current_staff_id(staff_id: str) -> None:
+    """设置当前请求发起者的钉钉员工 ID（入口调用）"""
+    _current_staff_id.set(staff_id or "")
+
+
+def get_current_staff_id() -> str:
+    """获取当前请求发起者的钉钉员工 ID（工具执行时调用）"""
+    return _current_staff_id.get()
+
+
 # ===== 注册中心 =====
 # {(name, definition, handler)}
 _tool_registry: dict[str, tuple[dict, Callable[[dict], str]]] = {}
@@ -103,3 +119,4 @@ from . import search_standards       # noqa: E402, F811
 from . import calc_pcb_trace         # noqa: E402, F811 — PCB 走线计算（IPC-2221）
 from . import calc_copper_busbar     # noqa: E402, F811 — 铜排/母线载流（v1.6.0）
 from . import search_experience_kb   # noqa: E402, F811 — 经验知识库检索（v1.4.2 第二步）
+from . import find_employee          # noqa: E402, F811 — 钉钉通讯录员工查询（v1.7.0）

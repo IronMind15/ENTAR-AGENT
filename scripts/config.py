@@ -61,6 +61,13 @@ DINGTALK_API_BASE: str = "https://api.dingtalk.com"
 KNOWLEDGE_REVIEW_MODE: str = _get_config("KNOWLEDGE_REVIEW_MODE") or "fixed"
 KNOWLEDGE_REVIEWER_STAFF_IDS: str = _get_config("KNOWLEDGE_REVIEWER_STAFF_IDS")
 
+# 通讯录查询：敏感字段（手机号/邮箱）审核人白名单（staff_id，逗号/空格/分号分隔）
+# 留空 = 无人可查联系方式，所有用户只返回姓名/部门/职位/工号
+CONTACT_ADMIN_STAFF_IDS: str = _get_config("CONTACT_ADMIN_STAFF_IDS")
+# 通讯录全量缓存 TTL（秒）。进程内短缓存，规避钉钉 QPS 限流，不做磁盘持久化。
+# 钉钉侧通讯录变更最多延迟 TTL 秒可见；设小接近实时但每次查询都会重拉全量。
+CONTACT_CACHE_TTL_SECONDS: int = int(_get_config("CONTACT_CACHE_TTL_SECONDS") or 60)
+
 # 存储后端：sqlite（推荐）| json（回退）
 MEMORY_BACKEND: str = "sqlite"
 

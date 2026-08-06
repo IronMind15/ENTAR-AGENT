@@ -210,6 +210,11 @@ class ErrorQueryHandler(ChatbotHandler):
         调用方在 process() 中用 asyncio.to_thread 放行，因此本方法可包含
         任意慢操作（DeepSeek 调用、Chroma 检索、审核判断等）。
         """
+        # 注入当前发起者 staff_id 到工具上下文（find_employee 敏感字段权限判断用）
+        # asyncio.to_thread 会拷贝当前 context，本线程内工具执行能读到
+        from tools import set_current_staff_id
+        set_current_staff_id(staff_id)
+
         # 审核口令与普通技能路由
         if text in ("查看我的审核ID", "我的审核ID", "查看我的钉钉ID"):
             answer = (

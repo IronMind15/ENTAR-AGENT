@@ -3,6 +3,42 @@
 > 📌 **本文档是项目唯一的版本记录（单一事实源）**——README.md、PROGRESS.md 的版本历史均指向本文件，发版时只在这里追加记录。
 > 相关：待办清单见 [TODO.md](TODO.md)，进度看板见 [PROGRESS.md](PROGRESS.md)。
 
+## v1.7.0（2026-08-06）
+
+**钉钉通讯录员工查询**——新增 `find_employee` 工具，恩特小助手可查公司员工（姓名/部门/职位/工号）；手机号/邮箱等敏感字段仅审核人可见（服务端剥离）。回归 **227 项全绿**。
+
+### 新功能
+
+- **find_employee 工具**（`tools/find_employee.py`）：DeepSeek function calling 自动识别「谁负责采购」「研发中心王工」「张三电话多少」等找人问题并调用；走 tools 注册中心，agent.py 零改动自动生效
+- **通讯录客户端**（`contact_api.py`）：部门树 BFS 遍历 + 逐部门 cursor 分页拉取 + 多部门去重合并 + 部分失败降级（单个部门拉取失败不整体报错，返回 warning）
+- **实时数据**：每次查询实时拉钉钉通讯录；60 秒进程内短 TTL 缓存规避钉钉 QPS 限流（不做磁盘持久化）
+- **匹配**：姓名/职位/工号/部门名任一子串命中；支持部门过滤与 userid 精确查询；结果按【】编号格式输出（钉钉友好）
+
+### 权限与安全
+
+- **基础信息全员可查**：姓名/部门/职位/工号
+- **敏感字段仅审核人**：mobile/email 在服务端直接剥离（键不进返回 JSON，不依赖 LLM 自觉）；审核人白名单 `CONTACT_ADMIN_STAFF_IDS`（local_config 配置，留空 = 无人可查联系方式）
+- **staff_id 上下文注入**：钉钉消息发起者 staff_id 经 contextvar 透传给工具（`set_current_staff_id`/`get_current_staff_id`）；Web 端无身份 → 天然只能查基础信息
+
+### 接口切换（排障记录）
+
+- 初版用新版 `api.dingtalk.com/v1.0/contact/` 接口，实测该应用全部 404（`InvalidAction.NotFound`，疑似网关/权限范围差异）
+- → 改用旧版 `oapi.dingtalk.com` topapi（`gettoken` + `department/listsub` + `user/list` + `department/get` + `user/get`），与 user_store 同步用户信息同族接口，实测可用
+
+### 提示词与文档
+
+- system_prompt 能力清单加第 6 项 find_employee（含触发示例）
+- 改写「绝对不能编造」段：员工信息必须经 find_employee 工具查询后回答；工具未返回的联系方式 = 无权限，直接说明，禁止编造
+
+### 测试
+
+- 新增 19 项（`contact_api` + `find_employee`）：token 缓存、部门树 BFS + 部门名映射、多部门去重、分页与死循环防护、姓名/职位/部门匹配、敏感字段脱敏、contextvar 身份传递、部分失败降级、权限错误友好化、缓存 TTL/force、工具注册
+- 全量回归 **227 项通过**（此前 208 项）
+
+### 真实环境验证（发版后补记）
+
+- 90 名员工全量拉到，无部分失败；真实部门名/职位/工号正确
+
 ## v1.6.2（2026-08-06）
 
 **上下文工程 + 长期记忆修复**——系统性修复长期记忆压缩失效（V4 思考挤空 content）、压缩误伤短期窗口的 bug，并把上下文组装重构为 KV Cache 友好结构（静态 system + 历史独立轮次 + 窗口批量滚动），加缓存命中率观测。回归 **208 项全绿**。
