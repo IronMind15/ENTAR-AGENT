@@ -3,6 +3,38 @@
 > 📌 **本文档是项目唯一的版本记录（单一事实源）**——README.md、PROGRESS.md 的版本历史均指向本文件，发版时只在这里追加记录。
 > 相关：待办清单见 [TODO.md](TODO.md)，进度看板见 [PROGRESS.md](PROGRESS.md)。
 
+## v1.8.0（2026-08-07）
+
+**文档格式补齐**——新增 Word (.docx)、PPT (.pptx)、CSV (.csv) 三种格式支持，支持格式从 3 种扩展到 6 种。Word/PPT 转为 Markdown 后复用 MarkdownChunker 切块；CSV 逐行格式化直接入库（同 Excel 模式）。回归 **241 项全绿**。
+
+### 新功能
+
+- **Word 提取器**（`doc_mgr/extractors/word.py`）：python-docx 按文档顺序遍历段落+表格，Heading 1~6 → # ~ ######，表格 → Markdown 表格（| col |），列表 → - 条目
+- **PPT 提取器**（`doc_mgr/extractors/pptx_ext.py`）：python-pptx 按 Slide 提取，标题 → ## Slide N: 标题，备注 → > blockquote 格式
+- **CSV 提取器**（`doc_mgr/extractors/csv_ext.py`）：stdlib csv 模块，自动编码检测（utf-8-sig → gbk → gb18030 → latin-1），自动分隔符检测（逗号/制表符/分号/竖线）
+- **引擎路由扩展**（`engine.py`）：process_file 新增 3 个 elif 分支 + 3 个处理函数（_process_word / _process_pptx / _process_csv），默认 collection：docx/pptx → standards，csv → error_codes
+
+### 格式支持总览
+
+| 格式 | 处理方式 | 默认 Collection |
+|------|---------|----------------|
+| .pdf | MinerU / PyMuPDF | standards |
+| .xlsx / .xls | openpyxl 逐行 | error_codes |
+| .md | MarkdownChunker | standards |
+| .docx ✨ | python-docx → Markdown → MarkdownChunker | standards |
+| .pptx ✨ | python-pptx → Markdown → MarkdownChunker | standards |
+| .csv ✨ | stdlib csv 逐行 | error_codes |
+
+### 依赖
+
+- 新增 `python-docx>=1.1.0`、`python-pptx>=0.6.23`
+- CSV 使用 stdlib，无新依赖
+
+### 测试
+
+- 新增 14 项（Word 提取器 4 + PPT 提取器 2 + CSV 提取器 4 + 引擎路由 4）
+- 全量回归 **241 项通过**（此前 227 项）
+
 ## v1.7.0（2026-08-06）
 
 **钉钉通讯录员工查询**——新增 `find_employee` 工具，恩特小助手可查公司员工（姓名/部门/职位/工号）；手机号/邮箱等敏感字段仅审核人可见（服务端剥离）。回归 **227 项全绿**。

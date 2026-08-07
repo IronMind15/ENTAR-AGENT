@@ -9,6 +9,9 @@
 处理策略：
   - PDF：优先使用 MinerU（VLM 识别 → Markdown），失败时回退到 PyMuPDF
   - Excel：openpyxl 逐行解析
+  - Word：python-docx 提取 → 转 Markdown → MarkdownChunker 切块
+  - PPT：python-pptx 提取 → 转 Markdown → MarkdownChunker 切块
+  - CSV：stdlib csv 逐行解析（同 Excel 模式）
   - Markdown：标题层级切块
 """
 
@@ -28,6 +31,8 @@ from .storage import get_store, VectorStore
 from .chunkers import PdfChunker, MarkdownChunker
 from .extractors import extract_excel_rows, format_excel_row
 from .extractors import extract_pdf_text
+from .extractors import extract_docx_text, extract_pptx_text
+from .extractors import extract_csv_rows, format_csv_row
 from .sync_tracker import SyncTracker
 from .task_manager import report_progress as _report_progress
 from .identity import file_sha256, stable_document_id
@@ -353,7 +358,7 @@ def process_file(file_path: str, file_name: Optional[str] = None,
     """
     name = file_name or os.path.basename(file_path)
     ext = os.path.splitext(name)[1].lower()
-    supported_exts = (".pdf", ".xlsx", ".xls", ".md")
+    supported_exts = (".pdf", ".xlsx", ".xls", ".md", ".docx", ".pptx", ".csv")
     if ext not in supported_exts:
         ext = os.path.splitext(file_path)[1].lower()
     size = os.path.getsize(file_path)
@@ -364,6 +369,9 @@ def process_file(file_path: str, file_name: Optional[str] = None,
         ".xlsx": "error_codes",
         ".xls": "error_codes",
         ".md": "standards",
+        ".docx": "standards",
+        ".pptx": "standards",
+        ".csv": "error_codes",
     }
     collection = target_collection or default_collections.get(ext, "")
 
@@ -392,6 +400,18 @@ def process_file(file_path: str, file_name: Optional[str] = None,
                 )
             elif ext in (".xlsx", ".xls"):
                 doc = _process_excel(
+                    file_path, name, size, store, collection, **common,
+                )
+            elif ext == ".docx":
+                doc = _process_word(
+                    file_path, name, size, store, collection, **common,
+                )
+            elif ext == ".pptx":
+                doc = _process_pptx(
+                    file_path, name, size, store, collection, **common,
+                )
+            elif ext == ".csv":
+                doc = _process_csv(
                     file_path, name, size, store, collection, **common,
                 )
             else:
@@ -622,6 +642,198 @@ def _process_excel(file_path: str, file_name: str, file_size: int,
     doc.status = "done"
     doc.message = f"新版本换库 {added} 条故障代码"
     logger.info(f"  Excel 处理完成: {file_name} → {added} 条")
+    return doc
+
+
+# ==================== Word 处理 ====================
+
+def _process_word(file_path: str, file_name: str, file_size: int,
+                  store: VectorStore, target_collection: str = "standards",
+                  doc_id: str = "", content_hash: str = "",
+                  department: str = "public") -> Document:
+    """处理 Word (.docx) 文件
+
+    流程：python-docx 提取 → 转 Markdown → MarkdownChunker 切块 → 入库
+    """
+    doc = Document(
+        file_name=file_name, file_path=file_path,
+        file_size=file_size, collection=target_collection,
+        doc_id=doc_id, content_hash=content_hash,
+        version_id=content_hash,
+    )
+
+    # 1. 提取文本（输出 Markdown 格式）
+    _report_progress("word_parse", 30, "提取 Word 文档内容...")
+    full_text = extract_docx_text(file_path)
+    if not full_text.strip():
+        doc.status = "error"
+        doc.message = "未提取到文本内容，请检查 Word 文件"
+        logger.warning(f"  {doc.message}")
+        return doc
+
+    doc.status = "processing"
+
+    # 2. 提取标准编号信息（如果有）
+    std_id, std_title = _extract_std_info(file_name, full_text)
+    doc.std_id = std_id
+    doc.std_title = std_title
+
+    # 3. MarkdownChunker 切块
+    base_meta = {
+        "std_id": std_id,
+        "std_title": std_title,
+        "file_name": file_name,
+        "source": "word",
+        "doc_id": doc_id,
+        "content_hash": content_hash,
+        "version_id": content_hash,
+    }
+    _report_progress("chunking", 60, "Word 文档结构分析切块...")
+    chunker = MarkdownChunker()
+    chunks = chunker.chunk(full_text, base_meta, filepath=file_path)
+
+    # 4. 入库
+    _report_progress("indexing", 80, f"切块完成（{len(chunks)} 块），入库到知识库...")
+    ids, documents, metadatas = _prepare_chunks(
+        chunks, file_name, doc_id=doc_id, content_hash=content_hash,
+        department=department,
+    )
+    added = store.replace_document(
+        target_collection, doc_id, file_name,
+        ids, documents, metadatas,
+    )
+
+    doc.chunk_count = added
+    doc.source = "word"
+    doc.status = "done"
+    doc.message = f"新版本换库 {added} 条切块"
+    logger.info(f"  Word 处理完成: {file_name} → {added} 块")
+    return doc
+
+
+# ==================== PPT 处理 ====================
+
+def _process_pptx(file_path: str, file_name: str, file_size: int,
+                  store: VectorStore, target_collection: str = "standards",
+                  doc_id: str = "", content_hash: str = "",
+                  department: str = "public") -> Document:
+    """处理 PPT (.pptx) 文件
+
+    流程：python-pptx 提取 → 转 Markdown → MarkdownChunker 切块 → 入库
+    """
+    doc = Document(
+        file_name=file_name, file_path=file_path,
+        file_size=file_size, collection=target_collection,
+        doc_id=doc_id, content_hash=content_hash,
+        version_id=content_hash,
+    )
+
+    # 1. 提取文本（输出 Markdown 格式）
+    _report_progress("pptx_parse", 30, "提取 PPT 文档内容...")
+    full_text = extract_pptx_text(file_path)
+    if not full_text.strip():
+        doc.status = "error"
+        doc.message = "未提取到文本内容，请检查 PPT 文件"
+        logger.warning(f"  {doc.message}")
+        return doc
+
+    doc.status = "processing"
+
+    # 2. MarkdownChunker 切块
+    base_meta = {
+        "file_name": file_name,
+        "source": "pptx",
+        "doc_id": doc_id,
+        "content_hash": content_hash,
+        "version_id": content_hash,
+    }
+    _report_progress("chunking", 60, "PPT 文档结构分析切块...")
+    chunker = MarkdownChunker()
+    chunks = chunker.chunk(full_text, base_meta, filepath=file_path)
+
+    # 3. 入库
+    _report_progress("indexing", 80, f"切块完成（{len(chunks)} 块），入库到知识库...")
+    ids, documents, metadatas = _prepare_chunks(
+        chunks, file_name, doc_id=doc_id, content_hash=content_hash,
+        department=department,
+    )
+    added = store.replace_document(
+        target_collection, doc_id, file_name,
+        ids, documents, metadatas,
+    )
+
+    doc.chunk_count = added
+    doc.source = "pptx"
+    doc.status = "done"
+    doc.message = f"新版本换库 {added} 条切块"
+    logger.info(f"  PPT 处理完成: {file_name} → {added} 块")
+    return doc
+
+
+# ==================== CSV 处理 ====================
+
+def _process_csv(file_path: str, file_name: str, file_size: int,
+                 store: VectorStore, target_collection: str = "error_codes",
+                 doc_id: str = "", content_hash: str = "",
+                 department: str = "public") -> Document:
+    """处理 CSV (.csv) 文件
+
+    流程：csv 逐行解析 → 每行格式化 → 直接入库（同 Excel 模式，不切块）
+    """
+    doc = Document(
+        file_name=file_name, file_path=file_path,
+        file_size=file_size, collection=target_collection,
+        doc_id=doc_id, content_hash=content_hash,
+        version_id=content_hash,
+    )
+
+    # 1. 提取行数据
+    _report_progress("csv_parse", 30, "解析 CSV 文件...")
+    records = extract_csv_rows(file_path)
+    if not records:
+        doc.status = "error"
+        doc.message = "未提取到数据，请检查 CSV 格式"
+        logger.warning(f"  {doc.message}")
+        return doc
+
+    doc.status = "processing"
+
+    # 2. 获取表头（用于格式化）
+    headers = [k for k in records[0].keys() if not k.startswith("_")]
+
+    # 3. 每行一条记录，生成 Chroma-compatible 格式
+    _report_progress("csv_parse", 50, f"解析 CSV 完成（{len(records)} 行），准备入库...")
+    ids = []
+    documents = []
+    metadatas = []
+
+    for r in records:
+        row_num = r.pop("_row_num", 0)
+        r.pop("_encoding", None)
+        doc_text = format_csv_row(r, headers)
+
+        safe_name = re.sub(r"[^a-zA-Z0-9一-鿿-]", "_", file_name)
+        ids.append(f"csv_{doc_id or safe_name}_{row_num}")
+        documents.append(doc_text)
+        r["row_num"] = row_num
+        r["file_name"] = file_name
+        r["doc_id"] = doc_id
+        r["content_hash"] = content_hash
+        r["version_id"] = content_hash
+        r["department"] = department
+        metadatas.append(r)
+
+    # 4. 入库
+    added = store.replace_document(
+        target_collection, doc_id, file_name,
+        ids, documents, metadatas,
+    )
+
+    doc.chunk_count = added
+    doc.source = "csv"
+    doc.status = "done"
+    doc.message = f"新版本换库 {added} 条 CSV 数据"
+    logger.info(f"  CSV 处理完成: {file_name} → {added} 条")
     return doc
 
 

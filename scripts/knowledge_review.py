@@ -18,7 +18,7 @@ from doc_mgr.sync_tracker import SyncTracker
 logger = logging.getLogger("knowledge_review")
 
 _UPLOAD_ROOT = Path(__file__).parent.parent / "data" / "uploads"
-_SUPPORTED_EXTENSIONS = {".pdf", ".xlsx", ".xls", ".md"}
+_SUPPORTED_EXTENSIONS = {".pdf", ".xlsx", ".xls", ".md", ".docx", ".pptx", ".csv"}
 _ALLOWED_COLLECTIONS = {"standards", "error_codes", "experience_kb"}
 _COMMAND_RE = re.compile(
     r"^(同意同步|拒绝同步)\s+([A-Za-z0-9]{6,16})(?:\s+(.+?))?\s*$"
