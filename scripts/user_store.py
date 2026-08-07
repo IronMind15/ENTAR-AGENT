@@ -154,6 +154,37 @@ class UserStore(ABC):
         """获取用户最近的长期记忆条目"""
         ...
 
+    @abstractmethod
+    def add_feedback(self, user_id: str, query: str, answer: str,
+                     source: str, rating: str) -> bool:
+        """添加一条反馈记录（rating: 'up' | 'down'）"""
+        ...
+
+    @abstractmethod
+    def get_feedback_stats(self) -> dict:
+        """获取反馈统计 {total, up, down, rate}"""
+        ...
+
+    @abstractmethod
+    def get_last_conversation(self, user_id: str) -> Optional[dict]:
+        """获取用户最近一条对话（query + answer），用于钉钉反馈关联"""
+        ...
+
+    @abstractmethod
+    def get_prompt(self, name: str) -> Optional[str]:
+        """获取指定名称的 Prompt 内容，不存在返回 None"""
+        ...
+
+    @abstractmethod
+    def set_prompt(self, name: str, content: str) -> bool:
+        """保存 Prompt 内容"""
+        ...
+
+    @abstractmethod
+    def list_prompts(self) -> list[str]:
+        """列出所有已保存的 Prompt 名称"""
+        ...
+
 
 class SQLiteUserStore(UserStore):
     """SQLite 实现"""
@@ -260,6 +291,24 @@ class SQLiteUserStore(UserStore):
                 start_id   INTEGER DEFAULT 0,
                 updated_at TEXT DEFAULT (datetime('now','localtime')),
                 FOREIGN KEY (user_id) REFERENCES users(user_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS feedback (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     TEXT NOT NULL,
+                query       TEXT DEFAULT '',
+                answer      TEXT DEFAULT '',
+                source      TEXT DEFAULT '',
+                rating      TEXT NOT NULL CHECK(rating IN ('up','down')),
+                created_at  TEXT DEFAULT (datetime('now','localtime'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_fb_user ON feedback(user_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_fb_rating ON feedback(rating, created_at);
+
+            CREATE TABLE IF NOT EXISTS prompts (
+                name        TEXT PRIMARY KEY,
+                content     TEXT NOT NULL,
+                updated_at  TEXT DEFAULT (datetime('now','localtime'))
             );
         """)
         conn.commit()
@@ -1120,6 +1169,106 @@ class SQLiteUserStore(UserStore):
         logger.info(f"迁移完成：共导入 {total} 条消息，涉及 {len(data)} 个用户")
         return total
 
+    # ── 反馈 ──────────────────────────────
+
+    def add_feedback(self, user_id: str, query: str, answer: str,
+                     source: str, rating: str) -> bool:
+        """添加一条反馈记录"""
+        if rating not in ("up", "down"):
+            return False
+        conn = self._get_conn()
+        with self._lock:
+            conn.execute(
+                "INSERT INTO feedback (user_id, query, answer, source, rating) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (user_id, query[:500], answer[:500], source, rating),
+            )
+            conn.commit()
+        return True
+
+    def get_feedback_stats(self) -> dict:
+        """获取反馈统计"""
+        conn = self._get_conn()
+        total = conn.execute("SELECT COUNT(*) FROM feedback").fetchone()[0]
+        up = conn.execute(
+            "SELECT COUNT(*) FROM feedback WHERE rating='up'"
+        ).fetchone()[0]
+        down = conn.execute(
+            "SELECT COUNT(*) FROM feedback WHERE rating='down'"
+        ).fetchone()[0]
+        rate = round(up / total * 100, 1) if total > 0 else 0.0
+
+        # 最近 10 条差评
+        recent_down = []
+        for row in conn.execute(
+            "SELECT user_id, query, answer, source, created_at "
+            "FROM feedback WHERE rating='down' ORDER BY created_at DESC LIMIT 10"
+        ):
+            recent_down.append({
+                "user_id": row[0], "query": row[1], "answer": row[2],
+                "source": row[3], "created_at": row[4],
+            })
+
+        return {"total": total, "up": up, "down": down, "rate": rate,
+                "recent_down": recent_down}
+
+    def get_last_conversation(self, user_id: str) -> Optional[dict]:
+        """获取用户最近一条 user+assistant 对话对"""
+        conn = self._get_conn()
+        # 取最近一条 assistant 回复
+        row = conn.execute(
+            "SELECT content, created_at FROM conversations "
+            "WHERE user_id=? AND role='assistant' "
+            "ORDER BY id DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        if not row:
+            return None
+        answer = row[0]
+        answer_time = row[1]
+
+        # 找该回复之前的 user 消息
+        user_row = conn.execute(
+            "SELECT content FROM conversations "
+            "WHERE user_id=? AND role='user' AND created_at<=? "
+            "ORDER BY id DESC LIMIT 1",
+            (user_id, answer_time),
+        ).fetchone()
+        query = user_row[0] if user_row else ""
+
+        return {"query": query, "answer": answer}
+
+    # ── Prompt 管理 ──────────────────────────────
+
+    def get_prompt(self, name: str) -> Optional[str]:
+        """获取指定名称的 Prompt 内容"""
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT content FROM prompts WHERE name=?", (name,)
+        ).fetchone()
+        return row[0] if row else None
+
+    def set_prompt(self, name: str, content: str) -> bool:
+        """保存 Prompt 内容（upsert）"""
+        conn = self._get_conn()
+        with self._lock:
+            conn.execute(
+                "INSERT INTO prompts (name, content, updated_at) "
+                "VALUES (?, ?, datetime('now','localtime')) "
+                "ON CONFLICT(name) DO UPDATE SET "
+                "content=excluded.content, updated_at=excluded.updated_at",
+                (name, content),
+            )
+            conn.commit()
+        return True
+
+    def list_prompts(self) -> list[str]:
+        """列出所有已保存的 Prompt 名称"""
+        conn = self._get_conn()
+        return [row[0] for row in conn.execute(
+            "SELECT name FROM prompts ORDER BY name"
+        )]
+
     # ── 清理 ──────────────────────────────
 
     def close(self):
@@ -1190,3 +1339,34 @@ def save_long_term(user_id: str, mem_type: str, content: str,
 def get_long_term(user_id: str, max_items: int = 8) -> list[dict]:
     """兼容 memory.get_long_term() 接口"""
     return get_store().get_long_term(user_id, max_items)
+
+
+def add_feedback(user_id: str, query: str, answer: str,
+                 source: str, rating: str) -> bool:
+    """添加反馈"""
+    return get_store().add_feedback(user_id, query, answer, source, rating)
+
+
+def get_feedback_stats() -> dict:
+    """获取反馈统计"""
+    return get_store().get_feedback_stats()
+
+
+def get_last_conversation(user_id: str):
+    """获取最近一条对话"""
+    return get_store().get_last_conversation(user_id)
+
+
+def get_prompt(name: str):
+    """获取 Prompt"""
+    return get_store().get_prompt(name)
+
+
+def set_prompt(name: str, content: str) -> bool:
+    """保存 Prompt"""
+    return get_store().set_prompt(name, content)
+
+
+def list_prompts() -> list[str]:
+    """列出所有 Prompt 名称"""
+    return get_store().list_prompts()

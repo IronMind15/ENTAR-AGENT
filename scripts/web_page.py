@@ -300,6 +300,14 @@ HOME_HTML = r"""<!DOCTYPE html>
   .source-chip.orange { background: var(--orange-light); color: #b96300; }
   .source-chip.gray   { background: var(--hover); color: var(--text-secondary); }
 
+  /* ===== Feedback Buttons ===== */
+  .feedback-btns { display: inline-flex; gap: 4px; margin-left: 8px; }
+  .feedback-btn { background: none; border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; cursor: pointer; font-size: 14px; color: var(--text-muted); transition: all 0.2s; }
+  .feedback-btn:hover { border-color: var(--brand); color: var(--brand); }
+  .feedback-btn.active-up { border-color: var(--success); color: var(--success); background: rgba(34,197,94,0.1); }
+  .feedback-btn.active-down { border-color: var(--pink); color: var(--pink); background: rgba(236,72,153,0.1); }
+  .feedback-btn.rated { pointer-events: none; opacity: 0.5; }
+
   /* ===== Markdown ===== */
   .md { line-height: 1.7; }
   .md h1, .md h2, .md h3 { margin: 12px 0 8px; line-height: 1.4; }
@@ -851,8 +859,15 @@ function addMessage(role, text, source) {
   var contentHtml = role === 'bot'
     ? '<div class="bubble md">' + renderMarkdown(text) + '</div>'
     : '<div class="bubble">' + escapeHtml(text) + '</div>';
-  div.innerHTML = contentHtml
-    + '<div class="msg-meta">' + sourceChipHtml(source) + '<span class="time">' + timeStr + '</span></div>';
+  var metaHtml = '<div class="msg-meta">' + sourceChipHtml(source) + '<span class="time">' + timeStr + '</span>';
+  if (role === 'bot') {
+    metaHtml += '<span class="feedback-btns">'
+      + '<button class="feedback-btn" data-rating="up" onclick="sendFeedback(this)" title="有帮助">👍</button>'
+      + '<button class="feedback-btn" data-rating="down" onclick="sendFeedback(this)" title="没帮助">👎</button>'
+      + '</span>';
+  }
+  metaHtml += '</div>';
+  div.innerHTML = contentHtml + metaHtml;
   area.appendChild(div);
   scrollToBottom();
   return div;
@@ -905,6 +920,60 @@ function saveMessages() {
   localStorage.setItem(MSGS_KEY, JSON.stringify(msgs));
 }
 
+// ===== Feedback (👍/👎 on bot messages) =====
+function sendFeedback(btn) {
+    var rating = btn.getAttribute('data-rating');
+    // Compute index: count preceding bot messages in DOM, then map to localStorage index
+    // localStorage alternates [user, bot, user, bot, ...] so Nth bot (0-based) is at index 2*N+1
+    var botN = -1;
+    var el = btn.closest('.message');
+    while (el) {
+        if (el.classList.contains('bot') && el.querySelector('.feedback-btns')) {
+            botN++;
+        }
+        el = el.previousElementSibling;
+    }
+    if (botN < 0) return;
+    var msgIndex = 2 * botN + 1;
+
+    var msgs = JSON.parse(localStorage.getItem(MSGS_KEY) || '[]');
+    var msg = msgs[msgIndex];
+    if (!msg) return;
+
+    // Find the user message before this bot message
+    var query = '';
+    for (var i = msgIndex - 1; i >= 0; i--) {
+        if (msgs[i].role === 'user') { query = msgs[i].text; break; }
+    }
+
+    var formData = new FormData();
+    formData.append('q', query.slice(0, 200));
+    formData.append('answer', msg.text.slice(0, 200));
+    formData.append('source', msg.source || '');
+    formData.append('rating', rating);
+    formData.append('user', document.getElementById('username').value || '');
+
+    fetch('/feedback', { method: 'POST', body: formData })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.ok) {
+                var btns = btn.parentElement;
+                btns.querySelectorAll('.feedback-btn').forEach(function(b) { b.classList.add('rated'); });
+                btn.classList.remove('rated');
+                btn.classList.add(rating === 'up' ? 'active-up' : 'active-down');
+                showToast('感谢反馈！');
+            }
+        });
+}
+
+function showToast(text) {
+    var t = document.createElement('div');
+    t.textContent = text;
+    t.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--brand);color:#fff;padding:8px 16px;border-radius:8px;z-index:9999;font-size:14px;';
+    document.body.appendChild(t);
+    setTimeout(function() { t.remove(); }, 2000);
+}
+
 function loadMessages() {
   var raw = localStorage.getItem(MSGS_KEY);
   if (!raw) return;
@@ -920,9 +989,16 @@ function loadMessages() {
       var contentHtml = m.role === 'bot'
         ? '<div class="bubble md">' + renderMarkdown(m.text || '') + '</div>'
         : '<div class="bubble">' + escapeHtml(m.text || '') + '</div>';
-      div.innerHTML = contentHtml
-        + '<div class="msg-meta">' + sourceChipHtml(m.source || '')
-        + (m.time ? '<span class="time">' + m.time + '</span>' : '') + '</div>';
+      var metaHtml = '<div class="msg-meta">' + sourceChipHtml(m.source || '')
+        + (m.time ? '<span class="time">' + m.time + '</span>' : '');
+      if (m.role === 'bot') {
+        metaHtml += '<span class="feedback-btns">'
+          + '<button class="feedback-btn" data-rating="up" onclick="sendFeedback(this)" title="有帮助">👍</button>'
+          + '<button class="feedback-btn" data-rating="down" onclick="sendFeedback(this)" title="没帮助">👎</button>'
+          + '</span>';
+      }
+      metaHtml += '</div>';
+      div.innerHTML = contentHtml + metaHtml;
       area.appendChild(div);
     });
   } catch(e) { /* ignore bad data */ }

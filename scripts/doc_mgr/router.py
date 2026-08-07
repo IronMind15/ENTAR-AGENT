@@ -990,3 +990,150 @@ def sync_stats(password: str = Query("", description="管理员密码")):
         stats[dir_key] = count
 
     return JSONResponse(stats)
+
+
+# ===== 反馈统计 =====
+
+@router.get("/feedback-stats")
+def feedback_stats(password: str = Query("", description="管理员密码")):
+    """回答反馈统计"""
+    if not _verify_admin_access(password):
+        raise HTTPException(401, "密码错误")
+
+    from user_store import get_feedback_stats
+    stats = get_feedback_stats()
+    return JSONResponse(stats)
+
+
+# ===== Prompt 管理 =====
+
+@router.get("/prompts", response_class=HTMLResponse)
+def prompts_page(password: str = Query("", description="管理员密码")):
+    """Prompt 编辑页面"""
+    if not _verify_admin_access(password):
+        raise HTTPException(401, "密码错误")
+
+    from user_store import get_prompt, list_prompts
+    import sys
+    prompt_file = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "prompts", "system_prompt.txt"
+    )
+    # 优先从 DB 读取
+    content = get_prompt("system")
+    if content is None:
+        try:
+            with open(prompt_file, "r", encoding="utf-8") as f:
+                content = f.read()
+        except FileNotFoundError:
+            content = ""
+
+    prompt_names = list_prompts()
+
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Prompt 管理 — 恩特小助手</title>
+<style>
+body {{ font-family: -apple-system, sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; background: #f5f5f5; }}
+h1 {{ color: #333; }}
+.info {{ color: #666; font-size: 14px; margin-bottom: 20px; }}
+textarea {{ width: 100%; height: 500px; font-family: 'Consolas', monospace; font-size: 14px; padding: 12px; border: 1px solid #ddd; border-radius: 8px; resize: vertical; box-sizing: border-box; }}
+.btns {{ margin-top: 16px; display: flex; gap: 12px; }}
+.btn {{ padding: 10px 24px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 600; }}
+.btn-primary {{ background: #4361ee; color: #fff; }}
+.btn-primary:hover {{ background: #3651d4; }}
+.btn-danger {{ background: #ef4444; color: #fff; }}
+.btn-danger:hover {{ background: #dc2626; }}
+.toast {{ position: fixed; top: 20px; right: 20px; padding: 12px 24px; border-radius: 8px; color: #fff; font-weight: 600; z-index: 9999; display: none; }}
+.toast.success {{ background: #22c55e; }}
+.toast.error {{ background: #ef4444; }}
+</style></head><body>
+<h1>📝 Prompt 管理</h1>
+<p class="info">编辑系统提示词，保存后立即生效（无需重启）。已保存的 Prompt：{', '.join(prompt_names) or '（无，使用文件默认）'}</p>
+<form id="promptForm">
+<textarea id="promptContent" name="content">{html.escape(content)}</textarea>
+<div class="btns">
+<button type="submit" class="btn btn-primary">💾 保存并生效</button>
+<button type="button" class="btn btn-danger" onclick="resetPrompt()">🔄 重置为文件默认</button>
+</div>
+</form>
+<div id="toast" class="toast"></div>
+<script>
+function showToast(text, type) {{
+    const t = document.getElementById('toast');
+    t.textContent = text;
+    t.className = 'toast ' + type;
+    t.style.display = 'block';
+    setTimeout(() => t.style.display = 'none', 3000);
+}}
+document.getElementById('promptForm').addEventListener('submit', async (e) => {{
+    e.preventDefault();
+    const content = document.getElementById('promptContent').value;
+    const fd = new FormData();
+    fd.append('content', content);
+    fd.append('password', new URLSearchParams(location.search).get('password') || '');
+    const r = await fetch('/admin/prompts/system', {{ method: 'POST', body: fd }});
+    const data = await r.json();
+    showToast(data.ok ? '保存成功！' : '保存失败: ' + (data.error||''), data.ok ? 'success' : 'error');
+}});
+async function resetPrompt() {{
+    if (!confirm('确定要重置为文件默认值？当前编辑内容将丢失。')) return;
+    const fd = new FormData();
+    fd.append('password', new URLSearchParams(location.search).get('password') || '');
+    const r = await fetch('/admin/prompts/reset', {{ method: 'POST', body: fd }});
+    const data = await r.json();
+    if (data.ok) {{ document.getElementById('promptContent').value = data.content; showToast('已重置', 'success'); }}
+    else showToast('重置失败', 'error');
+}}
+</script></body></html>"""
+
+
+@router.post("/prompts/system")
+async def save_system_prompt(
+    content: str = Form(...),
+    password: str = Form("", description="管理员密码"),
+):
+    """保存 system prompt 到 DB 并清除缓存"""
+    if not _verify_admin_access(password):
+        raise HTTPException(401, "密码错误")
+
+    from user_store import set_prompt
+    set_prompt("system", content)
+
+    # 清除 agent.py 的 prompt 缓存
+    try:
+        from skills.agent import reload_system_prompt
+        reload_system_prompt()
+    except Exception as e:
+        logger.warning(f"清除 prompt 缓存失败: {e}")
+
+    logger.info("System prompt 已更新")
+    return JSONResponse({"ok": True})
+
+
+@router.post("/prompts/reset")
+async def reset_system_prompt(password: str = Form("", description="管理员密码")):
+    """重置 system prompt 为文件默认值"""
+    if not _verify_admin_access(password):
+        raise HTTPException(401, "密码错误")
+
+    prompt_file = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "prompts", "system_prompt.txt"
+    )
+    try:
+        with open(prompt_file, "r", encoding="utf-8") as f:
+            content = f.read()
+    except FileNotFoundError:
+        return JSONResponse({"error": "默认 prompt 文件不存在"}, status_code=404)
+
+    from user_store import set_prompt
+    set_prompt("system", content)
+
+    try:
+        from skills.agent import reload_system_prompt
+        reload_system_prompt()
+    except Exception as e:
+        logger.warning(f"清除 prompt 缓存失败: {e}")
+
+    logger.info("System prompt 已重置为文件默认值")
+    return JSONResponse({"ok": True, "content": content})

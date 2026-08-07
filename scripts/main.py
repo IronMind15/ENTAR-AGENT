@@ -143,6 +143,29 @@ def ask(q: str = Form("", description="用户问题"), user: str = Form("", desc
     return JSONResponse(result)
 
 
+@app.post("/feedback")
+def feedback(
+    q: str = Form("", description="用户问题"),
+    answer: str = Form("", description="回答摘要"),
+    source: str = Form("", description="来源标识"),
+    rating: str = Form(..., description="up 或 down"),
+    user: str = Form("", description="用户名"),
+):
+    """用户反馈接口 — 👍/👎"""
+    if rating not in ("up", "down"):
+        return JSONResponse({"error": "rating 必须是 up 或 down"}, status_code=400)
+
+    user_id = f"web_{user}" if user else "anonymous"
+    try:
+        from user_store import add_feedback
+        add_feedback(user_id, q, answer, source, rating)
+        logger.info(f"[反馈] {user_id} {rating} — {q[:50]}")
+        return JSONResponse({"ok": True})
+    except Exception as e:
+        logger.error(f"反馈写入失败: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 if __name__ == "__main__":
     import atexit
     port = int(os.environ.get("PORT", 8000))

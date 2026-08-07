@@ -58,9 +58,18 @@ def execute(args: dict) -> str:
             ensure_ascii=False,
         )
 
-    # 清理内部字段（_ 开头的供内部使用，不给 LLM 看）
-    clean_results = [
-        {k: v for k, v in r.items() if not k.startswith("_")} for r in results
-    ]
+    # 清理内部字段（_ 开头的供内部使用，不给 LLM 看）+ 生成 source_label
+    clean_results = []
+    for r in results:
+        item = {k: v for k, v in r.items() if not k.startswith("_")}
+        # 生成引用标签供 LLM 直接复制
+        fault_code = item.get("fault_code", "")
+        name = item.get("name", "")
+        if fault_code:
+            item["source_label"] = f"[PCS故障 {fault_code} {name}]"
+        else:
+            row_num = item.get("row_num", "")
+            item["source_label"] = f"[PCS参数表 第{row_num}行]"
+        clean_results.append(item)
 
     return json.dumps({"found": True, "results": clean_results}, ensure_ascii=False)

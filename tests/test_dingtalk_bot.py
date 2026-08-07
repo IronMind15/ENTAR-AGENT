@@ -110,7 +110,7 @@ class ProcessTextRoutingTests(unittest.TestCase):
         mock_get_skill.return_value = fake
         result = self.handler._process_text("随便问问", "u1", "s1")
         self.assertEqual(result["answer"], "技能回复")
-        fake.handle.assert_called_once_with("随便问问", user_id="u1")
+        fake.handle.assert_called_once_with("随便问问", user_id="u1", on_chunk=None)
 
     @mock.patch("skills.get_matched_skill")
     def test_fallback(self, mock_get_skill):
@@ -169,20 +169,20 @@ class ProcessToThreadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(args[3], "staff9")
 
     async def test_text_reply_and_memory_also_in_to_thread(self):
-        """回复（reply_markdown）与记忆写入（memory.add）也放线程池，避免阻塞事件循环（v1.6.1）"""
+        """文本回复与记忆写入也放线程池，避免阻塞事件循环（v1.6.1 → 普通 markdown 回复）"""
         handler = self._handler()
+
         msg = _make_text_msg("你好")
         with mock.patch(
             "asyncio.to_thread",
             new=mock.AsyncMock(return_value={"answer": "回复", "source": "x"}),
         ) as m, mock.patch("skills.memory.add") as mem_add:
             await handler.process(msg)
-        # reply_markdown 作为可调用对象传给了 to_thread（而非在事件循环直接调用）
-        # to_thread 调用结构：(func, title, text, incoming_message)，func 是 args[0]
-        reply_calls = self._to_thread_calls(m, handler.reply_markdown)
-        self.assertEqual(len(reply_calls), 1)
-        self.assertEqual(reply_calls[0].args[1], "恩特小助手")  # title
-        self.assertEqual(reply_calls[0].args[2], "回复")  # answer/text 透传
+        # 普通 markdown 回复：reply_markdown 应通过 to_thread 调用
+        md_calls = self._to_thread_calls(m, handler.reply_markdown)
+        self.assertEqual(len(md_calls), 1)
+        self.assertEqual(md_calls[0].args[1], "恩特小助手")  # title
+        self.assertIn("回复", md_calls[0].args[2])  # answer content
         # memory.add 作为可调用对象传入 to_thread（不直接执行；to_thread 被 patch 时不真正执行函数）
         # to_thread 调用结构：(func, user_id, role, content)
         mem_calls = self._to_thread_calls(m, mem_add)

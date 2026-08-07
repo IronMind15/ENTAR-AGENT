@@ -42,15 +42,43 @@ TOOLS = get_tool_definitions()
 
 _PROMPT_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prompts", "system_prompt.txt")
 
+# 内存缓存，避免每次对话都查 DB
+_prompt_cache: dict[str, str] = {}
+
 
 def _load_system_prompt() -> str:
-    """从文件加载 system prompt"""
+    """加载 system prompt：优先从 DB 读取 → 回退到文件 → 缓存到内存"""
+    global _prompt_cache
+    if "system" in _prompt_cache:
+        return _prompt_cache["system"]
+
+    # 优先从 DB 读取
+    try:
+        from user_store import get_prompt
+        db_prompt = get_prompt("system")
+        if db_prompt:
+            _prompt_cache["system"] = db_prompt
+            return db_prompt
+    except Exception as e:
+        logger.debug(f"从 DB 加载 prompt 失败（回退到文件）: {e}")
+
+    # 回退到文件
     try:
         with open(_PROMPT_FILE, "r", encoding="utf-8") as f:
-            return f.read().strip()
+            content = f.read().strip()
     except FileNotFoundError:
         logger.warning(f"System prompt 文件不存在: {_PROMPT_FILE}，使用默认提示词")
-        return "你是恩特小助手，恩特能源内部使用的 AI 助手。"
+        content = "你是恩特小助手，恩特能源内部使用的 AI 助手。"
+
+    _prompt_cache["system"] = content
+    return content
+
+
+def reload_system_prompt() -> str:
+    """清除缓存并重新加载 system prompt（供后台管理调用）"""
+    global _prompt_cache
+    _prompt_cache.pop("system", None)
+    return _load_system_prompt()
 
 
 SYSTEM_PROMPT = _load_system_prompt()
@@ -142,6 +170,157 @@ def _call_deepseek(
     return None
 
 
+def _call_deepseek_stream(
+    messages: list[dict],
+    tools: list | None = None,
+    on_chunk=None,
+    max_tokens: int = 8000,
+) -> dict | None:
+    """流式调用 DeepSeek API（SSE），逐 chunk 回调 on_chunk
+
+    Args:
+        messages: 消息列表（OpenAI 格式）
+        tools: 工具定义列表（可选）
+        on_chunk: callback(text: str, status: str)
+            status: "thinking" | "content" | "tool_call" | "done"
+        max_tokens: 最大输出 token 数
+
+    Returns:
+        组装后的 message dict（兼容非流式路径），或 None（调用失败）
+    """
+    if not DEEPSEEK_API_KEY:
+        logger.warning("DEEPSEEK_API_KEY 未配置")
+        return None
+
+    _t0 = time.time()
+
+    body = {
+        "model": "deepseek-v4-flash",
+        "messages": messages,
+        "temperature": 0.3,
+        "max_tokens": max_tokens,
+        "thinking": {"type": "enabled"},
+        "stream": True,
+    }
+    if tools:
+        body["tools"] = tools
+        body["tool_choice"] = "auto"
+
+    _RETRYABLE_STATUS = (429, 500, 502, 503, 504)
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        try:
+            # 流式模式：信号量持有到流结束（整个 SSE 迭代期间不释放）
+            with _LLM_SEMAPHORE:
+                with _HTTP_CLIENT.stream(
+                    "POST",
+                    "https://api.deepseek.com/chat/completions",
+                    headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
+                    json=body,
+                ) as r:
+                    if r.status_code in _RETRYABLE_STATUS and attempt < max_attempts:
+                        logger.warning(
+                            f"DeepSeek 流式 API 返回 {r.status_code}（第 {attempt}/{max_attempts} 次），稍后重试")
+                        r.read()  # 消费 body 避免连接泄漏
+                        time.sleep(attempt)
+                        continue
+                    if r.status_code != 200:
+                        r.read()
+                        logger.warning(f"DeepSeek 流式 API 返回 {r.status_code}")
+                        return None
+
+                    # SSE 解析
+                    final_content = []
+                    final_tool_calls = {}  # index → {id, type, function: {name, arguments}}
+                    for line in r.iter_lines():
+                        if not line or not line.startswith("data: "):
+                            continue
+                        data_str = line[6:]
+                        if data_str.strip() == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+
+                        # thinking（推理过程，不输出到卡片）
+                        reasoning = delta.get("reasoning_content", "")
+                        if reasoning and on_chunk:
+                            on_chunk(reasoning, "thinking")
+
+                        # content（实际回复内容）
+                        content = delta.get("content", "")
+                        if content:
+                            final_content.append(content)
+                            if on_chunk:
+                                on_chunk(content, "content")
+
+                        # tool_calls（流式拼接参数）
+                        tc_delta = delta.get("tool_calls")
+                        if tc_delta:
+                            for tc in tc_delta:
+                                idx = tc.get("index", 0)
+                                # 首次出现该 tool_call → 立即通知卡片「搜索中」
+                                # 不等参数累积完，减少用户感知空白期
+                                if idx not in final_tool_calls and on_chunk:
+                                    fn_name = tc.get("function", {}).get("name", "")
+                                    _TOOL_DISPLAY = {
+                                        "search_knowledge_base": "🔍 搜索故障知识库...",
+                                        "search_standards": "🔍 搜索标准文档...",
+                                        "search_experience_kb": "🔍 搜索经验库...",
+                                        "calc_pcb_trace": "🔧 PCB 走线计算...",
+                                        "calc_copper_busbar": "🔧 铜排载流计算...",
+                                        "find_employee": "👥 查询同事信息...",
+                                    }
+                                    display = _TOOL_DISPLAY.get(fn_name, f"🔍 {fn_name}...")
+                                    on_chunk(display, "tool_call")
+                                if idx not in final_tool_calls:
+                                    final_tool_calls[idx] = {
+                                        "id": tc.get("id", ""),
+                                        "type": "function",
+                                        "function": {
+                                            "name": tc.get("function", {}).get("name", ""),
+                                            "arguments": "",
+                                        },
+                                    }
+                                args_chunk = tc.get("function", {}).get("arguments", "")
+                                if args_chunk:
+                                    final_tool_calls[idx]["function"]["arguments"] += args_chunk
+
+            # 流结束，组装最终 message
+            _elapsed = time.time() - _t0
+            full_text = "".join(final_content)
+            logger.info(f"    DeepSeek 流式响应 {_elapsed:.1f}s（{len(full_text)} 字）")
+
+            if on_chunk:
+                on_chunk("", "done")
+
+            result = {"content": full_text}
+            if final_tool_calls:
+                result["tool_calls"] = [
+                    final_tool_calls[i] for i in sorted(final_tool_calls)
+                ]
+            return result
+
+        except httpx.TimeoutException:
+            logger.warning(f"DeepSeek 流式 API 超时（第 {attempt}/{max_attempts} 次）")
+            if attempt < max_attempts:
+                time.sleep(attempt)
+                continue
+            return None
+        except httpx.RequestError as e:
+            logger.warning(f"DeepSeek 流式 API 请求失败: {e}（第 {attempt}/{max_attempts} 次）")
+            if attempt < max_attempts:
+                time.sleep(attempt)
+                continue
+            return None
+        except Exception as e:
+            logger.warning(f"DeepSeek 流式 API 未知错误: {e}")
+            return None
+    return None
+
+
 def _execute_tool(tool_call: dict) -> str:
     """执行工具调用，返回 JSON 字符串结果
 
@@ -165,7 +344,7 @@ def _execute_tool(tool_call: dict) -> str:
     return _execute_registered_tool(fn_name, args)
 
 
-def _handle_impl(query: str, user_id: str = "") -> dict:
+def _handle_impl(query: str, user_id: str = "", on_chunk=None) -> dict:
     """RAG Agent 处理入口
 
     三级策略：
@@ -180,6 +359,8 @@ def _handle_impl(query: str, user_id: str = "") -> dict:
     Args:
         query: 用户问题
         user_id: 用户标识（可选，用于注入记忆上下文）
+        on_chunk: 可选 callback(text, status) 用于流式输出
+            status: "thinking" | "content" | "tool_call" | "done"
 
     Returns:
         {"answer": str, "source": str}
@@ -197,6 +378,8 @@ def _handle_impl(query: str, user_id: str = "") -> dict:
         if match:
             answer = format_exact_result(match["metadata"])
             row = match["metadata"].get("row_num", "")
+            if on_chunk:
+                on_chunk(answer, "done")
             return {"answer": answer, "source": f"遥信（DI）表 第{row}行"}
 
     # ===== 第 1.5 关：快速通道（精确标准编号，毫秒级） =====
@@ -207,6 +390,8 @@ def _handle_impl(query: str, user_id: str = "") -> dict:
         match = exact_match_by_std_id(std_id)
         if match:
             answer = format_std_exact_result(match["metadata"])
+            if on_chunk:
+                on_chunk(answer, "done")
             return {"answer": answer, "source": f"标准编号快速匹配"}
 
     # ===== 第 2 关：Agent 通道（LLM + 工具调用） =====
@@ -260,7 +445,7 @@ def _handle_impl(query: str, user_id: str = "") -> dict:
 
     # 构建 messages：静态 system + 历史独立轮次 + 动态上下文末尾
     # （system 保持纯静态 → 前缀缓存稳定；历史作为独立轮次回放 → 追加式增长）
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages = [{"role": "system", "content": _load_system_prompt()}]
 
     # 历史轮次：从窗口滚动点取最近对话（窗口 N 轮 + 释放 1/2），
     # 作为独立 user/assistant 消息回放，不再拼进 system
@@ -303,7 +488,7 @@ def _handle_impl(query: str, user_id: str = "") -> dict:
 
     logger.info(
         f"Agent 处理: {q[:80]}" + (f" [{user_id}]" if user_id else "")
-        + f"（system {len(SYSTEM_PROMPT)} 字静态 + {len(window_msgs)} 条历史轮次）")
+        + f"（system {len(_load_system_prompt())} 字静态 + {len(window_msgs)} 条历史轮次）")
 
     # Agent 循环：允许 LLM 多次调用工具（搜不到自动降级到钉钉知识库）
     MAX_AGENT_LOOPS = 5  # 安全上限，防止死循环
@@ -311,7 +496,11 @@ def _handle_impl(query: str, user_id: str = "") -> dict:
     source_tag = "agent"
 
     for loop_i in range(MAX_AGENT_LOOPS):
-        assistant_msg = _call_deepseek(messages, tools=TOOLS)
+        if on_chunk:
+            assistant_msg = _call_deepseek_stream(
+                messages, tools=TOOLS, on_chunk=on_chunk)
+        else:
+            assistant_msg = _call_deepseek(messages, tools=TOOLS)
 
         if not assistant_msg:
             final_answer = "抱歉，大模型暂时无响应，请稍后再试。"
@@ -327,7 +516,7 @@ def _handle_impl(query: str, user_id: str = "") -> dict:
                 logger.info(f"  Agent 第 {loop_i + 1} 轮：无工具调用，直接回答")
             break
 
-        # 有工具调用 → 执行并追加结果
+        # 有工具调用 → 通知卡片「搜索中」+ 执行并追加结果
         logger.info(f"  Agent 第 {loop_i + 1} 轮：LLM 调用了 {len(assistant_msg['tool_calls'])} 个工具")
 
         messages.append({
@@ -338,6 +527,8 @@ def _handle_impl(query: str, user_id: str = "") -> dict:
 
         for tc in assistant_msg["tool_calls"]:
             if tc.get("type") == "function":
+                # 工具显示已在 _call_deepseek_stream 流式阶段触发（首次出现 tool_call 时）
+                # 此处不再重复显示
                 tool_result = _execute_tool(tc)
                 messages.append({
                     "role": "tool",
@@ -381,8 +572,8 @@ class RAGAgentSkill(BaseSkill):
         return True
 
     @classmethod
-    def handle(cls, query: str, user_id: str = "") -> dict:
-        return _handle_impl(query, user_id=user_id)
+    def handle(cls, query: str, user_id: str = "", on_chunk=None, **kwargs) -> dict:
+        return _handle_impl(query, user_id=user_id, on_chunk=on_chunk)
 
 
 # 向后兼容：保持模块级 handle 函数

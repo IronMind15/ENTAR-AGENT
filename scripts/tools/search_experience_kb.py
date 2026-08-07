@@ -66,6 +66,18 @@ def execute(args: dict) -> str:
         item = {k: v for k, v in r.items() if not k.startswith("_") or k == "_content"}
         if "_content" in r:
             item["content_summary"] = r["_content"]
+        # 生成引用标签
+        title = item.get("std_title", "")
+        chapter_title = item.get("chapter_title", "")
+        file_name = item.get("file_name", "")
+        label_parts = []
+        if title:
+            label_parts.append(title)
+        if chapter_title:
+            label_parts.append(chapter_title)
+        if file_name:
+            label_parts.append(file_name)
+        item["source_label"] = f"[经验 {' | '.join(label_parts)}]" if label_parts else "[经验库]"
         clean_results.append(item)
 
     return json.dumps({"found": True, "results": clean_results}, ensure_ascii=False)

@@ -16,6 +16,7 @@ import os
 import sys
 import logging
 import threading
+import time
 
 # 确保 scripts/ 在模块搜索路径中
 _PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -130,19 +131,30 @@ class ErrorQueryHandler(ChatbotHandler):
         if not text:
             return AckMessage.STATUS_OK, "ok"
 
-        # ---- 判断是否为"秒回"操作（无需"正在处理"提示） ----
-        is_fast = _is_fast_operation(text)
-
-        # 慢操作（走 Agent/LLM）先回提示，避免用户干等
-        if not is_fast:
-            try:
-                # reply_text 是同步网络请求（requests.post），放线程池不阻塞事件循环（v1.6.1）
-                await asyncio.to_thread(self.reply_text, PENDING_HINT_TEXT, bot_msg)
-                logger.info(f"已发送处理提示: {text[:40]}")
-            except Exception as hint_err:
-                logger.warning(f"发送处理提示失败: {hint_err}")
+        # ---- 反馈指令检测：用户回复 "1" 或 "2" 作为上一条回答的反馈 ----
+        if text in ("1", "2"):
+            from user_store import get_last_conversation, add_feedback
+            last = get_last_conversation(user_id)
+            if last:
+                rating = "up" if text == "1" else "down"
+                add_feedback(user_id, last["query"], last["answer"][:500], "agent", rating)
+                fb_text = "收到反馈，感谢！👍" if text == "1" else "收到反馈，我会继续改进！🙏"
+                try:
+                    await asyncio.to_thread(self.reply_text, fb_text, bot_msg)
+                except Exception as fb_err:
+                    logger.warning(f"发送反馈回复失败: {fb_err}")
+                return AckMessage.STATUS_OK, "ok"
 
         # ---- 处理消息（整体捕获异常，返回错误码） ----
+        # 慢操作（LLM/检索）先回一条提示，避免用户干等
+        # 快速操作（故障代码/PCB）通常秒回，无需提示
+        is_fast = _is_fast_operation(text)
+        if not is_fast:
+            try:
+                await asyncio.to_thread(self.reply_text, PENDING_HINT_TEXT, bot_msg)
+            except Exception:
+                pass
+
         try:
             # 同一用户串行、不同用户并行：在该用户处理锁内放行到线程池，
             # 保证同一用户连发消息的回复不乱序，同时不影响其他用户并发。
@@ -153,15 +165,15 @@ class ErrorQueryHandler(ChatbotHandler):
                     self._process_text, text, user_id, staff_id)
 
                 answer = result.get("answer", "") or "抱歉，我没有找到相关信息。"
+                logger.info(f"处理完成: {answer[:50]}...")
 
-                # 回复 Markdown（reply_* 是同步 requests.post，放线程池避免阻塞事件循环；v1.6.1）
+                # 追加反馈提示
+                answer_with_feedback = (
+                    answer + "\n\n---\n回复 1 = 满意 👍 | 回复 2 = 不满意 👎")
+
+                # 发送回复（普通 markdown）
                 await asyncio.to_thread(
-                    self.reply_markdown,
-                    "恩特小助手",
-                    answer,
-                    bot_msg,
-                )
-                logger.info(f"回复成功: {answer[:50]}...")
+                    self.reply_markdown, "恩特小助手", answer_with_feedback, bot_msg)
 
                 # 记录到会话记忆（SQLite 写入，放线程池与处理对齐；v1.6.1）
                 try:
@@ -203,12 +215,15 @@ class ErrorQueryHandler(ChatbotHandler):
         _user_locks[user_id] = (loop, lock)
         return lock
 
-    def _process_text(self, text: str, user_id: str, staff_id: str) -> dict:
+    def _process_text(self, text: str, user_id: str, staff_id: str, on_chunk=None) -> dict:
         """处理文本消息（同步方法，在 to_thread 线程中执行，不阻塞事件循环）
 
         路由顺序：审核口令 → 审核消息 → 技能匹配 → 备用兜底。
         调用方在 process() 中用 asyncio.to_thread 放行，因此本方法可包含
         任意慢操作（DeepSeek 调用、Chroma 检索、审核判断等）。
+
+        Args:
+            on_chunk: 可选 callback(text, status)，用于 AI 卡片流式输出
         """
         # 注入当前发起者 staff_id 到工具上下文（find_employee 敏感字段权限判断用）
         # asyncio.to_thread 会拷贝当前 context，本线程内工具执行能读到
@@ -222,11 +237,15 @@ class ErrorQueryHandler(ChatbotHandler):
                 if staff_id else
                 "当前消息没有携带钉钉员工 ID，请确认应用已取得通讯录基础权限。"
             )
+            if on_chunk:
+                on_chunk(answer, "done")
             return {"answer": answer, "source": "review_identity"}
 
         from knowledge_review import handle_review_message
         review_answer = handle_review_message(text, staff_id)
         if review_answer is not None:
+            if on_chunk:
+                on_chunk(review_answer, "done")
             return {"answer": review_answer, "source": "knowledge_review"}
 
         from skills import get_matched_skill
@@ -234,10 +253,13 @@ class ErrorQueryHandler(ChatbotHandler):
         skill_cls = get_matched_skill(text)
         if skill_cls:
             logger.info(f"  → {skill_cls.name}: {text[:40]}")
-            return skill_cls.handle(text, user_id=user_id)
+            return skill_cls.handle(text, user_id=user_id, on_chunk=on_chunk)
 
         logger.info(f"  → 备用处理: {text[:40]}")
-        return {"answer": "抱歉，我暂时无法处理这个问题。", "source": "fallback"}
+        fallback = "抱歉，我暂时无法处理这个问题。"
+        if on_chunk:
+            on_chunk(fallback, "done")
+        return {"answer": fallback, "source": "fallback"}
 
     def _handle_file_message(self, bot_msg, user_id, sender):
         """处理文件消息"""

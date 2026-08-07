@@ -3,6 +3,79 @@
 > 📌 **本文档是项目唯一的版本记录（单一事实源）**——README.md、PROGRESS.md 的版本历史均指向本文件，发版时只在这里追加记录。
 > 相关：待办清单见 [TODO.md](TODO.md)，进度看板见 [PROGRESS.md](PROGRESS.md)。
 
+## v1.9.1（2026-08-07）
+
+**Agent 体验优化**——工具调用早期通知 + 系统提示词改进。Agent 在 tool_call 首次出现时立即通知（不等参数累积完），减少用户感知空白期；系统提示词新增"不主动汇报用户信息"规则，避免 bot 看到钉钉用户档案后主动说出来。回归 **266 项全绿**。
+
+### 改进
+
+- **工具调用早期通知**（`agent.py`）：`_call_deepseek_stream()` 中，tool_call delta 首次出现时立即 `on_chunk("🔍 搜索故障知识库...", "tool_call")`，不等参数累积完再通知。Web 端同样受益
+- **系统提示词优化**（`system_prompt.txt`）：新增规则"你能看到用户的姓名、部门等信息，但不要主动说出来，除非用户明确问"；删除"回答最后可以问一句是否还需要进一步帮助"
+
+### 测试
+
+- 移除 14 项 AI 卡片测试（功能已回退）
+- 全量回归 **266 项通过**
+
+### 修改文件
+
+| 文件 | 改动 |
+|------|------|
+| `scripts/skills/agent.py` | 工具调用早期通知：tool_call 首次出现立即 on_chunk |
+| `scripts/skills/dingtalk_bot.py` | 移除 AI 卡片代码（_StreamingCard 类 + httpx import）；process() 改回普通 markdown 回复 |
+| `scripts/prompts/system_prompt.txt` | 新增"不主动汇报用户信息"规则；删除"回答最后问是否还需要帮助" |
+| `tests/test_ai_card_streaming.py` | 删除（AI 卡片功能已回退） |
+| `tests/test_dingtalk_bot.py` | 修复 test_text_reply_and_memory_also_in_to_thread 适配 markdown 回复 |
+
+---
+
+## v1.9.0（2026-08-07）
+
+**引用溯源 + 反馈机制 + Prompt 后台配置**——三项 RAG 可观测性与可运维能力补齐。搜索结果统一生成 `source_label` 引用标签（LLM 直接复制即可）；Web/钉钉双通道 👍/👎 反馈收集；系统提示词可通过管理后台在线编辑、即时生效。回归 **266 项全绿**。
+
+### 功能 A：引用溯源标准化
+
+- **source_label 统一生成**：3 个搜索工具（`search_knowledge_base.py` / `search_standards.py` / `search_experience_kb.py`）返回结果自动附加 `source_label` 字段（如 `[GB/T 34133 第6章 第12页]`），LLM 直接引用无需自拼格式
+- **system_prompt.txt 引用规则**：新增「来源标注规则」章节，要求 LLM 直接复制 source_label、末尾用「参考来源：」汇总
+
+### 功能 B：👍/👎 反馈机制
+
+- **数据库层**（`user_store.py`）：新增 `feedback` 表 + `add_feedback` / `get_feedback_stats` / `get_last_conversation` 方法；rating 校验 + 内容截断（500 字）
+- **Web 端**（`web_page.py`）：每条 bot 消息后追加 👍/👎 按钮；点击后 POST `/feedback`、toast 提示、按钮锁定（CSS 变色 + pointer-events: none）
+- **钉钉端**（`dingtalk_bot.py`）：每条回复末尾追加「回复 1 = 满意 👍 | 回复 2 = 不满意 👎」；用户回复 1/2 自动识别为反馈指令，从最近对话反查 query/answer 写入 feedback 表
+- **API**（`main.py`）：新增 `POST /feedback` 端点（q/answer/source/rating/user）
+
+### 功能 C：Prompt 后台配置
+
+- **数据库层**（`user_store.py`）：新增 `prompts` 表 + `get_prompt` / `set_prompt` / `list_prompts` 方法；upsert 覆盖写入
+- **加载改造**（`agent.py`）：`_load_system_prompt()` 优先从 DB 读取 → 回退文件 → 内存缓存（`_prompt_cache`）；新增 `reload_system_prompt()` 供后台清除缓存
+- **管理页面**（`router.py`）：`GET /admin/prompts`（textarea 编辑页）、`POST /admin/prompts/system`（保存生效）、`POST /admin/prompts/reset`（重置为文件默认）；`GET /admin/feedback-stats`（反馈统计 JSON）
+
+### 测试
+
+- 新增 25 项（反馈 CRUD 6 + 最近对话 3 + Prompt 管理 5 + 便捷函数 4 + source_label 4 + Agent 加载 3）
+- 修复 1 项：dingtalk_bot 旧测试 `test_text_reply_and_memory_also_in_to_thread` 适配反馈后缀
+- 全量回归 **266 项通过**（此前 241 项）
+
+### 修改文件
+
+| 文件 | 改动 |
+|------|------|
+| `scripts/user_store.py` | +feedback 表 +prompts 表 +6 个新方法 +4 个便捷函数 |
+| `scripts/main.py` | +POST /feedback 端点 |
+| `scripts/web_page.py` | +反馈按钮 CSS/JS +toast |
+| `scripts/tools/search_knowledge_base.py` | +source_label 字段 |
+| `scripts/tools/search_standards.py` | +source_label 字段 |
+| `scripts/tools/search_experience_kb.py` | +source_label 字段 |
+| `scripts/prompts/system_prompt.txt` | +来源标注规则 |
+| `scripts/skills/agent.py` | _load_system_prompt 改从 DB 读取 +缓存 +reload |
+| `scripts/doc_mgr/router.py` | +feedback-stats +prompts 页面/端点 |
+| `scripts/skills/dingtalk_bot.py` | +反馈指令识别 +回复追加反馈提示 |
+| `tests/test_feedback_and_prompts.py` | 新建（25 项） |
+| `tests/test_dingtalk_bot.py` | 修复 1 项适配反馈后缀 |
+
+---
+
 ## v1.8.0（2026-08-07）
 
 **文档格式补齐**——新增 Word (.docx)、PPT (.pptx)、CSV (.csv) 三种格式支持，支持格式从 3 种扩展到 6 种。Word/PPT 转为 Markdown 后复用 MarkdownChunker 切块；CSV 逐行格式化直接入库（同 Excel 模式）。回归 **241 项全绿**。
