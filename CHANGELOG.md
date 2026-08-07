@@ -3,6 +3,53 @@
 > 📌 **本文档是项目唯一的版本记录（单一事实源）**——README.md、PROGRESS.md 的版本历史均指向本文件，发版时只在这里追加记录。
 > 相关：待办清单见 [TODO.md](TODO.md)，进度看板见 [PROGRESS.md](PROGRESS.md)。
 
+## v1.10.0（2026-08-07）
+
+**🖼️ 识图功能**——小助手从此「看得见」。钉钉发图自动识别并描述内容（qwen3.7-flash 视觉外挂），识别结果直接回流回复；同时新增 `tools/describe_image` 工具注册，DeepSeek Agent 将来可主动调图；Claude Code 侧同步落地 vision skill。顺带修复 MinerU OSS 上传被 Clash 劫持的隐患，并用真实 254 页扫描件完成超 200 页拆分入库全链路验证。回归 **283 项全绿**。
+
+### 功能 A：钉钉识图（重点）
+
+- **发图即识别**（`dingtalk_bot.py` `_handle_image_message`）：图片保存后逐张调视觉模型，成功张回 `📝 描述`、失败张 `⚠️ 已保存但识别失败`、未配 key 回退旧「图片已保存」文案——单张失败只降级该张，不拖垮整条
+- **识别结果直接回复**：不走 `_process_text` 回流 DeepSeek，省一次往返
+- 提示语 `🖼️ 收到图片，正在识别内容，请稍候...`
+
+### 功能 B：describe_image 工具 + 视觉外挂
+
+- **新工具**（`tools/describe_image.py`，`@register` 注册）：Agent 将来可主动调用 `{"image_path": ...}`
+- **供应商无关设计**：httpx POST 阿里云百炼 OpenAI 兼容协议 `/chat/completions`，模型 `qwen3.7-flash`（可升 plus）
+- **安全加固**：magic bytes 检测真实图片格式（PNG/JPEG/GIF/WebP/BMP，不信任扩展名）；8MB 大小守卫；路径白名单（必须位于 `data/uploads/`，防提示注入诱导读任意文件 base64 外传）；`_RETRYABLE_STATUS=(429,500,502,503,504)` 指数退避重试
+- **配置**：`config.py` 导出 `DASHSCOPE_API_KEY` / `VISION_MODEL`；key 存 `local_config.py`（gitignore 不入库）
+
+### 功能 C：Claude Code vision skill
+
+- 用户级 skill `~/.claude/skills/vision/`：底层模型无原生视觉，收到图片时运行 `D:\claude-vision-skill\vision.js` 借助千问视觉模型识图
+
+### 修复与验证
+
+- **MinerU OSS 上传绕 Clash**（`mineru_extract.py`）：裸 `requests.put` 改 `_NET_SESSION.put`（已 `trust_env=False`），消除系统代理劫持导致的 `connect timeout`（实测从 180s 超时重试全败 → 5s 秒传）
+- **真实 254 页扫描件端到端入库**：《PCB和电磁兼容设计》无文字层 PDF，拆分 200+54 两段 → MinerU VLM 识别 → 合并 → 226 块入库，识别质量（封面/ISBN/出版社）正确，总耗时约 3.5 分钟
+
+### 测试
+
+- 新增 17 项：`test_describe_image.py`（注册/参数/路径白名单/格式识别/请求体组装/5xx 重试/超时降级 13 项）+ `test_dingtalk_bot.py` 图片识图 4 项
+- 全量回归 **283 项通过**（此前 266 项）
+
+### 修改文件
+
+| 文件 | 改动 |
+|------|------|
+| `scripts/tools/describe_image.py` | 🆕 识图工具（qwen3.7-flash 视觉外挂，magic bytes + 白名单 + 重试） |
+| `scripts/tools/__init__.py` | 注册 describe_image |
+| `scripts/skills/dingtalk_bot.py` | 图片消息识图：保存后逐张识别，📝/⚠️/无 key 三级降级 |
+| `scripts/skills/agent.py` | `_TOOL_DISPLAY` 加识图卡片 |
+| `scripts/config.py` | 导出 DASHSCOPE_API_KEY / VISION_MODEL |
+| `scripts/local_config.py` | 🆕 DASHSCOPE_API_KEY（gitignore 不入库） |
+| `scripts/mineru_extract.py` | OSS 上传绕 Clash：`requests.put` → `_NET_SESSION.put` |
+| `tests/test_describe_image.py` | 🆕 13 项识图工具测试 |
+| `tests/test_dingtalk_bot.py` | 追加 4 项图片识图测试 |
+
+---
+
 ## v1.9.1（2026-08-07）
 
 **Agent 体验优化**——工具调用早期通知 + 系统提示词改进。Agent 在 tool_call 首次出现时立即通知（不等参数累积完），减少用户感知空白期；系统提示词新增"不主动汇报用户信息"规则，避免 bot 看到钉钉用户档案后主动说出来。回归 **266 项全绿**。

@@ -272,6 +272,7 @@ def _call_deepseek_stream(
                                         "calc_pcb_trace": "🔧 PCB 走线计算...",
                                         "calc_copper_busbar": "🔧 铜排载流计算...",
                                         "find_employee": "👥 查询同事信息...",
+                                        "describe_image": "🖼️ 识别图片内容...",
                                     }
                                     display = _TOOL_DISPLAY.get(fn_name, f"🔍 {fn_name}...")
                                     on_chunk(display, "tool_call")

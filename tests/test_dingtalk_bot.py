@@ -398,3 +398,84 @@ class PerUserSerializationTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ImageMessageRecognitionTests(unittest.TestCase):
+    """图片消息识图：成功 / 单张失败降级 / 无 key 跳过 / 未保存"""
+
+    def setUp(self):
+        self.handler = ErrorQueryHandler()
+
+    def _image_msg(self, user_id: str = "u1") -> mock.MagicMock:
+        msg = mock.MagicMock()
+        msg.get_image_list.return_value = ["download-code-1"]
+        return msg
+
+    @staticmethod
+    def _saved_file():
+        return {
+            "success": True,
+            "file_path": "D:/ENTAR_AGENT/data/uploads/u1/2026-08-07/image_1.png",
+            "file_name": "image_1.png",
+            "file_size": 100,
+            "message": "ok",
+        }
+
+    @mock.patch("tools.execute_tool")
+    @mock.patch("file_handler.download_and_save_file")
+    @mock.patch.object(ErrorQueryHandler, "reply_markdown")
+    @mock.patch.object(ErrorQueryHandler, "reply_text")
+    @mock.patch("config.DASHSCOPE_API_KEY", "sk-test")
+    def test_recognize_success(self, m_reply, m_md, m_save, m_tool):
+        """识图成功 → 先发提示，再发含描述的 Markdown"""
+        import json
+        m_save.return_value = self._saved_file()
+        m_tool.return_value = json.dumps({"description": "一张电路板照片"}, ensure_ascii=False)
+        self.handler._handle_image_message(self._image_msg(), "u1", "测试")
+        m_reply.assert_called_once()  # 先发"正在识别"提示
+        m_tool.assert_called_with("describe_image", mock.ANY)
+        self.assertEqual(m_md.call_count, 1)
+        text = m_md.call_args[1]["text"]
+        self.assertIn("一张电路板照片", text)
+        self.assertEqual(m_md.call_args[1]["title"], "恩特小助手 - 图片识别")
+
+    @mock.patch("tools.execute_tool")
+    @mock.patch("file_handler.download_and_save_file")
+    @mock.patch.object(ErrorQueryHandler, "reply_markdown")
+    @mock.patch.object(ErrorQueryHandler, "reply_text")
+    @mock.patch("config.DASHSCOPE_API_KEY", "sk-test")
+    def test_recognize_failure_fallback(self, m_reply, m_md, m_save, m_tool):
+        """识图失败 → 降级该张，回复保存确认"""
+        import json
+        m_save.return_value = self._saved_file()
+        m_tool.return_value = json.dumps({"error": "图片识别失败，请稍后重试"}, ensure_ascii=False)
+        self.handler._handle_image_message(self._image_msg(), "u1", "测试")
+        text = m_md.call_args[1]["text"]
+        self.assertIn("识别失败", text)
+        self.assertIn("图片已保存", text)
+        self.assertEqual(m_md.call_args[1]["title"], "恩特小助手 - 图片接收")
+
+    @mock.patch("tools.execute_tool")
+    @mock.patch("file_handler.download_and_save_file")
+    @mock.patch.object(ErrorQueryHandler, "reply_markdown")
+    @mock.patch.object(ErrorQueryHandler, "reply_text")
+    @mock.patch("config.DASHSCOPE_API_KEY", "")
+    def test_no_key_skip(self, m_reply, m_md, m_save, m_tool):
+        """未配置 key → 跳过识图，回复旧文案，不调识图工具"""
+        m_save.return_value = self._saved_file()
+        self.handler._handle_image_message(self._image_msg(), "u1", "测试")
+        m_tool.assert_not_called()
+        text = m_md.call_args[1]["text"]
+        self.assertIn("图片已保存", text)
+
+    @mock.patch("tools.execute_tool")
+    @mock.patch("file_handler.download_and_save_file")
+    @mock.patch.object(ErrorQueryHandler, "reply_markdown")
+    @mock.patch.object(ErrorQueryHandler, "reply_text")
+    @mock.patch("config.DASHSCOPE_API_KEY", "sk-test")
+    def test_save_failed(self, m_reply, m_md, m_save, m_tool):
+        """保存失败 → 回复接收失败，不调识图"""
+        m_save.return_value = {"success": False, "message": "下载失败"}
+        self.handler._handle_image_message(self._image_msg(), "u1", "测试")
+        m_tool.assert_not_called()
+        self.assertEqual(m_md.call_args[1]["text"], "图片接收失败，请重试")

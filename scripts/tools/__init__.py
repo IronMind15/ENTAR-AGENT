@@ -120,3 +120,4 @@ from . import calc_pcb_trace         # noqa: E402, F811 — PCB 走线计算（I
 from . import calc_copper_busbar     # noqa: E402, F811 — 铜排/母线载流（v1.6.0）
 from . import search_experience_kb   # noqa: E402, F811 — 经验知识库检索（v1.4.2 第二步）
 from . import find_employee          # noqa: E402, F811 — 钉钉通讯录员工查询（v1.7.0）
+from . import describe_image         # noqa: E402, F811 — 图片识别（千问视觉，v1.10.0）

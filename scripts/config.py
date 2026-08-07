@@ -85,6 +85,10 @@ ADMIN_PASSWORD: str = _get_config("ADMIN_PASSWORD")
 # MinerU API Token（精准解析）
 MINERU_TOKEN: str = _get_config("MINERU_TOKEN")
 
+# 阿里云百炼 DashScope（千问视觉识图）
+DASHSCOPE_API_KEY: str = _get_config("DASHSCOPE_API_KEY")
+VISION_MODEL: str = _get_config("VISION_MODEL") or "qwen3.7-flash"
+
 # ── 双层记忆（长期记忆）配置 ───────────────────────────
 LONG_TERM_MEMORY_ENABLED: bool = True   # 长期记忆总开关（False 时行为与升级前一致）
 SESSION_TIMEOUT_MINUTES: int = 30       # 距上条消息超过该分钟数 → 新会话（仅用于 session_id 打标）

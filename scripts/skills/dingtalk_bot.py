@@ -12,6 +12,7 @@ Stream 模式说明：
 """
 
 import asyncio
+import json
 import os
 import sys
 import logging
@@ -41,6 +42,7 @@ logger = logging.getLogger("dingtalk_bot")
 PENDING_HINT_TEXT = "⏳ 收到，正在处理中，请稍候..."
 PENDING_HINT_FILE = "📎 收到文件，正在处理，请稍候..."
 PENDING_HINT_IMAGE = "🖼️ 收到图片，正在保存，请稍候..."
+PENDING_HINT_IMAGE_RECOGNIZE = "🖼️ 收到图片，正在识别内容，请稍候..."
 
 # 错误码体系（出现问题时返回，方便定位排查）
 ERROR_CODE_INTERNAL = 1000   # 内部错误
@@ -336,11 +338,11 @@ class ErrorQueryHandler(ChatbotHandler):
         return AckMessage.STATUS_OK, "ok"
 
     def _handle_image_message(self, bot_msg, user_id, sender):
-        """处理图片消息"""
+        """处理图片消息（下载保存 + 识图）"""
         try:
-            # 先回"收到图片"提示，保存需时间
+            # 先回"收到图片"提示，保存 + 识图需要时间
             try:
-                self.reply_text(PENDING_HINT_IMAGE, bot_msg)
+                self.reply_text(PENDING_HINT_IMAGE_RECOGNIZE, bot_msg)
             except Exception:
                 pass
 
@@ -354,9 +356,9 @@ class ErrorQueryHandler(ChatbotHandler):
             logger.info(f"  收到 {len(image_list)} 张图片")
 
             # 下载并保存图片
-            from file_handler import download_and_save_file, get_upload_dir
+            from file_handler import download_and_save_file
 
-            saved_files = []
+            saved_files = []  # [{"name", "path"}]
             for i, download_code in enumerate(image_list):
                 file_name = f"image_{i+1}.png"
                 result = download_and_save_file(
@@ -367,24 +369,67 @@ class ErrorQueryHandler(ChatbotHandler):
                     user_name=sender,
                 )
                 if result["success"]:
-                    saved_files.append(result["file_name"])
+                    saved_files.append({
+                        "name": result.get("file_name", file_name),
+                        "path": result.get("file_path", ""),
+                    })
+
+            # 识图：已配置 key 时逐张调 describe_image（千问视觉）
+            from config import DASHSCOPE_API_KEY
+            descriptions = []  # [{"name", "desc", "ok"}]
+            if saved_files and DASHSCOPE_API_KEY:
+                from tools import execute_tool
+                for item in saved_files:
+                    if not item["path"]:
+                        continue
+                    try:
+                        raw = execute_tool(
+                            "describe_image",
+                            {"image_path": item["path"], "question": "请用中文详细描述这张图片的内容"},
+                        )
+                        parsed = json.loads(raw) if isinstance(raw, str) else (raw or {})
+                        if parsed.get("description"):
+                            descriptions.append({"name": item["name"], "desc": parsed["description"], "ok": True})
+                        else:
+                            descriptions.append({"name": item["name"], "desc": parsed.get("error", "识别失败"), "ok": False})
+                    except Exception as e:
+                        logger.warning(f"识图失败 {item['name']}: {e}")
+                        descriptions.append({"name": item["name"], "desc": f"识别异常：{e}", "ok": False})
 
             # 构建回复消息
             if saved_files:
-                answer = f"✅ 已收到 {len(saved_files)} 张图片\n\n"
-                for name in saved_files:
-                    answer += f"🖼️ {name}\n"
-                answer += f"\n图片已保存，如需处理请告诉我。"
+                if descriptions and any(d["ok"] for d in descriptions):
+                    lines = [f"✅ 已收到 {len(saved_files)} 张图片", ""]
+                    for d in descriptions:
+                        lines.append(f"🖼️ {d['name']}\n📝 {d['desc']}")
+                    answer = "\n\n".join(lines)
+                    title = "恩特小助手 - 图片识别"
+                else:
+                    lines = [f"✅ 已收到 {len(saved_files)} 张图片", ""]
+                    if descriptions:  # 有识图尝试但全部失败
+                        for d in descriptions:
+                            lines.append(f"🖼️ {d['name']}\n⚠️ {d['desc']}")
+                        lines.append("")
+                        lines.append("图片已保存，如需处理请告诉我。")
+                    else:  # 未配置 key，未识图
+                        for item in saved_files:
+                            lines.append(f"🖼️ {item['name']}")
+                        lines.append("")
+                        lines.append("图片已保存，如需处理请告诉我。")
+                    answer = "\n".join(lines)
+                    title = "恩特小助手 - 图片接收"
             else:
                 answer = "图片接收失败，请重试"
+                title = "恩特小助手 - 图片接收"
 
             # 回复用户
             self.reply_markdown(
-                title="恩特小助手 - 图片接收",
+                title=title,
                 text=answer,
                 incoming_message=bot_msg,
             )
-            logger.info(f"图片接收确认已发送")
+            ok_count = len([d for d in descriptions if d["ok"]])
+            logger.info(f"图片处理完成（识别成功 {ok_count}/{len(descriptions)} 张）")
 
         except Exception as e:
             logger.error(f"处理图片消息失败: {e}")

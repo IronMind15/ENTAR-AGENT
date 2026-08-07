@@ -32,7 +32,7 @@
 - ✅ Web 同步管理、强制重学和任务进度追踪（v1.2.5）
 - ✅ SHA-256 内容指纹、安全版本替换和 MinerU 安全加固（v1.2.6）
 - 🧪 固定审核人主动推送与审批口令已完成代码和离线测试，尚未真实发消息
-- ✅ 278 项自动化回归测试（含 65 项 PCB 计算 + 文档处理/版本替换/上传审核 + 并发/路由 + 通讯录查询 + 反馈/Prompt/引用溯源 + AI 卡片流式）
+- ✅ 283 项自动化回归测试（含 65 项 PCB 计算 + 文档处理/版本替换/上传审核 + 并发/路由 + 通讯录查询 + 反馈/Prompt/引用溯源 + 识图）
 - ✅ 局域网共享（防火墙放行端口 8000）
 - ✅ 同事实测通过
 - ⚠️ v1.4.1 尚未在正式知识库、真实 MinerU 和钉钉生产环境完成端到端回归
@@ -225,9 +225,10 @@ FastAPI (main.py) → Agent 循环（agent.py）
 | 增强检索 | enhanced_search.py | 向量 + BM25 双路召回 RRF 融合 + bge-reranker 重排（v1.3.0） |
 | PCB 计算 | pcb_calc.py + tools/calc_pcb_trace.py | 54 类 PCB 计算器，全本地秒回（v1.5.4 以 pcb-tools.cn 为基准） |
 | 文件接收 | file_handler.py | 钉钉文件/图片接收 → 自动下载保存到 data/uploads/ |
+| 识图能力 | describe_image.py + qwen3.7-flash | 钉钉发图自动识别描述（视觉外挂，v1.10.0）；tools/ 注册 + Claude Code vision skill；magic bytes + 路径白名单 + 5xx 重试 |
 | 上传审核 | knowledge_review.py + dingtalk_notifier.py | 固定审核人主动通知、一次性审批和后台同步 |
 | 崩溃恢复 | doc_mgr/recovery.py | 启动时清理/恢复遗留 staging/retired 版本数据 |
-| 自动化测试 | unittest | 278 项文档引擎、同步追踪、PCB 计算、安全和版本替换、并发路由、通讯录查询、反馈/Prompt/引用溯源、AI 卡片流式测试 |
+| 自动化测试 | unittest | 283 项文档引擎、同步追踪、PCB 计算、安全和版本替换、并发路由、通讯录查询、反馈/Prompt/引用溯源、识图测试 |
 | 部署 | Docker + docker-compose | 可选容器化部署 |
 
 ## 运行方式

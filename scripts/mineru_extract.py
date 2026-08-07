@@ -181,7 +181,7 @@ def extract_pdf(file_path: str, output_dir: str, model: str = "vlm") -> str:
         for attempt in range(MAX_RETRIES):
             try:
                 with open(file_path, 'rb') as f:
-                    res_upload = requests.put(urls[i], data=f, timeout=180)
+                    res_upload = _NET_SESSION.put(urls[i], data=f, timeout=180)
                 if res_upload.status_code == 200:
                     logger.info(f"  ✅ 上传成功")
                     break  # 成功，跳出重试循环
