@@ -5,6 +5,7 @@ resolve_reviewer_staff_ids()，以后切换为“按部门找主管”时无需�
 """
 
 import logging
+import os
 import re
 import threading
 from pathlib import Path
@@ -305,6 +306,191 @@ class KnowledgeReviewService:
             f"任务编号：{task_id}"
         )
 
+    # ===== v1.10.2 直接学习 / 我的文件 / 删除 能力 =====
+    # 说明：审核流程（create_request/handle_command/notify_*）已停用但代码保留，
+    # 未来恢复部门划分与主管审核时，在 dingtalk_bot 恢复 queue_review_for_upload
+    # 调用，并把 process_file 的 department 从 "public" 改为用户主部门即可。
+
+    def list_files_for_user(self, user_id: str, is_admin: bool = False) -> list[dict]:
+        """列出文件：普通用户只看自己上传的；管理员看全库。"""
+        if is_admin:
+            return self.tracker.list_all()
+        return self.tracker.get_files_by_user(user_id)
+
+    def _locate_file(self, user_id: str, target: str,
+                     is_admin: bool = False) -> dict:
+        """按序号（1-based）或文件名模糊匹配定位文件记录。
+
+        普通用户只在自己上传的文件中定位；管理员在全库中定位。
+        返回 {"status":"ok","row":...}，否则返回错误原因。
+        """
+        rows = (self.tracker.list_all() if is_admin
+                else self.tracker.get_files_by_user(user_id))
+        if not rows:
+            return {"status": "no_file", "message": "当前没有文件记录。"}
+        target = (target or "").strip()
+        if target.isdigit():
+            idx = int(target) - 1
+            if 0 <= idx < len(rows):
+                return {"status": "ok", "row": rows[idx]}
+            return {"status": "not_found",
+                    "message": f"序号超出范围（共 {len(rows)} 个）。"}
+        # 文件名模糊匹配；提示用全列表序号，避免用户再输入序号错位
+        matches = [(i, r) for i, r in enumerate(rows)
+                   if target in (r.get("file_name") or "")]
+        if not matches:
+            return {"status": "not_found",
+                    "message": f"未找到文件名包含「{target}」的文件。"}
+        if len(matches) > 1:
+            names = "\n".join(f"{i + 1}. {r['file_name']}" for i, r in matches)
+            return {"status": "ambiguous",
+                    "message": f"匹配到多个文件，请用序号指定：\n{names}"}
+        return {"status": "ok", "row": matches[0][1]}
+
+    def learn_for_user(self, user_id: str, user_name: str = "") -> dict:
+        """用户上传文件后回复「帮我学习」→ 直接同步入库（无审核）。
+
+        取该用户最新待学习文件（pending/error），同步调 process_file，
+        复用 engine 内部 _record_sync_status 自动 mark_synced/mark_error。
+        """
+        from doc_mgr.engine import process_file
+
+        rows = [r for r in self.tracker.get_pending_files()
+                if r.get("upload_user_id") == user_id]
+        if not rows:
+            return {"status": "no_file",
+                    "message": "当前没有待学习的文件，请先发送文件再回复「帮我学习」。"}
+        row = rows[0]  # get_pending_files 已按 updated_at DESC
+        file_path, file_name = row["file_path"], row["file_name"]
+
+        if not self._is_safe_upload_file(file_path):
+            return {"status": "failed", "file_name": file_name,
+                    "message": "文件不存在或路径不安全，已停止学习。请重新发送文件。"}
+
+        # 必须显式传 collection：engine 内部 .md 默认走 standards，
+        # 与 default_collection 的 .md→experience_kb 不一致，按登记库入库。
+        collection = row.get("target_collection") or default_collection(file_name)
+        try:
+            doc = process_file(
+                file_path,
+                file_name=file_name,
+                target_collection=collection,
+                force=False,
+                department="public",  # v1.10.2 暂不划分部门；未来改传用户主部门
+            )
+        except Exception as exc:
+            logger.exception(f"用户直接学习失败: {file_path}")
+            try:
+                self.tracker.mark_error(file_path, str(exc)[:500])
+            except Exception:
+                pass
+            return {"status": "failed", "file_name": file_name,
+                    "message": str(exc)[:200]}
+
+        if doc.status == "done":
+            return {"status": "ok", "file_name": file_name,
+                    "collection": collection,
+                    "chunk_count": int(getattr(doc, "chunk_count", 0) or 0),
+                    "message": ""}
+        return {"status": "failed", "file_name": file_name,
+                "message": getattr(doc, "message", "") or "处理失败"}
+
+    def relearn_for_user(self, user_id: str, target: str,
+                         is_admin: bool = False) -> dict:
+        """对已上传文件强制重新学习（force=True 重新解析入库）。"""
+        from doc_mgr.engine import process_file
+
+        located = self._locate_file(user_id, target, is_admin)
+        if located["status"] != "ok":
+            return located
+        row = located["row"]
+        if not is_admin and row.get("upload_user_id", "") != user_id:
+            return {"status": "denied",
+                    "message": "你无权重新学习其他用户上传的文件。"}
+        file_path, file_name = row["file_path"], row["file_name"]
+        if not self._is_safe_upload_file(file_path):
+            return {"status": "failed", "file_name": file_name,
+                    "message": "文件不存在或路径不安全，请重新发送文件。"}
+        collection = row.get("target_collection") or default_collection(file_name)
+        try:
+            doc = process_file(
+                file_path,
+                file_name=file_name,
+                target_collection=collection,
+                force=True,
+                department="public",
+            )
+        except Exception as exc:
+            logger.exception(f"强制重学失败: {file_path}")
+            try:
+                self.tracker.mark_error(file_path, str(exc)[:500])
+            except Exception:
+                pass
+            return {"status": "failed", "file_name": file_name,
+                    "message": str(exc)[:200]}
+        if doc.status == "done":
+            return {"status": "ok", "file_name": file_name,
+                    "collection": collection,
+                    "chunk_count": int(getattr(doc, "chunk_count", 0) or 0),
+                    "message": ""}
+        return {"status": "failed", "file_name": file_name,
+                "message": getattr(doc, "message", "") or "处理失败"}
+
+    def delete_for_user(self, user_id: str, target: str,
+                        is_admin: bool = False) -> dict:
+        """删除用户自己上传的文件：学习内容（向量）+ 源文件 + tracker 记录。
+
+        权限硬校验：非管理员只能删 upload_user_id == user_id 的记录。
+        """
+        from doc_mgr.engine import get_store
+        from doc_mgr.identity import stable_document_id
+
+        located = self._locate_file(user_id, target, is_admin)
+        if located["status"] != "ok":
+            return located
+        row = located["row"]
+
+        # 权限硬校验：普通用户严禁删除其他用户上传的任何数据
+        if not is_admin and row.get("upload_user_id", "") != user_id:
+            return {"status": "denied",
+                    "message": "你无权删除其他用户上传的文件。"}
+
+        file_path, file_name = row["file_path"], row["file_name"]
+        collection = row.get("target_collection") or default_collection(file_name)
+        deleted_chunks = 0
+
+        # 1. 删除知识库学习内容（按 doc_id 精确删，不误伤同名文件）
+        try:
+            doc_id = stable_document_id(file_path)
+            store = get_store()
+            before = store.get(collection, where={"doc_id": doc_id}) or {}
+            before_ids = before.get("ids", []) or []
+            if before_ids:
+                store.delete(collection, ids=before_ids)
+                deleted_chunks = len(before_ids)
+        except Exception as exc:
+            logger.warning(f"删除知识库内容失败（继续删源文件）: {exc}")
+
+        # 2. 删除源文件（白名单校验：必须在上传目录内）
+        source_deleted = False
+        try:
+            if self._is_safe_upload_file(file_path):
+                os.remove(file_path)
+                source_deleted = True
+        except OSError as exc:
+            logger.warning(f"删除源文件失败（保留 tracker 记录）: {exc}")
+
+        # 3. 删除 tracker 记录
+        try:
+            self.tracker.delete_file(file_path)
+        except Exception as exc:
+            logger.warning(f"删除追踪记录失败: {exc}")
+
+        return {"status": "ok", "file_name": file_name,
+                "deleted_chunks": deleted_chunks,
+                "source_deleted": source_deleted,
+                "message": ""}
+
     def _is_safe_upload_file(self, file_path: str) -> bool:
         try:
             root = self.upload_root.resolve(strict=True)
@@ -416,3 +602,27 @@ def queue_review_for_upload(result: dict, uploader_user_id: str,
 
 def handle_review_message(text: str, sender_staff_id: str) -> Optional[str]:
     return get_review_service().handle_command(text, sender_staff_id)
+
+
+# ===== v1.10.2 直接学习 / 我的文件 / 删除 模块级入口（供 dingtalk_bot 调用） =====
+
+def learn_file_for_user(user_id: str, user_name: str = "") -> dict:
+    """用户回复「帮我学习」→ 直接入库最新待学习文件。"""
+    return get_review_service().learn_for_user(user_id, user_name)
+
+
+def list_files_for_user(user_id: str, is_admin: bool = False) -> list[dict]:
+    """列出文件：普通用户只看自己的，管理员看全库。"""
+    return get_review_service().list_files_for_user(user_id, is_admin)
+
+
+def delete_file_for_user(user_id: str, target: str,
+                         is_admin: bool = False) -> dict:
+    """删除指定文件：学习内容 + 源文件 + tracker 记录（限本人/管理员）。"""
+    return get_review_service().delete_for_user(user_id, target, is_admin)
+
+
+def relearn_file_for_user(user_id: str, target: str,
+                          is_admin: bool = False) -> dict:
+    """对指定文件强制重新学习（限本人/管理员）。"""
+    return get_review_service().relearn_for_user(user_id, target, is_admin)

@@ -14,6 +14,7 @@ Stream 模式说明：
 import asyncio
 import json
 import os
+import re
 import sys
 import logging
 import threading
@@ -65,6 +66,11 @@ def _is_fast_operation(text: str) -> bool:
         return True
     if t.startswith(("同意同步", "拒绝同步")):
         return True
+    # v1.10.2：我的文件 / 删除 / 管理员切换为秒回；「帮我学习」「重新学习」
+    # 可能走 MinerU 较慢，保留「正在处理」提示（不在此秒回）。
+    if (_MY_FILES_RE.match(t) or _DELETE_RE.match(t) or _ADMIN_ENTER_RE.match(t)
+            or _ADMIN_EXIT_RE.match(t) or _ADMIN_LIST_ALL_RE.match(t)):
+        return True
     try:
         from skills import get_matched_skill
         skill = get_matched_skill(t)
@@ -79,6 +85,103 @@ def _is_fast_operation(text: str) -> bool:
 # 新循环复用会抛 "bound to a different event loop" —— 按循环存锁，循环变化自动重建（v1.6.1）
 # 内部工具用户量小，锁字典不主动清理（单个 asyncio.Lock 内存可忽略）
 _user_locks: dict[str, tuple[asyncio.AbstractEventLoop, asyncio.Lock]] = {}
+
+# ===== v1.10.2 上传学习 / 我的文件 / 删除 / 管理员模式 =====
+# 管理员会话（内存态，重启失效）。口令由 config.ADMIN_MASTER_CODE 配置，
+# 默认 ENTERBOSS，可在 local_config.py 覆盖。
+_admin_sessions: set[str] = set()
+
+# 「帮我学习」触发：匹配「帮我学习 / 学习一下 / 入库 / 帮我入库 / 学习这个文件」，
+# 锚定首尾，避免「我想学习英语」等带宾语场景误触。
+_LEARN_RE = re.compile(
+    r"^(?:帮我\s*)?(?:学习|入库)(?:\s*(?:一下|这个文件|这些文件|该文件))?\s*[!！。.]?$"
+)
+# 「我的文件」：查看自己上传过的文件
+_MY_FILES_RE = re.compile(r"^(查看\s*)?(?:我的文件|我的上传|我上传的文件)$")
+# 「删除学习 X」/「删除 X」
+_DELETE_RE = re.compile(r"^(?:删除|删掉)\s*(?:学习\s*)?(.+?)\s*$")
+# 「重新学习 X」/「重学 X」
+_RELEARN_RE = re.compile(r"^(?:重新学习|重学)\s*(.+?)\s*$")
+# 管理员：进入 / 退出 / 查看全部
+_ADMIN_ENTER_RE = re.compile(r"^ENTARBOSS$")
+_ADMIN_EXIT_RE = re.compile(r"^(?:退出管理员|退出管理)$")
+_ADMIN_LIST_ALL_RE = re.compile(r"^(?:查看全部文件|全部文件)$")
+
+
+def _is_admin(user_id: str) -> bool:
+    return user_id in _admin_sessions
+
+
+def _is_learn_command(text: str) -> bool:
+    return bool(_LEARN_RE.match((text or "").strip()))
+
+
+_STATUS_LABELS = {
+    "synced": "✅ 已学习",
+    "pending": "⏳ 待学习",
+    "error": "❌ 失败",
+}
+_COLLECTION_LABELS = {
+    "error_codes": "故障代码库",
+    "experience_kb": "经验知识库",
+    "standards": "标准文档库",
+}
+
+
+def _format_my_files(rows: list[dict], is_admin: bool = False) -> str:
+    """格式化「我的文件」/「查看全部文件」列表 + 下一步建议"""
+    if not rows:
+        return "📭 当前没有文件记录。\n\n💡 发送文件给我，回复「帮我学习」即可直接入库。"
+    lines = []
+    for i, row in enumerate(rows, start=1):
+        name = row.get("file_name", "?")
+        status = _STATUS_LABELS.get(row.get("sync_status", ""),
+                                    row.get("sync_status", "?"))
+        line = f"{i}. {name} {status}"
+        if is_admin and row.get("upload_user_name"):
+            line += f"（{row['upload_user_name']}）"
+        lines.append(line)
+        if row.get("sync_status") == "error" and row.get("error_message"):
+            lines.append(f"   └ {str(row['error_message'])[:60]}")
+    head = "📁 全部文件：" if is_admin else "📁 你上传过的文件："
+    lines.append(
+        "\n💡 回复「帮我学习」可入库待学习文件；"
+        "「重新学习 序号」强制重学；「删除学习 序号」删除（学习内容 + 源文件）。"
+    )
+    return head + "\n" + "\n".join(lines)
+
+
+def _format_learn_result(result: dict) -> str:
+    """格式化「帮我学习」/「重新学习」结果"""
+    status = result.get("status")
+    if status == "ok":
+        coll = _COLLECTION_LABELS.get(result.get("collection", ""), "标准文档库")
+        return (
+            f"✅ 学习完成：{result.get('file_name', '')}\n"
+            f"已入库到{coll}，共 {result.get('chunk_count', 0)} 块。\n\n"
+            f"📁 回复「我的文件」可查看管理。"
+        )
+    if status == "no_file":
+        return (f"📭 {result.get('message', '当前没有待学习的文件')}\n\n"
+                f"💡 请先发送文件，再回复「帮我学习」。")
+    if status == "denied":
+        return f"⛔ {result.get('message', '无权操作')}"
+    return f"❌ {result.get('message', '处理失败')}"
+
+
+def _format_delete_result(result: dict) -> str:
+    """格式化「删除学习 X」结果"""
+    status = result.get("status")
+    if status == "ok":
+        source_note = ("源文件已删除；"
+                       if result.get("source_deleted") else
+                       "源文件删除失败（已保留）；")
+        return (f"🗑️ 已删除：{result.get('file_name', '')}\n"
+                f"知识库内容 {result.get('deleted_chunks', 0)} 块已移除，"
+                f"{source_note}学习记录已清除。")
+    if status == "denied":
+        return f"⛔ {result.get('message', '无权操作')}"
+    return f"❌ {result.get('message', '删除失败')}"
 
 
 class ErrorQueryHandler(ChatbotHandler):
@@ -250,6 +353,79 @@ class ErrorQueryHandler(ChatbotHandler):
                 on_chunk(review_answer, "done")
             return {"answer": review_answer, "source": "knowledge_review"}
 
+        # ===== v1.10.2 上传学习 / 我的文件 / 删除 / 管理员模式 =====
+        from knowledge_review import (
+            delete_file_for_user, learn_file_for_user,
+            list_files_for_user, relearn_file_for_user,
+        )
+        t = text.strip()
+
+        # 1. 管理员模式切换（口令 ENTERBOSS，config.ADMIN_MASTER_CODE 可覆盖）
+        if _ADMIN_ENTER_RE.match(t):
+            _admin_sessions.add(user_id)
+            answer = (
+                "🔐 已进入管理员模式。\n"
+                "你可「查看全部文件」，并可删改任意用户上传的文件。\n"
+                "回复「退出管理员」退出。"
+            )
+            if on_chunk:
+                on_chunk(answer, "done")
+            return {"answer": answer, "source": "admin_mode"}
+        if _ADMIN_EXIT_RE.match(t):
+            _admin_sessions.discard(user_id)
+            answer = "已退出管理员模式。"
+            if on_chunk:
+                on_chunk(answer, "done")
+            return {"answer": answer, "source": "admin_mode"}
+
+        is_admin = _is_admin(user_id)
+
+        # 2. 管理员查看全部文件
+        if _ADMIN_LIST_ALL_RE.match(t):
+            answer = ("该功能仅管理员可用，请先发送口令 ENTERBOSS。"
+                      if not is_admin else
+                      _format_my_files(list_files_for_user(user_id, is_admin=True),
+                                       is_admin=True))
+            if on_chunk:
+                on_chunk(answer, "done")
+            return {"answer": answer, "source": "my_files"}
+
+        # 3. 我的文件
+        if _MY_FILES_RE.match(t):
+            answer = _format_my_files(
+                list_files_for_user(user_id, is_admin=is_admin),
+                is_admin=is_admin,
+            )
+            if on_chunk:
+                on_chunk(answer, "done")
+            return {"answer": answer, "source": "my_files"}
+
+        # 4. 删除学习内容 + 源文件
+        m = _DELETE_RE.match(t)
+        if m:
+            result = delete_file_for_user(user_id, m.group(1), is_admin=is_admin)
+            answer = _format_delete_result(result)
+            if on_chunk:
+                on_chunk(answer, "done")
+            return {"answer": answer, "source": "knowledge_delete"}
+
+        # 5. 强制重新学习
+        m = _RELEARN_RE.match(t)
+        if m:
+            result = relearn_file_for_user(user_id, m.group(1), is_admin=is_admin)
+            answer = _format_learn_result(result)
+            if on_chunk:
+                on_chunk(answer, "done")
+            return {"answer": answer, "source": "knowledge_relearn"}
+
+        # 6. 帮我学习 → 直接入库（v1.10.2 取消主管审核）
+        if _is_learn_command(t):
+            result = learn_file_for_user(user_id)
+            answer = _format_learn_result(result)
+            if on_chunk:
+                on_chunk(answer, "done")
+            return {"answer": answer, "source": "knowledge_learn"}
+
         from skills import get_matched_skill
 
         skill_cls = get_matched_skill(text)
@@ -296,15 +472,17 @@ class ErrorQueryHandler(ChatbotHandler):
                 user_name=sender,
             )
 
-            # 固定审核人测试模式：登记申请并后台主动推送，不阻塞上传回执
-            if result["success"]:
-                try:
-                    from knowledge_review import queue_review_for_upload
-                    review = queue_review_for_upload(result, user_id, sender)
-                    if review:
-                        result["review_id"] = review["review_id"]
-                except Exception as review_err:
-                    logger.error(f"创建知识库审核申请失败: {review_err}")
+            # v1.10.2：取消主管审核 —— 上传后由用户回复「帮我学习」直接入库，
+            # 不再登记审核申请。审核代码保留（knowledge_review.py 未删除），
+            # 未来恢复部门划分与审核流程时，取消下面注释并恢复 format_file_received_message 的审核文案即可。
+            # if result["success"]:
+            #     try:
+            #         from knowledge_review import queue_review_for_upload
+            #         review = queue_review_for_upload(result, user_id, sender)
+            #         if review:
+            #             result["review_id"] = review["review_id"]
+            #     except Exception as review_err:
+            #         logger.error(f"创建知识库审核申请失败: {review_err}")
 
             # 构建回复消息（已包含待处理提示）
             answer = format_file_received_message(result, auto_process=True)

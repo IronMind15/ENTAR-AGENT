@@ -361,6 +361,36 @@ class SyncTracker:
             row = cur.fetchone()
             return dict(row) if row else None
 
+    def get_files_by_user(self, upload_user_id: str) -> list[dict]:
+        """查询某用户上传过的所有文件及其状态，按 updated_at 倒序。
+
+        v1.10.2 新增：供钉钉「我的文件」查看自己上传文件（姓名/状态/建议）。
+        """
+        if not upload_user_id:
+            return []
+        with self._lock:
+            conn = self._get_conn()
+            cur = conn.execute(
+                "SELECT * FROM sync_status WHERE upload_user_id = ? "
+                "ORDER BY updated_at DESC",
+                (upload_user_id,),
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+    def delete_file(self, file_path: str) -> bool:
+        """删除文件追踪记录（封装 router 里的裸 SQL，供钉钉删除命令复用）。
+
+        Returns:
+            True 表示确实删除了一条记录；记录不存在返回 False。
+        """
+        with self._lock:
+            conn = self._get_conn()
+            cur = conn.execute(
+                "DELETE FROM sync_status WHERE file_path = ?", (file_path,)
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
     def list_all(self, status_filter: str = "",
                  collection_filter: str = "") -> list[dict]:
         """列出所有文件及其状态，可选按状态/collection 过滤"""

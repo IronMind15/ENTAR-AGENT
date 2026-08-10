@@ -181,6 +181,49 @@ class SyncTrackerTests(unittest.TestCase):
             migrated_hash = tracker.upsert_file.call_args.args[3]
             self.assertEqual(64, len(migrated_hash))
 
+    # ===== v1.10.2 按上传者查询 / 删除记录 =====
+
+    def test_get_files_by_user_filters_by_uploader(self):
+        """「我的文件」数据源：按 upload_user_id 过滤并带状态"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tracker = SyncTracker(str(Path(temp_dir) / "tracker.db"))
+            try:
+                tracker.upsert_file("a.pdf", "a.pdf", 1, "hash-a", "standards",
+                                    upload_user_id="union-1", upload_user_name="甲")
+                tracker.upsert_file("b.md", "b.md", 1, "hash-b", "experience_kb",
+                                    upload_user_id="union-2", upload_user_name="乙")
+                tracker.upsert_file("c.pdf", "c.pdf", 1, "hash-c", "standards",
+                                    upload_user_id="union-1", upload_user_name="甲")
+                tracker.mark_synced("c.pdf")
+
+                mine = tracker.get_files_by_user("union-1")
+                self.assertEqual({"a.pdf", "c.pdf"},
+                                 {r["file_name"] for r in mine})
+                by_name = {r["file_name"]: r for r in mine}
+                self.assertEqual("synced", by_name["c.pdf"]["sync_status"])
+                self.assertEqual(
+                    "experience_kb",
+                    tracker.get_files_by_user("union-2")[0]["target_collection"],
+                )
+
+                # 空串上传者视为未登记，返回空
+                self.assertEqual([], tracker.get_files_by_user(""))
+                self.assertEqual([], tracker.get_files_by_user("nobody"))
+            finally:
+                tracker.close()
+
+    def test_delete_file_removes_record(self):
+        """删除 tracker 记录：存在返回 True 并清除，不存在返回 False"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tracker = SyncTracker(str(Path(temp_dir) / "tracker.db"))
+            tracker.upsert_file("a.pdf", "a.pdf", 1, "hash-a", "standards",
+                                upload_user_id="union-1")
+            self.assertTrue(tracker.delete_file("a.pdf"))
+            self.assertIsNone(tracker.get_status("a.pdf"))
+
+            self.assertFalse(tracker.delete_file("not-exists.pdf"))
+            tracker.close()
+
 
 if __name__ == "__main__":
     unittest.main()

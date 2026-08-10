@@ -3,6 +3,43 @@
 > 📌 **本文档是项目唯一的版本记录（单一事实源）**——README.md、PROGRESS.md 的版本历史均指向本文件，发版时只在这里追加记录。
 > 相关：待办清单见 [TODO.md](TODO.md)，进度看板见 [PROGRESS.md](PROGRESS.md)。
 
+## v1.10.2（2026-08-10）
+
+**📚 上传文件直接学习 + 我的文件/删除/管理员模式**——上传入库从「主管审核」简化为「回复『帮我学习』直接入库」；存储目录改为主部门/员工名字/日期；新增「我的文件」查看自己上传文件、「删除学习/重新学习」管理、`ENTARBOSS` 管理员模式（可任意删改）。**审核流程代码保留注释，未来可恢复**。全量回归 **315 项全绿**。
+
+### 功能
+
+- **上传直接学习**（`file_handler.py` + `knowledge_review.py` + `dingtalk_bot.py`）：上传后回执改为「回复『帮我学习』即可直接入库，无需审核」；用户回「帮我学习」→ 取该用户最新待学习文件 → 同步 `process_file` 入库（department=`public`，暂不划分部门）
+- **存储目录改版**：`data/uploads/{主部门}/{员工名字}/{YYYY-MM-DD}/`（主部门取自 user_store `department_names` 首元素，无则「未分组」）；`_safe_path_component` 净化目录组件并挡住纯点组件（防目录穿越）
+- **我的文件**：回复「我的文件」列出自己上传的文件（序号 + 文件名 + ✅已学习/⏳待学习/❌失败）+ 下一步建议
+- **删除 / 重新学习**：「删除学习 序号」删知识库内容（按 doc_id 精确删，不误伤同名文件）+ 源文件 + tracker 记录；「重新学习 序号」force 重学。**权限硬约束：普通用户只能删/改自己上传的文件，越权一律拒绝**
+- **管理员模式**：口令 `ENTARBOSS`（`config.ADMIN_MASTER_CODE` 可覆盖）→ 进入管理员模式，可「查看全部文件」并删改任意用户文件；「退出管理员」退出（会话内存态，重启失效）
+
+### 停用说明
+
+- 主管审核流程（`knowledge_review.create_request/handle_command/notify_*`）**代码保留未删除**，仅 `dingtalk_bot._handle_file_message` 中 `queue_review_for_upload` 调用改为注释。未来恢复部门划分与审核流程时取消注释，并把 `process_file` 的 `department` 改为用户主部门即可
+
+### 测试
+
+- 新增 32 项：`test_file_handler.py`（11 项：目录结构/净化/回执）+ `test_knowledge_review.py` 追加 10 项（学习/collection 显式传/删除/越权/管理员/重学）+ `test_dingtalk_bot.py` 追加 9 项（正则/路由/管理员切换/秒回）+ `test_sync_tracking.py` 追加 2 项（按上传者查询/删除记录）
+- 全量回归 **315 项通过**（此前 283 项）
+
+### 修改文件
+
+| 文件 | 改动 |
+|------|------|
+| `scripts/config.py` | 新增 `ADMIN_MASTER_CODE`（管理员口令，默认 ENTERBOSS） |
+| `scripts/doc_mgr/sync_tracker.py` | 新增 `get_files_by_user` / `delete_file` |
+| `scripts/file_handler.py` | `get_upload_dir` 改主部门/员工/日期；`_safe_path_component` + `_get_user_main_department`；回执改「帮我学习」 |
+| `scripts/knowledge_review.py` | 新增 `learn_for_user` / `list_files_for_user` / `delete_for_user` / `relearn_for_user` + 模块级入口（审核代码保留） |
+| `scripts/skills/dingtalk_bot.py` | 命令路由（我的文件/删除/重学/学习/管理员 ENTERBOSS）；注释 `queue_review_for_upload` |
+| `tests/test_file_handler.py` | 🆕 11 项 |
+| `tests/test_knowledge_review.py` | 追加 10 项 |
+| `tests/test_dingtalk_bot.py` | 追加 9 项 |
+| `tests/test_sync_tracking.py` | 追加 2 项 |
+
+---
+
 ## v1.10.1（2026-08-10）
 
 **🛡️ 上线前修复包**——上服务器部署前代码审查（4 路并行）发现并修复 4 个必修问题：长对话回放无预算可撑爆上下文窗口、MinerU 拆分子 PDF 在持久缓存目录永久累积、MinerU API 请求无超时可无限挂死、CSV 不规则行崩溃致整文件入库失败。全量回归 **283 项全绿**。

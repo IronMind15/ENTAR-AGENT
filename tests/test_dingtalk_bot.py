@@ -47,6 +47,18 @@ class FastOperationTests(unittest.TestCase):
     def test_empty_is_not_fast(self):
         self.assertFalse(_is_fast_operation(""))
 
+    def test_v1102_commands_are_fast(self):
+        """v1.10.2 我的文件/删除/管理员切换为秒回；学习保留提示（可能走 MinerU）"""
+        self.assertTrue(_is_fast_operation("我的文件"))
+        self.assertTrue(_is_fast_operation("查看我的文件"))
+        self.assertTrue(_is_fast_operation("删除学习 1"))
+        self.assertTrue(_is_fast_operation("删掉 技术协议.pdf"))
+        self.assertTrue(_is_fast_operation("ENTARBOSS"))
+        self.assertTrue(_is_fast_operation("退出管理员"))
+        self.assertTrue(_is_fast_operation("查看全部文件"))
+        self.assertFalse(_is_fast_operation("帮我学习"))
+        self.assertFalse(_is_fast_operation("重新学习 1"))
+
 
 class HintConstantsTests(unittest.TestCase):
     """提示文案与错误码存在性"""
@@ -119,6 +131,97 @@ class ProcessTextRoutingTests(unittest.TestCase):
         result = self.handler._process_text("xxx", "u1", "s1")
         self.assertEqual(result["source"], "fallback")
         self.assertIn("无法处理", result["answer"])
+
+    # ===== v1.10.2 上传学习 / 我的文件 / 删除 / 管理员模式 =====
+
+    def test_learn_regex_positive_and_negative(self):
+        """「帮我学习」正则：锚定排除带宾语场景"""
+        from skills.dingtalk_bot import _is_learn_command
+        for ok in ("帮我学习", "学习", "学习一下", "入库", "帮我入库",
+                   "学习这个文件", "帮我学习！"):
+            self.assertTrue(_is_learn_command(ok), ok)
+        for no in ("我想学习英语", "学习记录查询", "我的学习",
+                   "学习计划怎么做", "帮我学习一下PCB", "今天学习了吗"):
+            self.assertFalse(_is_learn_command(no), no)
+
+    @mock.patch("knowledge_review.learn_file_for_user")
+    def test_learn_command_routes_to_knowledge_learn(self, mock_learn):
+        """「帮我学习」→ knowledge_learn 分支，且必须优先于技能"""
+        mock_learn.return_value = {"status": "ok", "file_name": "a.pdf",
+                                   "collection": "standards", "chunk_count": 5}
+        with mock.patch("skills.get_matched_skill") as mock_skill:
+            fake = mock.MagicMock()
+            fake.name = "fake"
+            fake.handle.return_value = {"answer": "技能", "source": "fake"}
+            mock_skill.return_value = fake
+            result = self.handler._process_text("帮我学习", "u1", "s1")
+        self.assertEqual(result["source"], "knowledge_learn")
+        self.assertIn("学习完成", result["answer"])
+        mock_learn.assert_called_once_with("u1")
+        fake.handle.assert_not_called()
+
+    @mock.patch("knowledge_review.learn_file_for_user")
+    def test_learn_no_file_hint(self, mock_learn):
+        """没有待学习文件 → 引导先发文件"""
+        mock_learn.return_value = {"status": "no_file",
+                                   "message": "当前没有待学习的文件"}
+        result = self.handler._process_text("帮我学习", "u1", "s1")
+        self.assertIn("请先发送文件", result["answer"])
+
+    @mock.patch("knowledge_review.list_files_for_user")
+    def test_my_files_routes(self, mock_list):
+        """「我的文件」→ my_files 分支，限本人文件"""
+        mock_list.return_value = [{"file_name": "a.pdf", "sync_status": "synced"}]
+        result = self.handler._process_text("我的文件", "u1", "s1")
+        self.assertEqual(result["source"], "my_files")
+        self.assertIn("a.pdf", result["answer"])
+        self.assertIn("已学习", result["answer"])
+        mock_list.assert_called_once_with("u1", is_admin=False)
+
+    @mock.patch("knowledge_review.list_files_for_user")
+    def test_list_all_requires_admin(self, mock_list):
+        """「查看全部文件」非管理员 → 拒绝且不查询"""
+        result = self.handler._process_text("查看全部文件", "u1", "s1")
+        self.assertEqual(result["source"], "my_files")
+        self.assertIn("仅管理员", result["answer"])
+        mock_list.assert_not_called()
+
+    @mock.patch("knowledge_review.delete_file_for_user")
+    def test_delete_command_routes(self, mock_delete):
+        """「删除学习 序号」→ knowledge_delete 分支"""
+        mock_delete.return_value = {"status": "ok", "file_name": "a.pdf",
+                                    "deleted_chunks": 2, "source_deleted": True}
+        result = self.handler._process_text("删除学习 1", "u1", "s1")
+        self.assertEqual(result["source"], "knowledge_delete")
+        self.assertIn("已删除", result["answer"])
+        mock_delete.assert_called_once_with("u1", "1", is_admin=False)
+
+    @mock.patch("knowledge_review.relearn_file_for_user")
+    def test_relearn_command_routes(self, mock_relearn):
+        """「重新学习 X」→ knowledge_relearn 分支"""
+        mock_relearn.return_value = {"status": "ok", "file_name": "a.pdf",
+                                     "collection": "standards", "chunk_count": 3}
+        result = self.handler._process_text("重新学习 1", "u1", "s1")
+        self.assertEqual(result["source"], "knowledge_relearn")
+        self.assertIn("学习完成", result["answer"])
+        mock_relearn.assert_called_once_with("u1", "1", is_admin=False)
+
+    def test_admin_mode_enter_and_exit(self):
+        """ENTARBOSS 口令进入管理员模式，可任意删改；退出后失效"""
+        from skills.dingtalk_bot import _admin_sessions, _is_admin
+        _admin_sessions.discard("admin1")
+        try:
+            result = self.handler._process_text("ENTARBOSS", "admin1", "s1")
+            self.assertEqual(result["source"], "admin_mode")
+            self.assertIn("管理员", result["answer"])
+            self.assertTrue(_is_admin("admin1"))
+            self.assertFalse(_is_admin("nobody"))
+
+            result2 = self.handler._process_text("退出管理员", "admin1", "s1")
+            self.assertEqual(result2["source"], "admin_mode")
+            self.assertFalse(_is_admin("admin1"))
+        finally:
+            _admin_sessions.discard("admin1")
 
 
 class ProcessToThreadTests(unittest.IsolatedAsyncioTestCase):

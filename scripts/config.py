@@ -82,6 +82,11 @@ MEMORY_BUDGET_TOKENS: int = 20000
 # 管理员密码（空 = 不开启密码保护）
 ADMIN_PASSWORD: str = _get_config("ADMIN_PASSWORD")
 
+# 钉钉管理员模式口令（v1.10.2）：用户在钉钉聊天发该口令即进入管理员模式，
+# 可「查看全部文件」并删改任意用户的上传文件。明文口令、会话为内存态，
+# 属内部工具轻量方案；未来上 SSO 可信身份后可移除。
+ADMIN_MASTER_CODE: str = _get_config("ADMIN_MASTER_CODE") or "ENTARBOSS"
+
 # MinerU API Token（精准解析）
 MINERU_TOKEN: str = _get_config("MINERU_TOKEN")
 

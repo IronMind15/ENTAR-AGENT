@@ -3,7 +3,7 @@
 > 📌 **本文档是项目唯一的待办清单（单一事实源）**——CLAUDE.md、README.md、PROGRESS.md 中的待办均指向本文件。
 > 更新待办请只改这里；进度看板见 [PROGRESS.md](PROGRESS.md)，版本记录见 [CHANGELOG.md](CHANGELOG.md)，项目规则见 [CLAUDE.md](CLAUDE.md)，功能说明见 [README.md](README.md)。
 
-> 生成时间：2026-08-06｜当前版本：v1.6.2（详见 [CHANGELOG.md](CHANGELOG.md)）｜总计：**47 项**（8 完成 + 39 待办）
+> 生成时间：2026-08-10｜当前版本：v1.10.2（详见 [CHANGELOG.md](CHANGELOG.md)）｜总计：**48 项**（8 完成 + 40 待办）
 
 ---
 
@@ -26,10 +26,11 @@
 - [x] **崩溃恢复**：启动时识别并恢复或清理遗留 staging/retired 数据（2026-08-06 ✅，commit `8433f42` + main.py 挂载 `recover_crashed_data`）
   - *来源：CLAUDE.md / README*
 
-- [ ] **审核流程真实钉钉端到端验证**
+- [ ] **审核流程真实钉钉端到端验证**（⛔ 已暂停，v1.10.2 起上传文件改「回复『帮我学习』」直接入库，不再走主管审核）
   - 配置固定审核人 staff\_id
   - 验证"上传 → 主动推送 → 批准/拒绝 → 同步结果"完整链路
-  - *来源：CLAUDE.md / CHANGELOG / PROGRESS.md*
+  - **恢复方式**：取消 `dingtalk_bot._handle_file_message` 中 `queue_review_for_upload` 调用注释，并把 `knowledge_review.learn_for_user` 的 `process_file(department=...)` 改为用户主部门（见「其他待办 → 恢复部门划分与主管审核」）
+  - *来源：CLAUDE.md / CHANGELOG / PROGRESS.md / v1.10.2 改造对话*
 
 ---
 
@@ -232,9 +233,14 @@
 
 ---
 
-## 🐛 其他待办（7 项）
+## 🐛 其他待办（8 项）
 
 > 低频、远期或依赖前置条件
+
+- [ ] **恢复部门划分与主管审核**（v1.10.2 已停用，代码保留注释）
+  - v1.10.2 起上传文件「回复『帮我学习』」直接入库（department=`public`）；审核流程代码（knowledge_review 的 create_request/handle_command/notify_*）一律保留未删除
+  - 未来启用时：取消 `dingtalk_bot._handle_file_message` 中 `queue_review_for_upload` 注释；`learn_for_user` 的 `process_file(department=...)` 改为用户主部门；回执文案改回提示审核
+  - *来源：v1.10.2 上传学习流程改造对话*
 
 - [x] **对话记忆升级为双层记忆（长期事实 + 短期窗口）**（2026-08-05 v1.5.3 ✅）
   - 短期窗口 5→8 轮 + 长期记忆表 `long_term_memories`：滚出窗口的旧对话由 LLM 异步压缩为「事实+摘要」，常驻注入 system prompt
@@ -274,8 +280,8 @@
 | 🎯 第二步经验库 | 5 | 3 完成 + 2 待办 |
 | 🏢 v2.0 企业中枢 | 6 | 全部待办（依赖第二步） |
 | 🔭 第三步研发探索 | 3 | 全部待办（远期） |
-| 🐛 其他 | 7 | 1 完成 + 6 待办 |
-| **合计** | **47** | **8 完成 + 39 待办** |
+| 🐛 其他 | 8 | 1 完成 + 7 待办 |
+| **合计** | **48** | **8 完成 + 40 待办** |
 
 ---
 

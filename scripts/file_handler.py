@@ -34,6 +34,9 @@ _UPLOAD_ROOT = Path(__file__).parent.parent / "data" / "uploads"
 # 支持自动处理的文件类型
 _AUTO_PROCESS_EXTENSIONS = {".pdf", ".xlsx", ".xls", ".md"}
 
+# 可「帮我学习」直接入库的文件类型（v1.10.2，比自动处理集合宽，含 Word/PPT/CSV）
+_LEARN_EXTENSIONS = {".pdf", ".xlsx", ".xls", ".md", ".docx", ".pptx", ".csv"}
+
 
 def sanitize_file_name(file_name: str) -> str:
     """移除路径片段和 Windows 非法字符，避免上传文件名逃逸目录。"""
@@ -58,28 +61,50 @@ def sanitize_file_name(file_name: str) -> str:
     return f"{stem}{ext}"
 
 
-def get_upload_dir(user_id: str, user_name: str = "") -> Path:
-    """获取用户上传目录（先按用户，再按日期）
+def _safe_path_component(value: str, fallback: str = "未分组") -> str:
+    """净化路径目录组件：仅保留字母数字/中文/`-_.`，截断 60 字符，防空逃逸。
 
-    目录结构：data/uploads/用户名_ID/YYYY-MM-DD/
+    末尾 strip(".") 防止纯点组件（"." / ".."）造成目录穿越。
+    """
+    value = re.sub(r'[\x00-\x1f<>:"/\\|?*]', "", str(value or "")).strip()
+    value = "".join(c for c in value if c.isalnum() or c in "-_.")
+    value = value.strip(".")
+    if not value:
+        return fallback
+    return value[:60]
+
+
+def _get_user_main_department(user_id: str) -> str:
+    """取用户主部门：department_names（JSON 数组）第一个元素；无则「未分组」。
+
+    v1.10.2：上传目录按主部门分组。未来恢复部门划分时此处即部门归属来源。
+    """
+    try:
+        from user_store import get_store
+        user = get_store().get_user(user_id) or {}
+        names_raw = user.get("department_names", "") or ""
+        if isinstance(names_raw, str) and names_raw.strip():
+            import json
+            names = json.loads(names_raw)
+            if names:
+                return _safe_path_component(str(names[0]), "未分组")
+    except Exception as e:
+        logger.debug(f"查询用户主部门失败: {e}")
+    return "未分组"
+
+
+def get_upload_dir(user_id: str, user_name: str = "") -> Path:
+    """获取用户上传目录：data/uploads/{主部门}/{员工名字}/{YYYY-MM-DD}/
+
+    v1.10.2 改版：按「主部门 / 员工名字 / 日期」三级存储，
+    替代旧的「用户名_ID / 日期」。
     """
     today = datetime.now().strftime("%Y-%m-%d")
 
-    # 清理用户ID和用户名中的特殊字符，确保路径安全
-    safe_user_id = "".join(c for c in user_id if c.isalnum() or c in "-_")
-    if not safe_user_id:
-        safe_user_id = "unknown"
+    department = _get_user_main_department(user_id)
+    employee = _safe_path_component(user_name or user_id, fallback="unknown")
 
-    safe_user_name = "".join(c for c in user_name if c.isalnum() or c in "-_中文" or '一' <= c <= '鿿')
-
-    # 构建目录名：用户名_ID（有昵称时）或 纯 ID
-    if safe_user_name:
-        dir_name = f"{safe_user_name}_{safe_user_id}"
-    else:
-        dir_name = safe_user_id
-
-    # 先按用户分目录，再按日期分目录
-    user_dir = _UPLOAD_ROOT / dir_name / today
+    user_dir = _UPLOAD_ROOT / department / employee / today
     user_dir.mkdir(parents=True, exist_ok=True)
     return user_dir
 
@@ -233,14 +258,14 @@ def format_file_received_message(result: dict, auto_process: bool = False) -> st
 
     if auto_process:
         ext = get_file_type(result["file_name"])
-        if ext in _AUTO_PROCESS_EXTENSIONS:
-            review_id = result.get("review_id", "")
-            if review_id:
-                msg += (
-                    f"\n🔔 已提交知识库审核，申请编号：{review_id}\n"
-                    "审核人同意后才会开始同步。\n"
-                )
-            else:
-                msg += "\n👤 文件已保存到待处理区，请联系管理员完成入库同步。\n"
+        if ext in _LEARN_EXTENSIONS:
+            # v1.10.2：取消主管审核，改为用户回复「帮我学习」直接入库。
+            # （旧审核文案见 git 历史；未来恢复审核流程时改回提示申请编号。）
+            msg += (
+                "\n👌 回复「帮我学习」即可直接入库，无需审核。\n"
+                "📁 回复「我的文件」可查看已上传文件；「删除学习 序号」可删除。\n"
+            )
+        else:
+            msg += "\n⚠️ 该文件类型暂不支持入库，已保存到待处理区。\n"
 
     return msg

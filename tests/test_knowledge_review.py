@@ -2,6 +2,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +18,23 @@ from file_handler import sanitize_file_name
 from knowledge_review import (
     KnowledgeReviewService, default_collection, _collection_from_text,
 )
+
+
+class _FakeStore:
+    """模拟 doc_mgr 存储层：只实现 delete_for_user 用到的 get/delete"""
+
+    def __init__(self):
+        self.gets = []
+        self.deletes = []
+
+    def get(self, collection, ids=None, where=None):
+        self.gets.append((collection, ids, where))
+        return {"ids": ["blk-1", "blk-2"],
+                "metadatas": [{"doc_id": "d"}, {"doc_id": "d"}]}
+
+    def delete(self, collection, ids=None, where=None):
+        self.deletes.append((collection, ids, where))
+        return len(ids or [])
 
 
 class _FakeResponse:
@@ -200,6 +219,117 @@ class KnowledgeReviewServiceTests(unittest.TestCase):
         self.assertEqual("experience_kb", request["target_collection"])
         message = self.service.build_notification(request)
         self.assertIn("经验知识库", message)
+
+    # ===== v1.10.2 直接学习 / 我的文件 / 删除（审核流程已停用但代码保留） =====
+
+    def _upsert_for(self, name: str, content: bytes = b"x") -> Path:
+        p = self.root / name
+        p.write_bytes(content)
+        self.tracker.upsert_file(
+            str(p), p.name, p.stat().st_size, file_sha256(str(p)),
+            upload_user_id="uploader-union-id", upload_user_name="测试员工",
+        )
+        return p
+
+    def test_learn_for_user_syncs_latest_pending_file(self):
+        """「帮我学习」取最新待学习文件，同步 process_file（department=public）"""
+        with patch("doc_mgr.engine.process_file") as process:
+            process.return_value = SimpleNamespace(
+                status="done", chunk_count=5, collection="standards", message="")
+            result = self.service.learn_for_user("uploader-union-id", "测试员工")
+        self.assertEqual("ok", result["status"])
+        self.assertEqual("sample.pdf", result["file_name"])
+        self.assertEqual("standards", result["collection"])
+        self.assertEqual(5, result["chunk_count"])
+        process.assert_called_once()
+        self.assertEqual("public", process.call_args.kwargs["department"])
+        self.assertEqual(False, process.call_args.kwargs["force"])
+
+    def test_learn_md_uses_explicit_experience_collection(self):
+        """关键：.md 必须显式传 experience_kb，不能落 engine 默认的 standards"""
+        # 移除 setUp 里的 sample.pdf，避免同秒时间戳下「最新」排序不稳定
+        self.tracker.delete_file(str(self.file_path))
+        md_path = self._upsert_for("经验排查.md")
+        with patch("doc_mgr.engine.process_file") as process:
+            process.return_value = SimpleNamespace(
+                status="done", chunk_count=2, collection="experience_kb", message="")
+            result = self.service.learn_for_user("uploader-union-id")
+        self.assertEqual("experience_kb",
+                         process.call_args.kwargs["target_collection"])
+        self.assertEqual("experience_kb", result["collection"])
+
+    def test_learn_ignores_other_users_pending_files(self):
+        """只能学习自己上传的文件；别人 pending 的文件不处理"""
+        with patch("doc_mgr.engine.process_file") as process:
+            result = self.service.learn_for_user("another-user")
+        self.assertEqual("no_file", result["status"])
+        process.assert_not_called()
+
+    def test_learn_process_error_marks_tracker_error(self):
+        with patch("doc_mgr.engine.process_file",
+                   side_effect=RuntimeError("boom")):
+            result = self.service.learn_for_user("uploader-union-id")
+        self.assertEqual("failed", result["status"])
+        row = self.tracker.get_status(str(self.file_path))
+        self.assertEqual("error", row["sync_status"])
+
+    def test_delete_own_file_removes_content_source_and_record(self):
+        """删除：按 doc_id 删知识库内容 + 删源文件 + 清 tracker 记录"""
+        fake = _FakeStore()
+        with patch("doc_mgr.engine.get_store", return_value=fake):
+            result = self.service.delete_for_user("uploader-union-id", "1")
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(2, result["deleted_chunks"])
+        self.assertTrue(result["source_deleted"])
+        self.assertFalse(self.file_path.exists())
+        self.assertIsNone(self.tracker.get_status(str(self.file_path)))
+        self.assertEqual("standards", fake.deletes[0][0])
+        self.assertEqual(["blk-1", "blk-2"], fake.deletes[0][1])
+
+    def test_other_user_cannot_see_or_delete_others_file(self):
+        """越权防护：其他用户看不到/删不掉 uploader 的文件，且不触碰任何数据"""
+        with patch("doc_mgr.engine.get_store") as store:
+            result = self.service.delete_for_user("other-user", "sample.pdf")
+        # 该用户自己的文件列表为空 → no_file（找不到即可，数据毫发无损）
+        self.assertEqual("no_file", result["status"])
+        store.assert_not_called()
+        self.assertTrue(self.file_path.exists())
+        self.assertIsNotNone(self.tracker.get_status(str(self.file_path)))
+
+    def test_admin_can_delete_any_users_file(self):
+        """管理员模式可删任意用户文件"""
+        fake = _FakeStore()
+        with patch("doc_mgr.engine.get_store", return_value=fake):
+            result = self.service.delete_for_user("admin-user", "1",
+                                                  is_admin=True)
+        self.assertEqual("ok", result["status"])
+        self.assertFalse(self.file_path.exists())
+
+    def test_delete_ambiguous_filename_asks_for_sequence(self):
+        """文件名模糊匹配多个时要求用序号指定，不误删"""
+        a = self._upsert_for("报告.pdf")
+        b = self._upsert_for("报告2.pdf")
+        result = self.service.delete_for_user("uploader-union-id", "报告")
+        self.assertEqual("ambiguous", result["status"])
+        self.assertTrue(a.exists())
+        self.assertTrue(b.exists())
+
+    def test_relearn_forces_reprocessing(self):
+        """重新学习：force=True 重新解析入库"""
+        with patch("doc_mgr.engine.process_file") as process:
+            process.return_value = SimpleNamespace(
+                status="done", chunk_count=3, collection="standards", message="")
+            result = self.service.relearn_for_user("uploader-union-id", "1")
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(True, process.call_args.kwargs["force"])
+        self.assertEqual("public", process.call_args.kwargs["department"])
+
+    def test_list_files_scope_user_vs_admin(self):
+        mine = self.service.list_files_for_user("uploader-union-id")
+        self.assertEqual(1, len(mine))
+        all_files = self.service.list_files_for_user("uploader-union-id",
+                                                     is_admin=True)
+        self.assertEqual(1, len(all_files))
 
 
 class ExperienceReviewRoutingTests(unittest.TestCase):
