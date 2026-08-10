@@ -3,6 +3,60 @@
 > 📌 **本文档是项目唯一的版本记录（单一事实源）**——README.md、PROGRESS.md 的版本历史均指向本文件，发版时只在这里追加记录。
 > 相关：待办清单见 [TODO.md](TODO.md)，进度看板见 [PROGRESS.md](PROGRESS.md)。
 
+## v1.11.0（2026-08-10）
+
+**📊 每日项目看板 — 发钉钉文档动态做看板（全动态数据源）+ 定时主动推送 + 上传文件自动推荐入库**——用户发钉钉文档（AI表格/在线表格）给小助手 → 识别登记 → 说「按这几个文档做每日看板」→ 反问确认（时间/频率/接收人）→ 每天定时拉这几个文档**最新数据**组装推送（`changes_only` 无变化静默）；数据源**全动态**不再手配 field_map（新增 `list_fields` 自动取字段中文名，接口不可用降级 field_id）；上传文件后小助手**主动推荐入库**、回复「入库/确认」即学。看板数据**不入 Chroma、每次实时拉取**（与知识库物理隔离）。全量回归 **552 项全绿**（此前 496 项）。
+
+### 功能
+
+- **数据源配置**（`dashboard/dashboard_sources.json`）：config.py 无法承载嵌套 field_map → 独立 JSON 定义数据源（kind/base_id/table_mode/field_map/status_groups）；`config_model.py` 加载（mtime 缓存 + 坏 JSON 容错）；`DASHBOARD_PUSH_HOUR` 等推送标量进 config.py 可覆盖
+- **解析层**（`dashboard/parser.py`）：`extract_cell_value` 统一解析 AI表格单元格（dict/list/None）、`find_latest_week_table` 按数字取最新周次分表、`parse_source_records` 按 status_groups 分组统计（attention/normal/other）、`format_number` 小数→百分比、`#DIV/0!`→无数据
+- **采集层**（`dashboard/collector.py`）：latest_week 模式列分表自动选最新周次、fixed 模式直读 table_id；staff_id→unionId 兜底（定时任务无对话上下文也能读文档）；单源失败记 error 不影响其他，并发采集
+- **组装 + 变化检测**（`dashboard/assembler.py` + `alerts.py`）：规则模板（关注置顶/状态统计/无表格语法/≤5000 字符）+ `validate_markdown` 拦截表格语法 + `llm_assemble`（LLM 组装失败/超长/非法一律规则兜底）；`make_snapshot`/`has_changes`/`diff_summary` 去噪快照（只比对状态+名称，改一句进展不触发推送）
+- **订阅持久化**（`dashboard/subscription_store.py`）：复用 user_store.db 新表 `dashboard_subscriptions`（同时存 owner_staff_id 推送 userId 与 owner_union_id 读文档 operatorId）；`subscription_commands.py` 保守指令解析（创建/改时间/改频率/改接收人/停止/查询）+ 反问确认 + 内存 pending
+- **看板技能**（`skills/dashboard.py`，priority=80）：触发词防误触（文档/方案/方法论/怎么用/怎么样等放行给 Agent 调 `query_dashboard` 工具）；「帮我推个看板」→ 反问 → 「确认」→ 注册订阅 + 立即推样例；「改看板时间到10点」「每周一和周五」「也推给张工」「停掉看板」「我的看板几点推送」全支持
+- **工具**（`tools/query_dashboard.py` + `push_dashboard.py`）：实时查询看板 / 立即推送订阅者；`agent.py` 新增 `call_deepseek` 公开包装（看板 LLM 组装用）；system_prompt 追加看板工具说明
+- **定时调度**（`dashboard_scheduler.py` + main.py 挂载）：独立 BackgroundScheduler **1 分钟 interval tick + 到点扫描**（增删改订阅无需重注册）；`_is_due` 时间/星期/当天不重复三重判定；changes_only 无变化静默；推送后更新快照 + last_pushed_at
+- **钉钉文档多链接 + 学习入库**（`dingtalk_bot.py` + `doc_candidates.py` + `doc_learn.py`）：消息中多条 alidocs 链接逐个读取聚合摘要；登记候选（user+url 唯一）；「帮我学习」先查文档候选（有则入库，无则走文件路径）；`engine.py` 新增 `process_text` 文本直入（从 `_process_markdown` 抽 `_index_markdown_text` 共用切块，**不改变 process_file 行为**，不写临时文件不进 data/uploads）
+- **动态看板数据源（发文档驱动，全动态）**（`doc_candidates.py` 升级 + `service.py` 桥接）：用户发的文档登记为候选即成为看板源（合成 key `doc_<id>` 存订阅 data_sources，subscription_store 零改动）；`build_dynamic_source`/`resolve_subscription_sources` 统一桥接调度/技能/工具；collector 支持 **per-source 身份**（跨用户订阅用文档登记人 unionId 读）；parser 空 field_map 兜底（field_id 作列名不崩）；「按这几个文档做每日看板」意图解析 + 反问确认
+- **字段元数据接口**（`dingtalk_doc_client.py`）：新增 `list_fields`/`read_notable_field_names`（多候选路径取 field_id→中文名，**接口不可用返回空不阻塞**）；`read_document` notable 分支携带 `field_names`；新增 workbook（在线表格）读取（候选路径 + 失败降级「暂不可用」提示）；`detect_kind` 回退探测 workbook
+- **上传文件自动推荐入库**（`file_handler.py` + `knowledge_review.py` + `dingtalk_bot.py`）：保存后回执改为推荐问句「要不要入库？回复『入库/确认』即可」；新增 `learn_file_path`（按指定路径入库，规避多文件取最新歧义）+ 模块级内存 pending；「入库/确认」确认分支（有 pending 才拦截，无 pending 不抢普通对话）；图片不支持入库不推荐
+- 周次编号统一 **1-7 制（周一=1）**，与 `datetime.isoweekday()` 对齐，`format_weekdays` 中文展示
+
+### 测试
+
+- 新增 221 项：`test_dashboard_config/parser/collector/assembler/alerts`（配置加载/解析/采集/组装/变化检测，用千问实测基准断言：33 周 7 条=4 滞后+3 正常；142 台=故障22/待验证3/已打包50/其他67）、`test_subscription_store/commands`（持久化 + 指令解析）、`test_dashboard_skill/llm`（订阅管理对话全流程 + LLM 组装兜底 + 文档看板创建）、`test_dashboard_scheduler`（fake clock 测到点判定 + 执行链 + doc_* 订阅）、`test_doc_learn` + `test_doc_mgr_engine` 追加（process_text 文本直入）+ `test_dingtalk_doc` 追加（多链接聚合/候选登记 + list_fields/workbook/field_names）、`test_doc_candidates` + `test_dashboard_service`（🆕 动态源注册表 + service 桥接）、`test_knowledge_review` + `test_file_handler` + `test_dingtalk_bot` 追加（上传推荐入库确认）
+- 全量回归 **552 项通过**（此前 496 项）
+
+### 已知限制
+
+- 钉钉字段元数据接口（`list_fields`）与在线表格（workbook）读取路径以实测为准——接口不可用自动降级（字段名显示 field_id / 提示暂不可用），不阻塞链路
+- 普通文档（doc）不做看板数据源，识别后引导「帮我学习」入库
+- 钉钉文档卡片消息（非 text 链接）暂不识别；多链接最多处理 3 条
+- pending 为内存态（看板订阅确认 + 上传推荐入库），重启失效（重说一句即可）
+
+### 修改文件
+
+| 文件 | 改动 |
+|------|------|
+| `scripts/dashboard/` | 🆕 看板核心子系统（config_model/parser/collector/assembler/alerts/service/subscription_store/subscription_commands/doc_candidates/doc_learn/dashboard_sources.json/__init__.py）；doc_candidates 升级为动态源注册表 + service 桥接 |
+| `scripts/dashboard_scheduler.py` | 🆕 定时推送调度器（1 分钟 tick）+ 动态源订阅解析 |
+| `scripts/skills/dashboard.py` | 🆕 看板技能（priority=80）+「按文档做看板」动态源创建 |
+| `scripts/tools/query_dashboard.py` `push_dashboard.py` | 🆕 看板查询/推送工具（含动态源） |
+| `scripts/dingtalk_doc_client.py` | 🆕 `list_fields`/`read_notable_field_names`/workbook 读取/`field_names`/`detect_kind` 回退 |
+| `scripts/skills/dingtalk_bot.py` | 多链接识别 + 候选登记（field_map）+「帮我学习」文档分支 + 上传推荐入库确认分支 |
+| `scripts/knowledge_review.py` | 🆕 `learn_file_path`（按路径入库）+ 推荐入库内存 pending |
+| `scripts/file_handler.py` | 回执文案改「要不要入库？」推荐问句 |
+| `scripts/doc_mgr/engine.py` | 🆕 `process_text` + 抽 `_index_markdown_text`（process_file 行为不变） |
+| `scripts/skills/agent.py` | 🆕 `call_deepseek` 公开包装 + `_TOOL_DISPLAY` 两条工具卡片 |
+| `scripts/config.py` | 🆕 `DASHBOARD_*` 推送标量 |
+| `scripts/main.py` | 挂载看板定时调度器 |
+| `scripts/prompts/system_prompt.txt` | 追加看板工具说明 |
+| `scripts/skills/__init__.py` `tools/__init__.py` | 注册看板技能与工具 |
+| `tests/` | 🆕 13 个看板/上传测试文件 + 6 个扩展（221 项新增） |
+
+---
+
 ## v1.10.3（2026-08-10）
 
 **🔀 PDF 文件检测路由 — 文字版走本地 PyMuPDF（免费高保真），省 MinerU 每日 1000 页额度**——新增 `classify_pdf_type` 检测 PDF 文字层覆盖率（纯文字版/扫描版/混合版），纯文字版改走本地提取（免费 + 规避 MinerU VLM 对电子版的二次 OCR 误差），扫描/混合版仍走 MinerU 保质量；`PDF_ROUTING` 配置开关可一键切回旧行为。4 份精选已入库标准真实对比验证（烧 263 页额度）文字版句子重合 90%。全量回归 **331 项全绿**。

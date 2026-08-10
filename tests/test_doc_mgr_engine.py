@@ -175,5 +175,46 @@ class PdfSplitTests(unittest.TestCase):
             self.assertTrue(parts[2].endswith("_p3of3.pdf"))
 
 
+class ProcessTextTests(unittest.TestCase):
+    """v1.11.0 文本直入：engine.process_text 切块入库（钉钉文档「帮我学习」）"""
+
+    def test_process_text_indexes_markdown(self):
+        store = FakeStore()
+        with patch.object(engine, "get_store", return_value=store):
+            doc = engine.process_text("# 在线文档\n\n这是一段内容", file_name="在线文档.md")
+        self.assertEqual(doc.status, "done")
+        self.assertGreaterEqual(doc.chunk_count, 1)
+        self.assertEqual(doc.source, "markdown")
+        self.assertTrue(store.add_calls)
+        call = store.add_calls[-1]
+        self.assertEqual(call["file_name"], "在线文档.md")
+        self.assertTrue(call["documents"])
+        # 每个切块带 department / doc_id 元数据
+        self.assertTrue(all(m.get("department") == "public" for m in call["metadatas"]))
+
+    def test_process_text_empty_returns_error(self):
+        with patch.object(engine, "get_store", return_value=FakeStore()):
+            doc = engine.process_text("   ", file_name="空.md")
+        self.assertEqual(doc.status, "error")
+
+    def test_process_text_doc_id_stable_for_same_content(self):
+        store = FakeStore()
+        with patch.object(engine, "get_store", return_value=store):
+            d1 = engine.process_text("内容A", file_name="x.md")
+            d2 = engine.process_text("内容A", file_name="x.md")
+        # 相同内容 → 相同 doc_id / content_hash（版本替换语义）
+        self.assertEqual(d1.doc_id, d2.doc_id)
+        self.assertEqual(d1.content_hash, d2.content_hash)
+        self.assertNotEqual(d1.content_hash, "")
+
+    def test_process_text_target_collection_respected(self):
+        store = FakeStore()
+        with patch.object(engine, "get_store", return_value=store):
+            doc = engine.process_text("# 标题", file_name="x.md",
+                                      target_collection="private_docs")
+        self.assertEqual(doc.collection, "private_docs")
+        self.assertEqual(store.add_calls[-1]["collection"], "private_docs")
+
+
 if __name__ == "__main__":
     unittest.main()

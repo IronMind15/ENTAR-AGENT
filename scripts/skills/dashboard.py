@@ -1,0 +1,265 @@
+"""
+看板技能（v1.11.0）— priority=80，位于 pcb_calc(90) 之后、agent(50) 之前
+
+职责：看板订阅管理对话（创建/改时间/改频率/改接收人/停止/查询）。
+流程：
+  管理指令 → parse_subscription_command → 存 pending（内存态）→ 反问确认
+  「确认」回复 → _execute_pending 落地（create 注册订阅后立即推样例看板）
+不拦截：文档/方案/方法论/学习入库等话题（subscription_commands.is_kanban_topic 判定）。
+"""
+
+import logging
+import re
+
+from dashboard import service
+from dashboard import subscription_commands as sub_cmd
+from dashboard.config_model import load_sources
+from dashboard.subscription_store import Subscription, get_subscription_store
+from skills import BaseSkill, register
+
+logger = logging.getLogger("dashboard.skill")
+
+# 简短确认词（须最近有看板活动才拦截，防抢普通对话）
+_CONFIRM_RE = re.compile(r"^(确认|好的|可以|没问题|就这样|订阅吧|就这么办)$")
+
+_HELP_TEXT = (
+    "我可以帮您开通「每日项目看板」自动推送，也可以查实时看板。试试说：\n"
+    "· 「帮我推个看板」— 开通每日自动推送\n"
+    "· 「看板今天怎么样」— 查当前看板\n"
+    "· 「改看板时间到10点」「每周一和周五」「也推给张工」「停掉看板」"
+)
+
+
+@register
+class DashboardSkill(BaseSkill):
+    name: str = "dashboard"
+    description: str = "每日项目看板：订阅管理 + 实时查看"
+    priority: int = 80
+
+    # ===== 匹配 =====
+    @classmethod
+    def match(cls, query: str) -> bool:
+        q = (query or "").strip()
+        if not q:
+            return False
+        # 第 0 步：「按这几个文档做每日看板」（_NEGATIVE_RE 含「文档」会拦常规路径，需提前）
+        if sub_cmd.parse_doc_dashboard_intent(q) is not None:
+            return True
+        if sub_cmd.is_kanban_topic(q):
+            return True
+        # 订阅管理指令（含"也推给张工"这类不含"看板"的追加指令）
+        if sub_cmd.parse_subscription_command(q) is not None:
+            return True
+        # 简短确认词：仅当最近有看板活动（有 pending 待确认）才拦截
+        if len(q) <= 6 and _CONFIRM_RE.fullmatch(q):
+            return sub_cmd.has_recent_kanban_activity()
+        return False
+
+    # ===== 处理 =====
+    @classmethod
+    def handle(cls, query: str, user_id: str = "", on_chunk=None) -> dict:
+        q = (query or "").strip()
+        uid = user_id or ""
+
+        # 确认/继续分支
+        if len(q) <= 6 and _CONFIRM_RE.fullmatch(q):
+            pending = sub_cmd.get_pending(uid)
+            if not pending:
+                return {"answer": "您还没有待确认的看板操作。说「帮我推个看板」即可开通。",
+                        "source": "dashboard"}
+            return cls._execute_pending(pending, uid)
+
+        # 「按这几个文档做每日看板」→ 动态数据源创建
+        if sub_cmd.parse_doc_dashboard_intent(q) is not None:
+            return cls._handle_doc_create(uid)
+
+        parsed = sub_cmd.parse_subscription_command(q)
+        if not parsed:
+            return {"answer": _HELP_TEXT, "source": "dashboard"}
+        intent = parsed["intent"]
+
+        if intent == "create":
+            pending = cls._build_create_pending(uid)
+            sub_cmd.set_pending(uid, pending)
+            return {"answer": sub_cmd.render_confirmation(pending), "source": "dashboard"}
+
+        if intent == "query":
+            return {"answer": cls._render_subscription_status(uid), "source": "dashboard"}
+
+        if intent == "stop":
+            return {"answer": cls._stop_subscription(uid), "source": "dashboard"}
+
+        if intent in ("change_time", "change_freq", "change_recipients"):
+            store = get_subscription_store()
+            subs = store.list_for_owner(uid)
+            if not subs:
+                return {"answer": "您还没有订阅看板。说「帮我推个看板」先开通，再调整。",
+                        "source": "dashboard"}
+            pending = dict(parsed)
+            pending["sub_id"] = subs[0].id
+            sub_cmd.set_pending(uid, pending)
+            return {"answer": sub_cmd.render_confirmation(pending, current=subs[0]),
+                    "source": "dashboard"}
+
+        return {"answer": _HELP_TEXT, "source": "dashboard"}
+
+    # ===== 辅助 =====
+    @classmethod
+    def _handle_doc_create(cls, user_id: str) -> dict:
+        """「按这几个文档做每日看板」：取该用户可看板文档候选 → 反问确认"""
+        try:
+            from dashboard.doc_candidates import get_candidate_store
+            cands = get_candidate_store().list_dashboard_ready(user_id)
+        except Exception as e:
+            logger.warning(f"取文档候选失败: {e}")
+            cands = []
+        if not cands:
+            return {"answer":
+                    "请先在钉钉发送要作为看板的文档链接（AI表格/在线表格），"
+                    "我识别后就可以按它做每日看板。",
+                    "source": "dashboard"}
+        staff_id = cls._staff_id_of(user_id)
+        pending = {
+            "intent": "doc_create",
+            "data_sources": [f"doc_{c.id}" for c in cands],
+            "push_hour": 9, "push_minute": 0,
+            "weekdays": "", "alert_mode": "changes_only",
+            "title": "恩特能源每日项目看板",
+            "owner_user_id": user_id,
+            "owner_staff_id": staff_id,
+            "recipients": [staff_id] if staff_id else [],
+        }
+        sub_cmd.set_pending(user_id, pending)
+        return {"answer": sub_cmd.render_confirmation(pending), "source": "dashboard"}
+
+    @classmethod
+    def _build_create_pending(cls, user_id: str) -> dict:
+        staff_id = cls._staff_id_of(user_id)
+        sources = [s.key for s in load_sources() if s.enabled]
+        return {
+            "intent": "create",
+            "data_sources": sources or [],
+            "push_hour": 9, "push_minute": 0,
+            "weekdays": "", "alert_mode": "changes_only",
+            "title": "恩特能源每日项目看板",
+            "owner_user_id": user_id,
+            "owner_staff_id": staff_id,
+            "recipients": [staff_id] if staff_id else [],
+        }
+
+    @classmethod
+    def _execute_pending(cls, pending: dict, user_id: str) -> dict:
+        store = get_subscription_store()
+        intent = pending.get("intent")
+
+        if intent in ("create", "doc_create"):
+            sub = Subscription(
+                owner_user_id=user_id,
+                owner_staff_id=pending.get("owner_staff_id", ""),
+                owner_union_id=user_id,   # 钉钉 sender_id 即 unionId
+                data_sources=pending.get("data_sources") or [],
+                push_hour=pending.get("push_hour", 9),
+                push_minute=pending.get("push_minute", 0),
+                weekdays=pending.get("weekdays", ""),
+                alert_mode=pending.get("alert_mode", "changes_only"),
+                recipients=pending.get("recipients") or [],
+                title=pending.get("title", "恩特能源每日项目看板"),
+            )
+            store.create(sub)
+            sub_cmd.clear_pending(user_id)
+            note = cls._push_sample(sub)
+            return {"answer": f"✅ 已为您开通每日看板推送！{note}", "source": "dashboard"}
+
+        sub = store.get(pending.get("sub_id") or 0)
+        if not sub:
+            sub_cmd.clear_pending(user_id)
+            return {"answer": "订阅不存在，可能是已删除。说「帮我推个看板」重新开通。",
+                    "source": "dashboard"}
+        if intent == "change_time":
+            sub.push_hour = pending.get("push_hour", sub.push_hour)
+            sub.push_minute = pending.get("push_minute", sub.push_minute)
+        elif intent == "change_freq":
+            sub.weekdays = pending.get("weekdays", sub.weekdays)
+        elif intent == "change_recipients":
+            names = pending.get("recipient_names") or []
+            for name in names:
+                sid = sub_cmd.resolve_recipient(name)
+                if not sid:
+                    continue
+                if pending.get("add") and sid not in sub.recipients:
+                    sub.recipients.append(sid)
+                elif not pending.get("add") and sid in sub.recipients:
+                    sub.recipients.remove(sid)
+        store.update(sub)
+        sub_cmd.clear_pending(user_id)
+        return {"answer":
+                f"✅ 已更新：{sub_cmd.format_weekdays(sub.weekdays)} "
+                f"{sub.push_hour:02d}:{sub.push_minute:02d}，接收 {len(sub.recipients)} 人。",
+                "source": "dashboard"}
+
+    @classmethod
+    def _push_sample(cls, sub: Subscription) -> str:
+        """订阅成功后立即推一条样例（数据源 base_id 未配则提示，不影响订阅）"""
+        sources = service.resolve_subscription_sources(sub)
+        if not sources:
+            return "（数据源未配置，配置后每日自动推送）"
+        parsed, errors = service.collect_and_parse(
+            sources, operator_id=sub.owner_union_id, staff_id=sub.owner_staff_id)
+        if not parsed:
+            msg = "；".join(errors[:2]) or "无数据"
+            return f"（推送前准备失败：{msg}，配置好数据源后每日自动推送）"
+        # 样例推送与定时推送统一走 LLM 组装（失败规则兜底）
+        try:
+            from skills.agent import call_deepseek
+            text = service.assemble(parsed, title=sub.title,
+                                    date_str=service.today_str(),
+                                    llm_func=call_deepseek)
+        except Exception:
+            text = service.assemble(parsed, title=sub.title,
+                                    date_str=service.today_str())
+        ok, msg = service.push(sub.recipients, sub.title, text)
+        if ok:
+            return "已推送示例看板给您，可先查看效果！"
+        return f"（订阅已开通，但示例推送失败：{msg}）"
+
+    @classmethod
+    def _render_subscription_status(cls, user_id: str) -> str:
+        store = get_subscription_store()
+        subs = store.list_for_owner(user_id)
+        if not subs:
+            return "您还没有订阅每日看板。说「帮我推个看板」即可开通。"
+        lines = ["您的看板订阅："]
+        for s in subs:
+            status = "✅ 运行中" if s.enabled else "⏸️ 已暂停"
+            lines.append(f"- {s.title}（{status}）")
+            lines.append(f"  · 时间：{sub_cmd.format_weekdays(s.weekdays)} "
+                         f"{s.push_hour:02d}:{s.push_minute:02d}")
+            try:
+                src_names = "、".join(x.name for x in service.resolve_subscription_sources(s))
+            except Exception:
+                src_names = ""
+            lines.append(f"  · 数据源：{src_names or '（未配置）'}")
+            lines.append(f"  · 接收人：{len(s.recipients)} 人")
+            lines.append(f"  · 上次推送：{s.last_pushed_at or '尚无'}")
+        return "\n".join(lines)
+
+    @classmethod
+    def _stop_subscription(cls, user_id: str) -> str:
+        store = get_subscription_store()
+        subs = store.list_for_owner(user_id)
+        if not subs:
+            return "您还没有订阅看板，无需停止。说「帮我推个看板」即可开通。"
+        for s in subs:
+            store.set_enabled(s.id, False)
+        return "已停止您的每日看板推送。想恢复说「重新开通看板」，或直接告诉我调整。"
+
+    @staticmethod
+    def _staff_id_of(user_id: str) -> str:
+        """user_id(sender_id/unionId) → staff_id（钉钉入口已同步，取存储）"""
+        if not user_id:
+            return ""
+        try:
+            from user_store import get_store
+            return (get_store().get_user(user_id) or {}).get("staff_id", "") or ""
+        except Exception:
+            return ""

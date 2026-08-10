@@ -85,6 +85,22 @@ def reload_system_prompt() -> str:
 SYSTEM_PROMPT = _load_system_prompt()
 
 
+def call_deepseek(prompt: str, max_tokens: int = 4000) -> str:
+    """公开包装 _call_deepseek：传入单个用户 prompt，返回纯文本内容。
+
+    供看板 LLM 组装等非对话场景使用（不参与前缀缓存结构）。失败返回空串，
+    由调用方兜底（看板组装失败走规则模板）。
+    """
+    try:
+        resp = _call_deepseek([{"role": "user", "content": prompt}],
+                              max_tokens=max_tokens)
+        if resp and resp.get("content"):
+            return resp["content"]
+    except Exception as e:
+        logger.warning(f"call_deepseek 失败: {e}")
+    return ""
+
+
 def _call_deepseek(
     messages: list[dict],
     tools: list | None = None,
@@ -274,6 +290,8 @@ def _call_deepseek_stream(
                                         "calc_copper_busbar": "🔧 铜排载流计算...",
                                         "find_employee": "👥 查询同事信息...",
                                         "describe_image": "🖼️ 识别图片内容...",
+                                        "query_dashboard": "📊 查询项目看板...",
+                                        "push_dashboard": "📊 推送项目看板...",
                                     }
                                     display = _TOOL_DISPLAY.get(fn_name, f"🔍 {fn_name}...")
                                     on_chunk(display, "tool_call")

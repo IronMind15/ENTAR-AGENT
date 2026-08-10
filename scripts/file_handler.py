@@ -259,10 +259,10 @@ def format_file_received_message(result: dict, auto_process: bool = False) -> st
     if auto_process:
         ext = get_file_type(result["file_name"])
         if ext in _LEARN_EXTENSIONS:
-            # v1.10.2：取消主管审核，改为用户回复「帮我学习」直接入库。
+            # v1.11.0：上传后主动推荐入库，回复「入库」/「确认」即学习。
             # （旧审核文案见 git 历史；未来恢复审核流程时改回提示申请编号。）
             msg += (
-                "\n👌 回复「帮我学习」即可直接入库，无需审核。\n"
+                "\n👌 要不要我把这份文件入库知识库？回复「入库」/「确认」即可。\n"
                 "📁 回复「我的文件」可查看已上传文件；「删除学习 序号」可删除。\n"
             )
         else:

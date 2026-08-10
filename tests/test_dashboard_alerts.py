@@ -1,0 +1,126 @@
+"""看板变化检测测试（v1.11.0）—— 快照去噪 + diff（纯逻辑）"""
+
+import sys
+import unittest
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS_DIR = PROJECT_ROOT / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from dashboard.alerts import (  # noqa: E402
+    diff_summary, has_changes, make_snapshot,
+)
+
+
+def _res(**kw):
+    base = {
+        "source_key": "s1", "name": "板块一", "table_name": "33周", "total": 2,
+        "status_counts": {"滞后": 1, "正常": 1},
+        "attention_items": [{"项目名称": "项目A", "状态": "滞后", "本周进展": "x"}],
+        "normal_items": [{"项目名称": "项目B", "状态": "正常"}],
+        "other_items": [],
+    }
+    base.update(kw)
+    return base
+
+
+class MakeSnapshotTests(unittest.TestCase):
+    def test_structure(self):
+        snap = make_snapshot([_res()])
+        self.assertEqual(len(snap), 1)
+        s = snap[0]
+        self.assertEqual(s["source_key"], "s1")
+        self.assertEqual(s["table_name"], "33周")
+        self.assertEqual(s["total"], 2)
+        self.assertEqual(s["status_counts"], {"滞后": 1, "正常": 1})
+        # attention 归一为 {status, title}，去噪丢弃长文本字段
+        self.assertEqual(s["attention"], [
+            {"status": "滞后", "title": "项目A"},
+        ])
+        self.assertEqual(s["normal"], [
+            {"status": "正常", "title": "项目B"},
+        ])
+
+    def test_json_serializable(self):
+        import json
+        snap = make_snapshot([_res()])
+        json.dumps(snap)  # 不抛异常
+
+    def test_long_text_not_in_attention_snapshot(self):
+        """只有标题+状态进关注快照（changes_only 去噪），易变长文本不进"""
+        s = make_snapshot([_res(attention_items=[{
+            "项目名称": "项目A", "状态": "滞后", "本周进展": "x" * 1000,
+        }])])[0]
+        self.assertEqual(s["attention"], [{"status": "滞后", "title": "项目A"}])
+
+
+class HasChangesTests(unittest.TestCase):
+    def test_same_snapshot_no_change(self):
+        a = make_snapshot([_res()])
+        b = make_snapshot([_res()])
+        self.assertFalse(has_changes(a, b))
+
+    def test_total_change_detected(self):
+        a = make_snapshot([_res()])
+        b = make_snapshot([_res(total=3)])
+        self.assertTrue(has_changes(a, b))
+
+    def test_first_snapshot_is_change(self):
+        b = make_snapshot([_res()])
+        self.assertTrue(has_changes(None, b))
+
+
+class DiffSummaryTests(unittest.TestCase):
+    def test_no_diff_empty(self):
+        a = make_snapshot([_res()])
+        b = make_snapshot([_res()])
+        self.assertEqual(diff_summary(a, b), [])
+
+    def test_new_block(self):
+        a = make_snapshot([_res()])
+        b = make_snapshot([_res(), _res(source_key="s2")])
+        diff = diff_summary(a, b)
+        self.assertIn({"source_key": "s2", "detail": "新增板块"}, diff)
+
+    def test_total_change(self):
+        a = make_snapshot([_res()])
+        b = make_snapshot([_res(total=3)])
+        diff = diff_summary(a, b)
+        self.assertEqual(len(diff), 1)
+        self.assertIn("总数 2→3", diff[0]["detail"])
+
+    def test_status_count_change(self):
+        a = make_snapshot([_res(status_counts={"滞后": 1, "正常": 1})])
+        b = make_snapshot([_res(status_counts={"滞后": 2, "正常": 1})])
+        diff = diff_summary(a, b)
+        self.assertIn("滞后1→2", diff[0]["detail"])
+
+    def test_attention_item_changed(self):
+        a = make_snapshot([_res()])
+        b = make_snapshot([_res(attention_items=[
+            {"项目名称": "项目C", "状态": "滞后", "本周进展": "y"},
+        ])])
+        diff = diff_summary(a, b)
+        self.assertIn("新增关注1", diff[0]["detail"])
+        self.assertIn("移除关注1", diff[0]["detail"])
+
+    def test_block_removed(self):
+        a = make_snapshot([_res(), _res(source_key="s2")])
+        b = make_snapshot([_res()])
+        diff = diff_summary(a, b)
+        self.assertIn({"source_key": "s2", "detail": "板块消失"}, diff)
+
+    def test_ignore_long_text_change(self):
+        """仅长文本变化不触发（去噪效果）"""
+        a = make_snapshot([_res(attention_items=[
+            {"项目名称": "项目A", "状态": "滞后", "本周进展": "昨天进展"}])])
+        b = make_snapshot([_res(attention_items=[
+            {"项目名称": "项目A", "状态": "滞后", "本周进展": "今天进展"}])])
+        self.assertFalse(has_changes(a, b))
+        self.assertEqual(diff_summary(a, b), [])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -116,6 +116,68 @@ def _is_learn_command(text: str) -> bool:
     return bool(_LEARN_RE.match((text or "").strip()))
 
 
+# 上传后「推荐入库」确认词（v1.11.0）：有 file-pending 才拦截，无 pending 不抢对话
+_CONFIRM_LEARN_RE = re.compile(r"^(入库|确认|好的|可以|没问题|要|入库吧)$")
+
+
+def _is_confirm_learn(text: str) -> bool:
+    t = (text or "").strip()
+    return bool(_CONFIRM_LEARN_RE.fullmatch(t))
+
+
+# ===== 钉钉在线文档链接提取（v1.11.0） =====
+_ALIDOCS_URL_RE = re.compile(
+    r"https?://[^\s，。；、\"'）)]*alidocs\.dingtalk\.com[^\s，。；、\"'）)]*")
+
+
+def _extract_alidocs_urls(text: str) -> list[str]:
+    """提取消息中的钉钉在线文档链接（去重、保序）"""
+    if not text:
+        return []
+    urls = []
+    for m in _ALIDOCS_URL_RE.finditer(text):
+        u = m.group(0).rstrip("，。；、")
+        if u and u not in urls:
+            urls.append(u)
+    return urls
+
+
+def _short_url(url: str, n: int = 50) -> str:
+    return url if len(url) <= n else url[:n] + "…"
+
+
+def _collect_rich_strings(v, out: list[str]):
+    """递归收集富文本消息结构里的所有字符串（含链接 URL，不依赖具体字段名）"""
+    if isinstance(v, str):
+        s = v.strip()
+        if s:
+            out.append(s)
+    elif isinstance(v, dict):
+        for val in v.values():
+            _collect_rich_strings(val, out)
+    elif isinstance(v, list):
+        for it in v:
+            _collect_rich_strings(it, out)
+
+
+def learn_dingtalk_doc_for_user(user_id: str) -> dict:
+    """为用户学习最近一个钉钉文档候选（懒加载避免循环 import）"""
+    try:
+        from dashboard.doc_learn import learn_dingtalk_doc
+        return learn_dingtalk_doc(user_id)
+    except Exception as e:
+        logger.warning(f"钉钉文档学习失败: {e}")
+        return {"has_candidate": False, "ok": False, "message": f"学习失败：{e}",
+                "chunk_count": 0, "records": 0}
+
+
+def _format_doc_learn_result(result: dict) -> str:
+    """格式化「帮我学习」钉钉文档入库结果"""
+    if result.get("ok"):
+        return f"✅ 文档已入库：{result.get('message')}"
+    return f"❌ {result.get('message')}"
+
+
 _STATUS_LABELS = {
     "synced": "✅ 已学习",
     "pending": "⏳ 待学习",
@@ -204,6 +266,11 @@ class ErrorQueryHandler(ChatbotHandler):
         staff_id = str(bot_msg.sender_staff_id or "")
         corp_id = str(bot_msg.sender_corp_id or "")
 
+        # 诊断：记录所有到达消息的类型，便于排查文档卡片（richText 等）特殊类型
+        logger.info(
+            f"[入口] message_type={bot_msg.message_type} sender={sender} "
+            f"keys={sorted(k for k in (raw_data.keys() if isinstance(raw_data, dict) else []))}")
+
         # ---- 后台同步用户信息（首次或 24h 过期后自动更新） ----
         # 方法内含 SQLite 查询，放线程池避免阻塞事件循环（v1.6.1）
         try:
@@ -225,6 +292,21 @@ class ErrorQueryHandler(ChatbotHandler):
             async with self._get_user_lock(user_id):
                 return await asyncio.to_thread(
                     self._handle_image_message, bot_msg, user_id, sender)
+
+        # ===== 处理富文本/文档卡片消息（v1.11.0：粘贴 alidocs 链接会自动转卡片） =====
+        if bot_msg.message_type == "richText":
+            logger.info(f"收到富文本卡片 [{conv_title}] {sender}")
+            async with self._get_user_lock(user_id):
+                return await asyncio.to_thread(
+                    self._handle_rich_text_message, bot_msg, user_id, staff_id, sender)
+
+        # ===== 处理交互卡片消息（v1.11.0：钉钉文档/链接卡片 msgtype=interactiveCard） =====
+        if bot_msg.message_type == "interactiveCard":
+            logger.info(f"收到交互卡片 [{conv_title}] {sender}")
+            async with self._get_user_lock(user_id):
+                return await asyncio.to_thread(
+                    self._handle_interactive_card_message,
+                    raw_data.get("content"), bot_msg, user_id, staff_id, sender)
 
         # ===== 处理文本消息（原有逻辑） =====
         if bot_msg.message_type != "text" or not bot_msg.text or not bot_msg.text.content:
@@ -418,13 +500,45 @@ class ErrorQueryHandler(ChatbotHandler):
                 on_chunk(answer, "done")
             return {"answer": answer, "source": "knowledge_relearn"}
 
+        # 5.5 上传后「推荐入库」确认（v1.11.0）：有 file-pending 且确认词才拦截
+        if _is_confirm_learn(t):
+            try:
+                from knowledge_review import (clear_pending_learn,
+                                              get_pending_learn,
+                                              learn_file_path_for_user)
+                pending = get_pending_learn(user_id)
+                if pending:
+                    result = learn_file_path_for_user(
+                        user_id, pending.get("file_path", ""),
+                        pending.get("file_name", ""))
+                    clear_pending_learn(user_id)
+                    answer = _format_learn_result(result)
+                    if on_chunk:
+                        on_chunk(answer, "done")
+                    return {"answer": answer, "source": "knowledge_learn"}
+            except Exception as e:
+                logger.warning(f"推荐入库确认处理失败: {e}")
+
         # 6. 帮我学习 → 直接入库（v1.10.2 取消主管审核）
         if _is_learn_command(t):
-            result = learn_file_for_user(user_id)
-            answer = _format_learn_result(result)
+            # v1.11.0：先看有没有钉钉文档候选（有则学文档），无候选走文件路径
+            doc_result = learn_dingtalk_doc_for_user(user_id)
+            if doc_result.get("has_candidate"):
+                answer = _format_doc_learn_result(doc_result)
+            else:
+                result = learn_file_for_user(user_id)
+                answer = _format_learn_result(result)
             if on_chunk:
                 on_chunk(answer, "done")
             return {"answer": answer, "source": "knowledge_learn"}
+
+        # 6.5 钉钉在线文档识别（v1.11.0）：消息含 alidocs 文档链接 → 自动读取
+        doc_answer = self._handle_dingtalk_doc_link(text, user_id, staff_id)
+        if doc_answer is not None:
+            logger.info(f"  → 钉钉文档识别: {text[:60]}")
+            if on_chunk:
+                on_chunk(doc_answer, "done")
+            return {"answer": doc_answer, "source": "dingtalk_doc"}
 
         from skills import get_matched_skill
 
@@ -438,6 +552,180 @@ class ErrorQueryHandler(ChatbotHandler):
         if on_chunk:
             on_chunk(fallback, "done")
         return {"answer": fallback, "source": "fallback"}
+
+    def _handle_dingtalk_doc_link(self, text: str, user_id: str, staff_id: str):
+        """检测消息中的钉钉在线文档链接（可多个），读取并回复摘要，登记「帮我学习」候选。
+
+        v1.11.0：用户在单聊发送钉钉在线文档（AI表格/在线表格/普通文档），
+        消息以 alidocs 链接形式到达 → 逐个解析读取内容，聚合回复摘要；
+        同时登记候选（user+url 唯一），供「帮我学习」入库。
+        按交互原则只提示「帮我学习」入库，不推销推送。
+        """
+        try:
+            from dingtalk_doc_client import get_doc_client
+        except Exception as e:
+            logger.warning(f"dingtalk_doc_client 导入失败: {e}")
+            return None
+
+        urls = _extract_alidocs_urls(text)
+        if not urls:
+            return None
+
+        client = get_doc_client()
+        # 解析真 operatorId：sender_id 可能带 `$:LWCP_v1:$` 包装不是真 unionId，
+        # 用 staff_id → contact_api 兜底查真 unionid（v1.11.0 修复）
+        try:
+            operator = client.resolve_operator_id(user_id, staff_id)
+        except Exception:
+            operator = ""
+        replies = []
+        learned_hint = False
+        for url in urls[:3]:  # 最多处理 3 个链接
+            try:
+                result = client.read_document(url, operator_id=operator,
+                                              staff_id=staff_id)
+            except Exception as e:
+                logger.warning(f"钉钉文档读取失败: {e}")
+                replies.append(f"❌ {_short_url(url)}：读取失败 {e}")
+                continue
+            if not result.get("ok"):
+                replies.append(
+                    f"📑 已识别钉钉文档（{_short_url(url)}），但暂无法读取：{result.get('message')}")
+                continue
+            records = result.get("records") or []
+            kind = result.get("kind", "")
+            kind_name = {"notable": "AI表格", "workbook": "在线表格", "doc": "文档"}.get(kind, kind)
+            node_id = result.get("node_id", "")
+            self._register_doc_candidate(user_id, url, result, operator_union=operator)
+            preview = self._doc_preview(records)
+            replies.append(
+                f"📑 已识别钉钉文档（{kind_name}）· 节点 {node_id} · {len(records)} 条记录"
+                + (f"\n{preview}" if preview else ""))
+            learned_hint = True
+
+        if not replies:
+            return "📑 已识别钉钉文档链接。"
+        msg = "\n\n".join(replies)
+        if learned_hint:
+            msg += "\n\n👌 回复「帮我学习」可将内容入库知识库。"
+        return msg
+
+    @staticmethod
+    def _doc_preview(records: list[dict], limit: int = 3) -> str:
+        """文档前几条记录预览（用于回复摘要）"""
+        lines = []
+        for i, rec in enumerate(records[:limit], 1):
+            cells = rec.get("cells") or rec.get("fields") or rec
+            if isinstance(cells, dict):
+                first = {k: str(v)[:40] for k, v in list(cells.items())[:4]}
+                lines.append(f"  {i}. {json.dumps(first, ensure_ascii=False)}")
+            else:
+                lines.append(f"  {i}. {str(cells)[:100]}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _register_doc_candidate(user_id: str, url: str, result: dict,
+                                operator_union: str = ""):
+        """登记「帮我学习」候选 / 动态看板数据源（同 user+url 覆盖）
+
+        v1.11.0：kind∈{notable,workbook} 置 enabled=1（可做看板源），
+        字段中文名（field_names）转 field_map JSON 存下，供动态源展示。
+        operator_union 用解析出的真 unionId（sender_id 可能带 `$:` 包装）。
+        """
+        try:
+            from dashboard.doc_candidates import DocCandidate, get_candidate_store
+            kind = result.get("kind", "")
+            field_names = result.get("field_names") or {}
+            field_map = {
+                str(fid): {"label": name, "type": "string", "max_len": 200}
+                for fid, name in field_names.items()
+            }
+            store = get_candidate_store()
+            store.add(DocCandidate(
+                user_id=user_id, url=url,
+                node_id=result.get("node_id", ""),
+                sheet_id=result.get("sheet_id", ""),
+                kind=kind,
+                operator_union=operator_union or user_id,
+                records_count=len(result.get("records") or []),
+                name=result.get("sheet_name") or result.get("name") or "",
+                enabled=kind in ("notable", "workbook"),
+                field_map=json.dumps(field_map, ensure_ascii=False),
+            ))
+        except Exception as e:
+            logger.warning(f"登记文档候选失败: {e}")
+
+    def _handle_rich_text_message(self, bot_msg, user_id, staff_id, sender):
+        """处理富文本/文档卡片消息（v1.11.0）：提取 alidocs 链接走文档识别
+
+        钉钉输入框粘贴 alidocs 链接会自动转成文档卡片（messageType=richText），
+        从 rich_text_content.rich_text_list 递归收集文本/链接，走文档识别。
+        无文档链接的普通卡片 → 忽略（不打扰）。
+        """
+        text = self._rich_text_plain(bot_msg)
+        logger.info(f"  富文本内容: {text[:200]}")
+        answer = self._handle_dingtalk_doc_link(text, user_id, staff_id)
+        if answer is not None:
+            self.reply_markdown(
+                title="恩特小助手 - 文档识别",
+                text=answer,
+                incoming_message=bot_msg,
+            )
+            return AckMessage.STATUS_OK, "ok"
+        logger.info("  富文本无文档链接，忽略")
+        return AckMessage.STATUS_OK, "ok"
+
+    @classmethod
+    def _rich_text_plain(cls, bot_msg) -> str:
+        """富文本消息 → 拼接所有文本/链接字符串（供 _extract_alidocs_urls 提取）"""
+        out: list[str] = []
+        try:
+            rich_list = bot_msg.rich_text_content.rich_text_list or []
+        except Exception:
+            return ""
+        _collect_rich_strings(rich_list, out)
+        return "\n".join(out)
+
+    def _handle_interactive_card_message(self, content, bot_msg, user_id,
+                                         staff_id, sender):
+        """处理交互卡片消息（v1.11.0）：从 content 递归提取 alidocs 链接走文档识别
+
+        钉钉「发送文档」或粘贴链接自动转的卡片，msgtype=interactiveCard，
+        URL 嵌套在 content（dict 或 JSON 字符串）的若干字段里，递归收集后
+        交给 _extract_alidocs_urls 提取；无文档链接的普通卡片忽略。
+        """
+        text = self._card_content_plain(content)
+        logger.info(f"  交互卡片内容: {text[:200]}")
+        try:
+            answer = self._handle_dingtalk_doc_link(text, user_id, staff_id)
+        except Exception as e:
+            logger.warning(f"  交互卡片文档识别异常: {e}")
+            answer = None
+        if answer is not None:
+            try:
+                self.reply_markdown(
+                    title="恩特小助手 - 文档识别",
+                    text=answer,
+                    incoming_message=bot_msg,
+                )
+            except Exception as e:
+                logger.warning(f"  交互卡片回复失败（网络?）: {e}")
+            return AckMessage.STATUS_OK, "ok"
+        logger.info("  交互卡片无文档链接，忽略")
+        return AckMessage.STATUS_OK, "ok"
+
+    @staticmethod
+    def _card_content_plain(content) -> str:
+        """卡片 content → 拼接所有字符串（content 可能为 dict 或 JSON 字符串）"""
+        out: list[str] = []
+        if isinstance(content, str):
+            try:
+                content = json.loads(content)
+            except Exception:
+                _collect_rich_strings(content, out)
+                return "\n".join(out)
+        _collect_rich_strings(content, out)
+        return "\n".join(out)
 
     def _handle_file_message(self, bot_msg, user_id, sender):
         """处理文件消息"""
@@ -483,6 +771,17 @@ class ErrorQueryHandler(ChatbotHandler):
             #             result["review_id"] = review["review_id"]
             #     except Exception as review_err:
             #         logger.error(f"创建知识库审核申请失败: {review_err}")
+
+            # v1.11.0：保存成功后登记「推荐入库」确认（精确对应刚上传文件）
+            if result["success"]:
+                try:
+                    from file_handler import _LEARN_EXTENSIONS, get_file_type
+                    from knowledge_review import set_pending_learn
+                    if get_file_type(file_name) in _LEARN_EXTENSIONS:
+                        set_pending_learn(
+                            user_id, result.get("file_path", ""), file_name)
+                except Exception as e:
+                    logger.warning(f"登记推荐入库失败: {e}")
 
             # 构建回复消息（已包含待处理提示）
             answer = format_file_received_message(result, auto_process=True)

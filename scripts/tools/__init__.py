@@ -121,3 +121,5 @@ from . import calc_copper_busbar     # noqa: E402, F811 — 铜排/母线载流�
 from . import search_experience_kb   # noqa: E402, F811 — 经验知识库检索（v1.4.2 第二步）
 from . import find_employee          # noqa: E402, F811 — 钉钉通讯录员工查询（v1.7.0）
 from . import describe_image         # noqa: E402, F811 — 图片识别（千问视觉，v1.10.0）
+from . import query_dashboard        # noqa: E402, F811 — 看板实时查询（v1.11.0）
+from . import push_dashboard         # noqa: E402, F811 — 看板主动推送（v1.11.0）

@@ -395,6 +395,57 @@ class KnowledgeReviewService:
         return {"status": "failed", "file_name": file_name,
                 "message": getattr(doc, "message", "") or "处理失败"}
 
+    def learn_file_path(self, user_id: str, file_path: str,
+                        file_name: str = "") -> dict:
+        """按指定文件路径直接入库（v1.11.0 上传后「自动推荐→确认」用）。
+
+        与 learn_for_user 同构：校验路径安全 → 取 target_collection →
+        同步 process_file → 返回同构结果。engine.process_file 行为不变。
+        """
+        from doc_mgr.engine import process_file
+
+        if not file_path:
+            return {"status": "no_file", "message": "未找到待学习的文件。"}
+        fname = file_name or os.path.basename(file_path)
+        if not self._is_safe_upload_file(file_path):
+            return {"status": "failed", "file_name": fname,
+                    "message": "文件不存在或路径不安全，请重新发送文件。"}
+
+        # 优先用 tracker 已登记的目标库；无则按扩展名默认
+        collection = "standards"
+        try:
+            st = self.tracker.get_status(file_path)
+            if st and st.get("target_collection"):
+                collection = st["target_collection"]
+            else:
+                collection = default_collection(fname)
+        except Exception:
+            collection = default_collection(fname)
+
+        try:
+            doc = process_file(
+                file_path,
+                file_name=fname,
+                target_collection=collection,
+                force=False,
+                department="public",
+            )
+        except Exception as exc:
+            logger.exception(f"按路径学习失败: {file_path}")
+            try:
+                self.tracker.mark_error(file_path, str(exc)[:500])
+            except Exception:
+                pass
+            return {"status": "failed", "file_name": fname,
+                    "message": str(exc)[:200]}
+
+        if doc.status == "done":
+            return {"status": "ok", "file_name": fname, "collection": collection,
+                    "chunk_count": int(getattr(doc, "chunk_count", 0) or 0),
+                    "message": ""}
+        return {"status": "failed", "file_name": fname,
+                "message": getattr(doc, "message", "") or "处理失败"}
+
     def relearn_for_user(self, user_id: str, target: str,
                          is_admin: bool = False) -> dict:
         """对已上传文件强制重新学习（force=True 重新解析入库）。"""
@@ -609,6 +660,33 @@ def handle_review_message(text: str, sender_staff_id: str) -> Optional[str]:
 def learn_file_for_user(user_id: str, user_name: str = "") -> dict:
     """用户回复「帮我学习」→ 直接入库最新待学习文件。"""
     return get_review_service().learn_for_user(user_id, user_name)
+
+
+# ===== v1.11.0 上传后「自动推荐入库」确认（内存 pending，重启失效可接受） =====
+_pending_learn: dict[str, dict] = {}
+_pending_learn_lock = threading.Lock()
+
+
+def set_pending_learn(user_id: str, file_path: str, file_name: str = ""):
+    """保存文件成功后登记推荐确认（精确对应刚上传的文件，规避多文件歧义）"""
+    with _pending_learn_lock:
+        _pending_learn[user_id] = {"file_path": file_path, "file_name": file_name}
+
+
+def get_pending_learn(user_id: str) -> Optional[dict]:
+    with _pending_learn_lock:
+        return _pending_learn.get(user_id)
+
+
+def clear_pending_learn(user_id: str):
+    with _pending_learn_lock:
+        _pending_learn.pop(user_id, None)
+
+
+def learn_file_path_for_user(user_id: str, file_path: str,
+                             file_name: str = "") -> dict:
+    """按指定路径入库（bot 确认分支调用）"""
+    return get_review_service().learn_file_path(user_id, file_path, file_name)
 
 
 def list_files_for_user(user_id: str, is_admin: bool = False) -> list[dict]:

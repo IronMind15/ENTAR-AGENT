@@ -15,6 +15,7 @@
   - Markdown：标题层级切块
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -939,26 +940,12 @@ def _process_markdown(file_path: str, file_name: str, file_size: int,
 
     doc.status = "processing"
 
-    # 2. 从文件名或 Markdown 内容提取标准信息
-    std_id, std_title = _extract_std_info(file_name, full_text)
+    # 2-4. 提取标准信息 + 切块 + 元数据（与 process_text 共用的内部 helper）
+    ids, documents, metadatas, std_id, std_title = _index_markdown_text(
+        full_text, file_name, store, target_collection, doc_id, content_hash,
+        department=department, filepath=file_path)
     doc.std_id = std_id
     doc.std_title = std_title
-
-    # 3. 基础 metadata
-    base_meta = {
-        "std_id": std_id,
-        "std_title": std_title,
-        "file_name": file_name,
-        "source": "mineru",  # 标记来源为 MinerU
-        "doc_id": doc_id,
-        "content_hash": content_hash,
-        "version_id": content_hash,
-    }
-
-    # 4. MarkdownChunker 切块
-    _report_progress("chunking", 60, "Markdown 结构分析切块...")
-    chunker = MarkdownChunker()
-    chunks = chunker.chunk(full_text, base_meta, filepath=file_path)
 
     # 5. 复制 images 目录（如果存在）
     images_dir = os.path.join(os.path.dirname(file_path), "images")
@@ -975,11 +962,7 @@ def _process_markdown(file_path: str, file_name: str, file_size: int,
                 logger.warning(f"  复制图片失败: {e}")
 
     # 6. 两阶段换版：新块完整写入后才退休旧版本
-    _report_progress("indexing", 80, f"切块完成（{len(chunks)} 块），入库到知识库...")
-    ids, documents, metadatas = _prepare_chunks(
-        chunks, file_name, doc_id=doc_id, content_hash=content_hash,
-        department=department,
-    )
+    _report_progress("indexing", 80, f"切块完成（{len(ids)} 块），入库到知识库...")
     added = store.replace_document(
         target_collection, doc_id, file_name,
         ids, documents, metadatas,
@@ -990,6 +973,80 @@ def _process_markdown(file_path: str, file_name: str, file_size: int,
     doc.status = "done"
     doc.message = f"新版本换库 {added} 条切块"
     logger.info(f"  Markdown 处理完成: {file_name} → {added} 块")
+    return doc
+
+
+def _index_markdown_text(full_text: str, file_name: str, store: VectorStore,
+                         target_collection: str, doc_id: str, content_hash: str,
+                         department: str = "public", filepath: str = "",
+                         ) -> tuple[list[str], list[str], list[dict], str, str]:
+    """Markdown 文本 → 标准信息 + 切块 + 元数据（process_file 与 process_text 共用）
+
+    Returns:
+        (ids, documents, metadatas, std_id, std_title)
+    """
+    std_id, std_title = _extract_std_info(file_name, full_text)
+    base_meta = {
+        "std_id": std_id,
+        "std_title": std_title,
+        "file_name": file_name,
+        "source": "mineru",  # 标记来源为 MinerU
+        "doc_id": doc_id,
+        "content_hash": content_hash,
+        "version_id": content_hash,
+    }
+    _report_progress("chunking", 60, "Markdown 结构分析切块...")
+    chunker = MarkdownChunker()
+    chunks = chunker.chunk(full_text, base_meta, filepath=filepath)
+    ids, documents, metadatas = _prepare_chunks(
+        chunks, file_name, doc_id=doc_id, content_hash=content_hash,
+        department=department,
+    )
+    return ids, documents, metadatas, std_id, std_title
+
+
+def process_text(content: str, file_name: str,
+                 target_collection: str = "standards",
+                 department: str = "public", doc_id: str = "") -> Document:
+    """直接把文本内容切块入库（v1.11.0，钉钉在线文档「帮我学习」用）
+
+    与 process_file 共用 _index_markdown_text 的切块/入库逻辑，但：
+    - 不写临时文件、不进 data/uploads（不触发文件生命周期/路径校验）
+    - 无图片复制（在线文档没有本地 images 目录）
+    """
+    content = content or ""
+    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    doc_id = doc_id or content_hash[:20]
+    doc = Document(
+        file_name=file_name, collection=target_collection,
+        file_size=len(content.encode("utf-8")),
+        doc_id=doc_id, content_hash=content_hash, version_id=content_hash,
+    )
+    if not content.strip():
+        doc.status = "error"
+        doc.message = "内容为空"
+        logger.warning(f"  process_text: 内容为空（{file_name}）")
+        return doc
+
+    doc.status = "processing"
+    store = get_store()
+    ids, documents, metadatas, std_id, std_title = _index_markdown_text(
+        content, file_name, store, target_collection, doc_id, content_hash,
+        department=department)
+    doc.std_id = std_id
+    doc.std_title = std_title
+
+    _report_progress("indexing", 80, f"切块完成（{len(ids)} 块），入库到知识库...")
+    added = store.replace_document(
+        target_collection, doc_id, file_name,
+        ids, documents, metadatas,
+    )
+
+    doc.chunk_count = added
+    doc.source = "markdown"
+    doc.status = "done"
+    doc.message = f"文本直入 {added} 条切块"
+    logger.info(f"  文本直入完成: {file_name} → {added} 块")
     return doc
 
 

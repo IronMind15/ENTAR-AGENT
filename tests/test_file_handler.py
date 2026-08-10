@@ -74,9 +74,10 @@ class FormatMessageTests(unittest.TestCase):
                 "file_path": "/x"}
 
     def test_received_message_suggests_learn(self):
-        """v1.10.2 回执引导「帮我学习」，不再提示审核"""
+        """v1.11.0 回执主动推荐入库，回复「入库/确认」即可"""
         msg = format_file_received_message(self._ok(), auto_process=True)
-        self.assertIn("帮我学习", msg)
+        self.assertIn("要不要我把这份文件入库知识库", msg)
+        self.assertIn("入库", msg)
         self.assertIn("我的文件", msg)
         # 不含旧审核流程关键字（申请编号 / 审核人同意 / 已提交）
         self.assertNotIn("申请编号", msg)
@@ -91,6 +92,31 @@ class FormatMessageTests(unittest.TestCase):
         msg = format_file_received_message(
             {"success": False, "file_name": "a.pdf", "file_size": 0,
              "message": "文件下载超时，请重试"})
+        self.assertIn("下载超时", msg)
+
+
+class ReceivedMessageTests(unittest.TestCase):
+    """v1.11.0 回执含「推荐入库」问句"""
+
+    def test_recommend_learn_question_for_learnable_file(self):
+        msg = format_file_received_message(
+            {"success": True, "file_name": "报告.pdf", "file_size": 2048,
+             "file_path": "/x/报告.pdf", "message": "保存成功"},
+            auto_process=True)
+        self.assertIn("要不要我把这份文件入库知识库", msg)
+        self.assertIn("入库", msg)
+
+    def test_unsupported_type_hint(self):
+        msg = format_file_received_message(
+            {"success": True, "file_name": "图片.png", "file_size": 1024,
+             "file_path": "/x/图片.png", "message": "保存成功"},
+            auto_process=True)
+        self.assertIn("暂不支持入库", msg)
+
+    def test_failure_message(self):
+        msg = format_file_received_message(
+            {"success": False, "file_name": "", "file_size": 0,
+             "file_path": None, "message": "下载超时"})
         self.assertIn("下载超时", msg)
 
 

@@ -17,6 +17,8 @@ from doc_mgr.sync_tracker import SyncTracker
 from file_handler import sanitize_file_name
 from knowledge_review import (
     KnowledgeReviewService, default_collection, _collection_from_text,
+    clear_pending_learn, get_pending_learn, learn_file_path_for_user,
+    set_pending_learn,
 )
 
 
@@ -345,6 +347,69 @@ class ExperienceReviewRoutingTests(unittest.TestCase):
         self.assertEqual(_collection_from_text("经验库", "某经验.md"), "experience_kb")
         self.assertEqual(_collection_from_text("经验知识库", "某经验.md"), "experience_kb")
         self.assertEqual(_collection_from_text("经验知识", "某经验.md"), "experience_kb")
+
+
+class LearnFilePathTests(unittest.TestCase):
+    """v1.11.0 按指定路径入库（上传后「推荐入库」确认用）"""
+
+    def _svc(self):
+        return KnowledgeReviewService()
+
+    def test_learn_file_path_success(self):
+        fake_doc = SimpleNamespace(status="done", chunk_count=3, message="")
+        svc = self._svc()
+        with patch.object(svc, "_is_safe_upload_file", return_value=True), \
+             patch("doc_mgr.engine.process_file",
+                   return_value=fake_doc) as m_process:
+            result = svc.learn_file_path("u1", "/x/测试.md", "测试.md")
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["chunk_count"], 3)
+        # .md → default_collection 应入 experience_kb（engine 内部默认 standards 已显式覆盖）
+        self.assertEqual(m_process.call_args.kwargs["target_collection"], "experience_kb")
+
+    def test_learn_file_path_unsafe_rejected(self):
+        svc = self._svc()
+        with patch.object(svc, "_is_safe_upload_file", return_value=False), \
+             patch("doc_mgr.engine.process_file") as m_process:
+            result = svc.learn_file_path("u1", "/bad/path.pdf", "bad.pdf")
+        self.assertEqual(result["status"], "failed")
+        m_process.assert_not_called()
+
+    def test_learn_file_path_empty(self):
+        svc = self._svc()
+        with patch("doc_mgr.engine.process_file") as m_process:
+            result = svc.learn_file_path("u1", "", "")
+        self.assertEqual(result["status"], "no_file")
+        m_process.assert_not_called()
+
+    def test_learn_file_path_process_failure(self):
+        fake_doc = SimpleNamespace(status="error", chunk_count=0, message="解析失败")
+        svc = self._svc()
+        with patch.object(svc, "_is_safe_upload_file", return_value=True), \
+             patch("doc_mgr.engine.process_file", return_value=fake_doc):
+            result = svc.learn_file_path("u1", "/x/a.pdf", "a.pdf")
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("解析失败", result["message"])
+
+
+class PendingLearnTests(unittest.TestCase):
+    """上传推荐入库的内存 pending"""
+
+    def test_pending_flow(self):
+        set_pending_learn("u1", "/x/文件.pdf", "文件.pdf")
+        self.assertEqual(get_pending_learn("u1"),
+                         {"file_path": "/x/文件.pdf", "file_name": "文件.pdf"})
+        clear_pending_learn("u1")
+        self.assertIsNone(get_pending_learn("u1"))
+
+    def test_learn_file_path_for_user_entry(self):
+        svc = KnowledgeReviewService()
+        with patch.object(svc, "learn_file_path",
+                          return_value={"status": "ok"}) as m_learn, \
+             patch("knowledge_review.get_review_service", return_value=svc):
+            result = learn_file_path_for_user("u1", "/x/a.pdf", "a.pdf")
+        self.assertEqual(result["status"], "ok")
+        m_learn.assert_called_once_with("u1", "/x/a.pdf", "a.pdf")
 
 
 if __name__ == "__main__":

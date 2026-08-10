@@ -1,0 +1,48 @@
+{
+  "sources": {
+    "project_status": {
+      "name": "研发项目现况表",
+      "source": "dingtalk_doc",
+      "kind": "notable",
+      "base_id": "",
+      "table_mode": "latest_week",
+      "table_id": "",
+      "field_map": {
+        "01ZM8y7": {"label": "项目名称", "type": "list_name"},
+        "7qnPz0F": {"label": "阶段", "type": "dict_name"},
+        "YQnOvE5": {"label": "状态", "type": "dict_name"},
+        "FjrTLFt": {"label": "产品型号", "type": "string"},
+        "aepzDFy": {"label": "本周进展", "type": "string", "max_len": 200},
+        "uWD6X8E": {"label": "风险卡点", "type": "string", "max_len": 200}
+      },
+      "status_groups": {
+        "attention": ["滞后"],
+        "normal": ["正常"]
+      }
+    },
+    "test_issues": {
+      "name": "整机下线测试问题",
+      "source": "dingtalk_doc",
+      "kind": "notable",
+      "base_id": "",
+      "table_mode": "fixed",
+      "table_id": "atLkTeV",
+      "field_map": {
+        "Hr3tyzt": {"label": "状态", "type": "dict_name"},
+        "GuqYscv": {"label": "SN", "type": "string"},
+        "ChZTtyj": {"label": "描述", "type": "string", "max_len": 100}
+      },
+      "status_groups": {
+        "attention": ["故障", "待验证"],
+        "normal": ["已完成", "已打包"]
+      }
+    }
+  },
+  "push": {
+    "push_hour": 9,
+    "push_minute": 0,
+    "alert_mode": "changes_only",
+    "title": "恩特能源每日项目看板",
+    "weekdays": ""
+  }
+}

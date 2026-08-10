@@ -54,6 +54,7 @@ from skills.dingtalk_bot import start_bot as start_dingtalk_bot
 from web_page import HOME_HTML
 from doc_mgr.router import router as admin_router
 from doc_mgr.scheduler import start_scheduler, stop_scheduler
+from dashboard_scheduler import start_dashboard_scheduler, stop_dashboard_scheduler
 
 app = FastAPI(title="恩特小助手")
 app.include_router(admin_router)
@@ -182,6 +183,11 @@ if __name__ == "__main__":
     # start_scheduler()
     # atexit.register(stop_scheduler)
     logger.info(f"  自动同步已禁用（手动模式）：管理员在 /admin 后台操作入库")
+
+    # 启动看板定时推送调度器（v1.11.0）：每分钟扫描到点订阅，主动推送每日项目看板
+    start_dashboard_scheduler()
+    atexit.register(stop_dashboard_scheduler)
+    logger.info(f"  看板定时推送调度器已启动（无订阅不推送）")
 
     logger.info(f"  将来扩展: 添加新技能 → 新建 skills/*.py + __init__.py 一行注册")
     uvicorn.run(app, host="0.0.0.0", port=port)

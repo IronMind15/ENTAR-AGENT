@@ -1,0 +1,160 @@
+"""
+看板服务层（v1.11.0）— 采集→解析→组装→推送 的公共编排
+
+技能（立即推送样例）、工具（push_dashboard）、定时调度（scheduler）复用同一套
+编排，避免三处各写一遍「collect_all → parse_source_records → assemble → send」。
+"""
+
+import json
+import logging
+from datetime import datetime
+
+logger = logging.getLogger("dashboard.service")
+
+
+def load_enabled_sources() -> list:
+    """全部启用数据源（配置层）"""
+    from .config_model import load_sources
+    return [s for s in load_sources() if s.enabled]
+
+
+# ===== 动态数据源桥接（v1.11.0：发文档动态注册，不依赖配置文件） =====
+def build_dynamic_source(cand) -> "SourceConfig":
+    """文档候选 → SourceConfig（key=`doc_<id>`，消费侧与配置源同构）"""
+    from .config_model import FieldSpec, SourceConfig
+    field_map: dict[str, FieldSpec] = {}
+    try:
+        raw_map = json.loads(cand.field_map or "{}")
+    except Exception:
+        raw_map = {}
+    for fid, spec in (raw_map or {}).items():
+        if isinstance(spec, dict):
+            field_map[str(fid)] = FieldSpec(
+                label=str(spec.get("label") or fid),
+                type=str(spec.get("type") or "string"),
+                max_len=int(spec.get("max_len") or 200),
+            )
+    status_groups = {}
+    try:
+        raw_groups = json.loads(cand.status_groups or "{}")
+        if isinstance(raw_groups, dict):
+            status_groups = {
+                str(g): [str(v) for v in vals] if isinstance(vals, list) else []
+                for g, vals in raw_groups.items()
+            }
+    except Exception:
+        pass
+    return SourceConfig(
+        key=f"doc_{cand.id}",
+        name=cand.name or f"文档{cand.node_id[:8]}",
+        source="dingtalk_doc",
+        kind=cand.kind or "notable",
+        base_id=cand.node_id,
+        table_mode=cand.table_mode or "fixed",
+        table_id=cand.sheet_id or "",
+        field_map=field_map,
+        status_groups=status_groups,
+        enabled=True,
+        operator_id=cand.operator_union or "",
+    )
+
+
+def resolve_subscription_sources(sub) -> list:
+    """订阅 data_sources → SourceConfig 列表
+
+    - `doc_<id>` key：查文档候选 → build_dynamic_source（候选缺失/已删则跳过）
+    - 其余 key：配置源 get_source（缺配置则跳过）
+    """
+    from .config_model import get_source
+    from .doc_candidates import get_candidate_store
+    out = []
+    cand_store = None
+    for key in sub.data_sources or []:
+        if isinstance(key, str) and key.startswith("doc_"):
+            try:
+                cand_id = int(key[len("doc_"):])
+                if cand_store is None:
+                    cand_store = get_candidate_store()
+                cand = cand_store.get(cand_id)
+                if cand and cand.enabled:
+                    out.append(build_dynamic_source(cand))
+            except Exception:
+                continue
+        else:
+            src = get_source(key)
+            if src and src.enabled:
+                out.append(src)
+    return out
+
+
+def load_all_available_sources() -> list:
+    """全部可用数据源：配置源 + 全量 enabled 动态源（供 query/push 工具）"""
+    sources = load_enabled_sources()
+    try:
+        from .doc_candidates import get_candidate_store
+        for cand in get_candidate_store().list_all_enabled():
+            if cand.kind in ("notable", "workbook"):
+                sources.append(build_dynamic_source(cand))
+    except Exception:
+        pass
+    return sources
+
+
+def collect_and_parse(sources: list, operator_id: str = "", staff_id: str = ""):
+    """采集 → 解析，返回 (parsed_results, errors)
+
+    - 单源失败（error 非空）或空记录的数据源跳过，进 errors（不中断整体）
+    - parsed: parse_source_records 结果列表
+    """
+    from .collector import Collector
+    from .parser import parse_source_records
+
+    src_by_key = {s.key: s for s in sources}
+    collected = Collector().collect_all(
+        sources, operator_id=operator_id, staff_id=staff_id)
+    parsed = []
+    errors = []
+    for c in collected:
+        if c.get("error"):
+            errors.append(f"{c.get('name') or c.get('source_key')}: {c['error']}")
+            continue
+        src = src_by_key.get(c["source_key"])
+        if src and c.get("records"):
+            parsed.append(parse_source_records(
+                src, c["records"], c.get("table_name", "")))
+    return parsed, errors
+
+
+def assemble(parsed: list, title: str = "恩特能源每日项目看板",
+             date_str: str = "", llm_func=None) -> str:
+    """组装 Markdown（llm_func 传入则走 LLM→validate→规则兜底，None 走规则模板）"""
+    from .assembler import assemble_markdown, llm_assemble
+    if llm_func:
+        return llm_assemble(parsed, title=title, date_str=date_str,
+                            llm_func=llm_func)
+    return assemble_markdown(parsed, title=title, date_str=date_str)
+
+
+def today_str() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def now_str() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def push(recipients: list, title: str, text: str):
+    """推送给 staff_id 列表（notifier 内部去重、≤20 人）
+
+    Returns:
+        (ok: bool, message: str)
+    """
+    if not recipients:
+        return False, "无接收人"
+    try:
+        from dingtalk_notifier import DingTalkNotifier
+        DingTalkNotifier().send_markdown_to_users(list(recipients), title, text)
+        return True, ""
+    except Exception as e:
+        logger.warning(f"看板推送失败: {e}")
+        return False, str(e)[:200]

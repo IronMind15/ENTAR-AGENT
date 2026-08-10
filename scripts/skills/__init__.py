@@ -71,4 +71,5 @@ def get_skill_list() -> list[type[BaseSkill]]:
 # ===== 自动导入技能模块（确保 @register 装饰器执行） =====
 from . import error_query  # noqa: E402, F811 — 优先级 100：仅精确故障代码快速通道
 from . import pcb_calc     # noqa: E402, F811 — 优先级 90 ：PCB 设计计算（IPC-2221 秒回）
+from . import dashboard    # noqa: E402, F811 — 优先级 80 ：每日项目看板（v1.11.0）
 from . import agent        # noqa: E402, F811 — 优先级 50 ：RAG Agent（LLM + 工具调用，统一处理所有问题）
