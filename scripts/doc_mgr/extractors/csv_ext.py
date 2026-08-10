@@ -67,12 +67,16 @@ def extract_csv_rows(
 
     records: list[dict] = []
     for row_num, row in enumerate(reader, start=2):  # 第 1 行是表头，数据从第 2 行开始
-        # 跳过全空行
-        if all(not v.strip() for v in row.values()):
+        try:
+            # 跳过全空行（DictReader 对缺失字段补 None，需容错）
+            if all(not (v or "").strip() for v in row.values()):
+                continue
+            row["_row_num"] = row_num
+            row["_encoding"] = used_encoding
+            records.append(row)
+        except (AttributeError, ValueError, TypeError) as e:
+            logger.warning(f"CSV 第 {row_num} 行解析跳过（不规则行）: {e}")
             continue
-        row["_row_num"] = row_num
-        row["_encoding"] = used_encoding
-        records.append(row)
 
     if not records:
         logger.warning(f"CSV 文件未提取到数据行: {filepath}")

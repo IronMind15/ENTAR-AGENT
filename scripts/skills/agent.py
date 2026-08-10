@@ -21,7 +21,8 @@ if _PARENT not in sys.path:
 
 import httpx
 
-from config import DEEPSEEK_API_KEY, MAX_CONCURRENT_LLM, MAX_CONTEXT_ROUNDS
+from config import (DEEPSEEK_API_KEY, MAX_CONCURRENT_LLM,
+                    MAX_CONTEXT_ROUNDS, MEMORY_BUDGET_TOKENS)
 from skills import BaseSkill, register
 from tools import get_tool_definitions, execute_tool as _execute_registered_tool
 
@@ -455,7 +456,8 @@ def _handle_impl(query: str, user_id: str = "", on_chunk=None) -> dict:
         try:
             from user_store import get_store as get_user_store
             window_msgs = get_user_store().get_window_context(
-                user_id, MAX_CONTEXT_ROUNDS)
+                user_id, MAX_CONTEXT_ROUNDS,
+                max_content_chars=MEMORY_BUDGET_TOKENS)
             logger.info(f"已回放 {user_id} 的历史轮次 ({len(window_msgs)} 条)")
         except Exception as e:
             logger.warning(f"获取窗口对话失败（不影响主流程）: {e}")

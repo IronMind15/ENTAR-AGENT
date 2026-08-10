@@ -97,7 +97,7 @@ def get_upload_urls(files: list, model_version: str = "vlm") -> dict:
         "model_version": model_version
     }
 
-    resp = _NET_SESSION.post(url, headers=headers, json=data)
+    resp = _NET_SESSION.post(url, headers=headers, json=data, timeout=30)
     resp.raise_for_status()
     result = resp.json()
 
@@ -124,7 +124,7 @@ def get_task_status(batch_id: str) -> dict:
     url = f"{MINERU_API_BASE}/extract-results/batch/{batch_id}"
     headers = {"Authorization": f"Bearer {MINERU_TOKEN}"}
 
-    resp = _NET_SESSION.get(url, headers=headers)
+    resp = _NET_SESSION.get(url, headers=headers, timeout=30)
     resp.raise_for_status()
     result = resp.json()
 
@@ -135,7 +135,7 @@ def get_task_status(batch_id: str) -> dict:
 
 def download_result(download_url: str, output_path: str) -> None:
     """下载提取结果（ZIP 或 Markdown）"""
-    resp = _NET_SESSION.get(download_url, stream=True)
+    resp = _NET_SESSION.get(download_url, stream=True, timeout=(30, 120))
     resp.raise_for_status()
 
     with open(output_path, "wb") as f:

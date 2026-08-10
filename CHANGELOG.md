@@ -3,6 +3,33 @@
 > 📌 **本文档是项目唯一的版本记录（单一事实源）**——README.md、PROGRESS.md 的版本历史均指向本文件，发版时只在这里追加记录。
 > 相关：待办清单见 [TODO.md](TODO.md)，进度看板见 [PROGRESS.md](PROGRESS.md)。
 
+## v1.10.1（2026-08-10）
+
+**🛡️ 上线前修复包**——上服务器部署前代码审查（4 路并行）发现并修复 4 个必修问题：长对话回放无预算可撑爆上下文窗口、MinerU 拆分子 PDF 在持久缓存目录永久累积、MinerU API 请求无超时可无限挂死、CSV 不规则行崩溃致整文件入库失败。全量回归 **283 项全绿**。
+
+### 修复
+
+- **窗口回放加字符预算**（`user_store.py` + `agent.py`）：`get_window_context` 新增 `max_content_chars` 参数（从旧到新累计，超预算保留最近的），agent 回放传入 `MEMORY_BUDGET_TOKENS`（20000）——长对话不再撑爆 DeepSeek 上下文窗口被 400 拒绝成「大模型暂时无响应」
+- **拆分子 PDF 写入临时目录**（`engine.py`）：`_split_pdf` 输出目录参数 `cache_dir`→`output_dir`，调用处改传临时 `run_dir`，子 PDF 随 `run_context.cleanup()` 自动删除——不再在持久缓存目录累积孤儿 chunk 无限占磁盘
+- **MinerU API 全部补超时**（`mineru_extract.py`）：申请上传 URL 30s、任务状态轮询 30s、结果下载 (30,120)s——连接半开不再无限挂死占死 task_manager worker
+- **CSV 不规则行容错**（`csv_ext.py`）：全空行判断对 `csv.DictReader` 补的 `None` 值容错 + 逐行 try 跳过坏行——不规则 CSV 不再整文件入库失败
+
+### 测试
+
+- 全量回归 **283 项通过**（4 项修复零回归）
+
+### 修改文件
+
+| 文件 | 改动 |
+|------|------|
+| `scripts/skills/agent.py` | 窗口回放传 `MEMORY_BUDGET_TOKENS` 预算截断 |
+| `scripts/user_store.py` | `get_window_context` 新增 `max_content_chars` 参数 |
+| `scripts/doc_mgr/engine.py` | `_split_pdf` 子 PDF 改写临时 `run_dir`（参数名 cache_dir→output_dir） |
+| `scripts/mineru_extract.py` | get_upload_urls / get_task_status / download_result 补 timeout |
+| `scripts/doc_mgr/extractors/csv_ext.py` | 全空行 `(v or "")` 容错 + 逐行 try |
+
+---
+
 ## v1.10.0（2026-08-07）
 
 **🖼️ 识图功能**——小助手从此「看得见」。钉钉发图自动识别并描述内容（qwen3.7-flash 视觉外挂），识别结果直接回流回复；同时新增 `tools/describe_image` 工具注册，DeepSeek Agent 将来可主动调图；Claude Code 侧同步落地 vision skill。顺带修复 MinerU OSS 上传被 Clash 劫持的隐患，并用真实 254 页扫描件完成超 200 页拆分入库全链路验证。回归 **283 项全绿**。

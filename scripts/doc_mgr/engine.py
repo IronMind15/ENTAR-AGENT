@@ -90,7 +90,7 @@ def _get_pdf_page_count(file_path: str) -> int:
         doc.close()
 
 
-def _split_pdf(file_path: str, cache_dir: str, max_pages: int = 200) -> list[str]:
+def _split_pdf(file_path: str, output_dir: str, max_pages: int = 200) -> list[str]:
     """将超过 max_pages 页的 PDF 拆分成多份子 PDF
 
     循环拆分，直到每一份都 ≤ max_pages：
@@ -99,7 +99,8 @@ def _split_pdf(file_path: str, cache_dir: str, max_pages: int = 200) -> list[str
 
     Args:
         file_path: 源 PDF 路径
-        cache_dir: 缓存目录（存放拆分后的子文件）
+        output_dir: 子 PDF 输出目录（调用方负责清理，建议传临时目录，
+                    避免孤儿 chunk 累积占用磁盘）
         max_pages: 每份最大页数
 
     Returns:
@@ -107,7 +108,7 @@ def _split_pdf(file_path: str, cache_dir: str, max_pages: int = 200) -> list[str
     """
     import fitz
 
-    os.makedirs(cache_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
     doc = fitz.open(file_path)
     try:
         total = doc.page_count
@@ -122,7 +123,7 @@ def _split_pdf(file_path: str, cache_dir: str, max_pages: int = 200) -> list[str
             end = min(i + max_pages, total)
             part_num = i // max_pages + 1
             chunk_name = f"{stem}_p{part_num}of{total_parts}.pdf"
-            chunk_path = os.path.join(cache_dir, chunk_name)
+            chunk_path = os.path.join(output_dir, chunk_name)
 
             new_doc = fitz.open()
             try:
@@ -270,7 +271,9 @@ def _try_mineru(file_path: str, file_name: str,
         run_dir = run_context.name
 
         # === 检查页数，200 页以上自动拆分 ===
-        pdf_paths = _split_pdf(file_path, cache_dir, max_pages=200)
+        # 子 PDF 写入临时 run_dir（随 run_context.cleanup() 删除），
+        # 避免在持久缓存目录累积孤儿 chunk 无限占用磁盘
+        pdf_paths = _split_pdf(file_path, run_dir, max_pages=200)
         is_split = len(pdf_paths) > 1
         if is_split:
             total_pages = _get_pdf_page_count(file_path)

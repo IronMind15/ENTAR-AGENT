@@ -414,12 +414,16 @@ class SQLiteUserStore(UserStore):
             )
             conn.commit()
 
-    def get_window_context(self, user_id: str, max_rounds: int) -> list[dict]:
+    def get_window_context(self, user_id: str, max_rounds: int,
+                           max_content_chars: int | None = None) -> list[dict]:
         """从窗口起点取最近对话，满 max_rounds 轮时批量滚动（释放前一半）
 
         返回正序 [{"role","content"}]，供 agent 直接作为历史轮次回放。
         滚动点持久化 → 两次滚动之间 messages 前缀稳定（KV Cache 友好），
         而非「每轮取最新 N 轮」的每轮滑动（那会让前缀每轮断裂）。
+
+        max_content_chars: 回放内容总字符预算（None 不截断）。超出时从
+        最早的对话开始丢弃，保留最近的——防止长对话回放撑爆 LLM 上下文窗口。
         """
         conn = self._get_conn()
         max_items = max_rounds * 2
@@ -438,7 +442,19 @@ class SQLiteUserStore(UserStore):
                 keep = rows[-keep_items:]
                 self.set_window_start(user_id, keep[0][0])
                 rows = keep
-            return [{"role": r[1], "content": r[2]} for r in rows]
+            msgs = [{"role": r[1], "content": r[2]} for r in rows]
+            if max_content_chars is not None:
+                # 从旧到新累计，超预算即停（保留最近的对话）
+                budget = max_content_chars
+                picked = []
+                for m in reversed(msgs):
+                    if len(m["content"]) > budget:
+                        break
+                    budget -= len(m["content"])
+                    picked.append(m)
+                picked.reverse()
+                msgs = picked
+            return msgs
         except Exception as e:
             logger.warning(f"读取窗口对话失败: {e}")
             return []
