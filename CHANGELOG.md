@@ -3,6 +3,36 @@
 > 📌 **本文档是项目唯一的版本记录（单一事实源）**——README.md、PROGRESS.md 的版本历史均指向本文件，发版时只在这里追加记录。
 > 相关：待办清单见 [TODO.md](TODO.md)，进度看板见 [PROGRESS.md](PROGRESS.md)。
 
+## v1.10.3（2026-08-10）
+
+**🔀 PDF 文件检测路由 — 文字版走本地 PyMuPDF（免费高保真），省 MinerU 每日 1000 页额度**——新增 `classify_pdf_type` 检测 PDF 文字层覆盖率（纯文字版/扫描版/混合版），纯文字版改走本地提取（免费 + 规避 MinerU VLM 对电子版的二次 OCR 误差），扫描/混合版仍走 MinerU 保质量；`PDF_ROUTING` 配置开关可一键切回旧行为。4 份精选已入库标准真实对比验证（烧 263 页额度）文字版句子重合 90%。全量回归 **331 项全绿**。
+
+### 功能
+
+- **PDF 类型检测**（`pdf_mupdf.py`）：`classify_pdf_type` 逐页提取→清理→统计字符，单页 ≥50 字符为「文字页」，覆盖率 ≥95%→`text`、≤5%→`scanned`、其余→`mixed`；毫秒级零依赖
+- **本地质量校验**（`pdf_mupdf.py`）：`validate_local_text` 防「伪文字层」/乱码——提取字符量骤减（< 检测摘要 50%）或可读字符占比 <60% 判失败，回退 MinerU
+- **引擎路由**（`engine.py`）：`_process_pdf` 按 `PDF_ROUTING` 路由——`auto`（默认）：纯文字版本地优先（成功省额度不烧 MinerU）、失败/质量差回退 MinerU；扫描/混合版 MinerU 优先（旧行为不变）；`mineru`：全部走 MinerU（一键切回）
+- **对比脚本**（`compare_pdf_parsers.py` 🆕）：双路径对比报告（类型检测/字符量/切块/正文句子重合），`--no-mineru` 干跑省额度，**不写 Chroma 不污染知识库**
+- 顺带修复：`_process_pdf` 嵌套闭包与模块级 `_try_mineru` 同名，闭包体内调用会解析到自身导致 `TypeError`（嵌套闭包改名 `_run_mineru`）
+
+### 测试
+
+- 新增 16 项：`test_pdf_routing.py`（分类 4 项 + 质量校验 4 项 + 引擎路由 8 项，含「auto+文字版 → MinerU 不被调用」关键断言），全部离线（PyMuPDF 合成 PDF，不联网不烧额度）
+- 全量回归 **331 项通过**（此前 315 项）
+- 真实 MinerU 对比 4 份精选已入库标准（烧 263 页额度）：类型检测 2 text / 2 scanned 全对；扫描版本地为空正确送 MinerU（GBT16935.1 66,959字/182块、EN50438 73,939字/110块）；文字版本地提取高保真（EN50178 270,196字/336块、GB_T_34133 34,877字/80块），MinerU→本地正文句子重合 **英文 EN50178 100%**（10/10）、**中文 GB_T_34133 90%**（9/10，唯一 MISS 是 MinerU 自己丢字）
+
+### 修改文件
+
+| 文件 | 改动 |
+|------|------|
+| `scripts/doc_mgr/extractors/pdf_mupdf.py` | 🆕 `classify_pdf_type` + `validate_local_text` + 检测常量 |
+| `scripts/config.py` | 🆕 `PDF_ROUTING`（auto 默认 / mineru 旧行为） |
+| `scripts/doc_mgr/engine.py` | `_process_pdf` 路由改造 + 嵌套闭包改名 `_run_mineru` |
+| `scripts/compare_pdf_parsers.py` | 🆕 双路径对比脚本（正文句子重合度） |
+| `tests/test_pdf_routing.py` | 🆕 16 项 |
+
+---
+
 ## v1.10.2（2026-08-10）
 
 **📚 上传文件直接学习 + 我的文件/删除/管理员模式**——上传入库从「主管审核」简化为「回复『帮我学习』直接入库」；存储目录改为主部门/员工名字/日期；新增「我的文件」查看自己上传文件、「删除学习/重新学习」管理、`ENTARBOSS` 管理员模式（可任意删改）。**审核流程代码保留注释，未来可恢复**。全量回归 **315 项全绿**。

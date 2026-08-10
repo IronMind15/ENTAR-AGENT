@@ -30,7 +30,7 @@ from .models import Chunk, Document
 from .storage import get_store, VectorStore
 from .chunkers import PdfChunker, MarkdownChunker
 from .extractors import extract_excel_rows, format_excel_row
-from .extractors import extract_pdf_text
+from .extractors import extract_pdf_text, classify_pdf_type, validate_local_text
 from .extractors import extract_docx_text, extract_pptx_text
 from .extractors import extract_csv_rows, format_csv_row
 from .sync_tracker import SyncTracker
@@ -38,6 +38,20 @@ from .task_manager import report_progress as _report_progress
 from .identity import file_sha256, stable_document_id
 
 logger = logging.getLogger("doc_mgr.engine")
+
+
+def _get_pdf_routing() -> str:
+    """读取 PDF_ROUTING 配置（auto 检测路由 / mineru 全走 MinerU）
+
+    防御式读取：config 模块可能未在 sys.path，读取失败时回退默认 auto。
+    """
+    try:
+        import importlib
+        cfg = importlib.import_module("config")
+        return getattr(cfg, "PDF_ROUTING", "auto") or "auto"
+    except Exception:
+        return "auto"
+
 
 def _get_mineru_output_dir(file_path: str) -> str:
     """根据源文件路径自动确定 MinerU 输出目录
@@ -477,10 +491,14 @@ def _process_pdf(file_path: str, file_name: str, file_size: int,
                  department: str = "public") -> Document:
     """处理 PDF 文件
 
-    策略：
-      1. 尝试 MinerU（VLM → Markdown）→ 走 Markdown 入库
+    策略（PDF_ROUTING=auto，v1.10.3 起）：
+      1. 检测文字层覆盖率：
+         - 纯文字版（text）→ 本地 PyMuPDF 免费高保真提取（省 MinerU 每日 1000 页额度）
+         - 扫描版（scanned）/ 混合版（mixed）→ MinerU VLM 识别（保质量）
       2. MinerU 不可用 → PyMuPDF 提取文字 → PdfChunker 切块
       3. PyMuPDF 也提不出文字 → 标记 ocr_needed
+
+    PDF_ROUTING=mineru 时恢复旧行为：一律 MinerU 优先、本地回退。
     """
     doc = Document(
         file_name=file_name, file_path=file_path,
@@ -489,12 +507,32 @@ def _process_pdf(file_path: str, file_name: str, file_size: int,
         version_id=content_hash,
     )
 
-    # ---- 方案 A：MinerU 优先 ----
-    _report_progress("mineru", 15, "MinerU 远程转换中...")
-    mineru_md = _try_mineru(
-        file_path, file_name, content_hash=content_hash, force=force,
-    )
-    if mineru_md and os.path.isfile(mineru_md):
+    # ---- v1.10.3 路由：检测 PDF 类型，决定本地/MinerU 先后顺序 ----
+    routing = _get_pdf_routing()
+    det_summary = None
+    local_first = False
+    if routing == "auto":
+        pdf_type, det_summary = classify_pdf_type(file_path)
+        local_first = (pdf_type == "text")
+        cov = det_summary.get("coverage", 0.0)
+        logger.info(
+            f"  PDF 路由: 类型={pdf_type}（覆盖率 {cov:.1%}）→ "
+            + ("本地 PyMuPDF 优先（省 MinerU 额度）" if local_first else "MinerU 优先（保质量）")
+        )
+
+    def _run_mineru() -> bool:
+        """方案 A：MinerU 远程转换 → Markdown 入库。成功返回 True。
+
+        注意：嵌套闭包故意命名为 _run_mineru（而非 _try_mineru），
+        避免与模块级 _try_mineru 同名造成 LEGB 遮蔽——同名时闭包体内
+        `_try_mineru(...)` 会解析到闭包自身，导致 TypeError。
+        """
+        _report_progress("mineru", 15, "MinerU 远程转换中...")
+        mineru_md = _try_mineru(
+            file_path, file_name, content_hash=content_hash, force=force,
+        )
+        if not (mineru_md and os.path.isfile(mineru_md)):
+            return False
         _report_progress("download", 40, "MinerU 转换完成，下载结果...")
         logger.info(f"  MinerU 成功，走 Markdown 入库路径")
         # 用 _process_markdown 处理 MinerU 输出的 MD 文件
@@ -514,54 +552,78 @@ def _process_pdf(file_path: str, file_name: str, file_size: int,
             logger.warning(f"  MinerU Markdown 入库异常: {doc.message}")
         else:
             logger.info(f"  MinerU 处理完成: {file_name} → {doc.chunk_count} 块")
-        return doc
+        return True
 
-    # ---- 方案 B：PyMuPDF 本地工具回退 ----
-    _report_progress("pymupdf_extract", 25, "MinerU 不可用，使用本地 PyMuPDF 提取文字...")
-    logger.info(f"  [回退] 使用本地 PyMuPDF 提取文字: {file_name}")
-    full_text, std_id, std_title = extract_pdf_text(file_path)
-    doc.std_id = std_id
-    doc.std_title = std_title
+    def _try_local(expected_chars: int = 0) -> bool:
+        """方案 B：PyMuPDF 本地提取 → PdfChunker 切块入库。成功返回 True。"""
+        _report_progress("pymupdf_extract", 25, "使用本地 PyMuPDF 提取文字...")
+        logger.info(f"  [本地] 使用 PyMuPDF 提取文字: {file_name}")
+        full_text, std_id, std_title = extract_pdf_text(file_path)
+        doc.std_id = std_id
+        doc.std_title = std_title
 
-    if not full_text:
-        doc.status = "ocr_needed"
-        doc.message = "扫描型 PDF，本地 PyMuPDF 无法提取文字（MinerU 远程转换也未成功）"
-        logger.warning(f"  ⚠️ [回退报告] MinerU 远程转换 → 不可用 / 失败")
-        logger.warning(f"  ⚠️ [回退报告] PyMuPDF 本地提取 → 无法提取文字（扫描型 PDF）")
-        logger.warning(f"  ⚠️ {doc.message}，跳过入库")
-        return doc
+        if not full_text:
+            return False
 
-    doc.status = "processing"
+        # 质量校验（仅 auto 路由 + 本地优先路径）：防「伪文字层」/乱码导致的质量下降
+        if local_first and expected_chars > 0:
+            if not validate_local_text(full_text, expected_chars):
+                logger.warning(f"  ⚠️ 本地提取质量校验未通过，回退 MinerU: {file_name}")
+                return False
 
-    # PyMuPDF 基础 metadata
-    base_meta = {
-        "std_id": std_id,
-        "std_title": std_title,
-        "file_name": file_name,
-        "confidence": "text",
-    }
+        doc.status = "processing"
 
-    # PyMuPDF 结构分析切块
-    _report_progress("chunking", 60, "PyMuPDF 文字提取完成，结构分析切块...")
-    chunker = PdfChunker()
-    chunks = chunker.chunk(full_text, base_meta, filepath=file_path)
+        # PyMuPDF 基础 metadata
+        base_meta = {
+            "std_id": std_id,
+            "std_title": std_title,
+            "file_name": file_name,
+            "confidence": "text",
+        }
 
-    # 入库
-    _report_progress("indexing", 80, f"切块完成（{len(chunks)} 块），入库到知识库...")
-    ids, documents, metadatas = _prepare_chunks(
-        chunks, file_name, doc_id=doc_id, content_hash=content_hash,
-        department=department,
-    )
-    added = store.replace_document(
-        target_collection, doc_id, file_name,
-        ids, documents, metadatas,
-    )
+        # PyMuPDF 结构分析切块
+        _report_progress("chunking", 60, "PyMuPDF 文字提取完成，结构分析切块...")
+        chunker = PdfChunker()
+        chunks = chunker.chunk(full_text, base_meta, filepath=file_path)
 
-    doc.chunk_count = added
-    doc.source = "pymupdf"
-    doc.status = "done"
-    doc.message = f"PyMuPDF 新版本换库 {added} 条"
-    logger.info(f"  PDF 处理完成（PyMuPDF）: {file_name} → {added} 块")
+        # 入库
+        _report_progress("indexing", 80, f"切块完成（{len(chunks)} 块），入库到知识库...")
+        ids, documents, metadatas = _prepare_chunks(
+            chunks, file_name, doc_id=doc_id, content_hash=content_hash,
+            department=department,
+        )
+        added = store.replace_document(
+            target_collection, doc_id, file_name,
+            ids, documents, metadatas,
+        )
+
+        doc.chunk_count = added
+        doc.source = "pymupdf"
+        doc.status = "done"
+        doc.message = f"PyMuPDF 新版本换库 {added} 条"
+        logger.info(f"  PDF 处理完成（PyMuPDF）: {file_name} → {added} 块")
+        return True
+
+    if local_first:
+        # ---- 路径②：纯文字版 → 本地优先（免费省额度），失败/质量差回退 MinerU ----
+        if _try_local(det_summary.get("total_chars", 0) if det_summary else 0):
+            return doc
+        logger.info(f"  本地路径未成功，回退 MinerU 远程转换: {file_name}")
+        if _run_mineru():
+            return doc
+    else:
+        # ---- 路径①：扫描/混合版 或 mineru 模式 → MinerU 优先（旧行为），失败回退本地 ----
+        if _run_mineru():
+            return doc
+        if _try_local():
+            return doc
+
+    # ---- 两条路径都失败：标记 ocr_needed ----
+    doc.status = "ocr_needed"
+    doc.message = "扫描型 PDF，本地 PyMuPDF 无法提取文字（MinerU 远程转换也未成功）"
+    logger.warning(f"  ⚠️ [回退报告] MinerU 远程转换 → 不可用 / 失败")
+    logger.warning(f"  ⚠️ [回退报告] PyMuPDF 本地提取 → 无法提取文字（扫描型 PDF）")
+    logger.warning(f"  ⚠️ {doc.message}，跳过入库")
     return doc
 
 

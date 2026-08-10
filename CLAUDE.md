@@ -13,7 +13,7 @@
 
 恩特能源（天津恩特能源科技有限公司，Tianjin Entar Energy Technology Co., Ltd.，品牌 ENTAR）AI Agent 项目。目标是搭建面向中小企业的 AI Agent 全生命周期管理平台。
 
-### 当前进度：三步走计划 — 第一步稳定化 + 第二步经验知识库启动（v1.10.2）
+### 当前进度：三步走计划 — 第一步稳定化 + 第二步经验知识库启动（v1.10.3）
 
 **第一步：智能查询 + 标准文档检索 + 通用聊天 + 多技能（故障/标准/PCB 计算）——核心能力已完成，正在做真实环境验收与安全收尾**
 - 基于 RAG（检索增强生成）架构的内部工具
@@ -29,11 +29,12 @@
 - ✅ 扫描 PDF OCR 识别（MinerU，v1.2.2）：大模型视觉识别 → Markdown → Chroma 入库
 - ✅ 钉钉文件接收（v1.2.3）：用户发送文件/图片到钉钉，自动下载保存
 - ✅ 上传文件直接学习（v1.10.2）：上传后回复「帮我学习」直接入库（取消主管审核）；目录存 `data/uploads/{主部门}/{员工}/{日期}/`；「我的文件」查看、「删除学习/重新学习」管理、`ENTARBOSS` 管理员模式可任意删改；审核代码保留注释可恢复
+- ✅ PDF 检测路由（v1.10.3）：文字层检测（纯文字版/扫描版/混合版），纯文字版 PDF 走本地 PyMuPDF 免费高保真提取（省 MinerU 每日 1000 页额度），扫描/混合版走 MinerU 保质量；`PDF_ROUTING` 配置开关（auto 默认 / mineru 旧行为）一键切回；`compare_pdf_parsers.py` 双路径对比脚本（--no-mineru 干跑省额度）
 - ✅ SQLite 用户、对话和权限存储（v1.2.4）
 - ✅ Web 同步管理、强制重学和任务进度追踪（v1.2.5）
 - ✅ SHA-256 内容指纹、安全版本替换和 MinerU 安全加固（v1.2.6）
 - ⏸️ 上传审核流程（v1.10.2 已停用）：固定审核人主动推送与审批口令代码保留注释，未来恢复部门划分与审核时取消 `queue_review_for_upload` 注释即可
-- ✅ 315 项自动化回归测试（含 65 项 PCB 计算 + 文档处理/版本替换/上传审核 + 并发/路由 + 通讯录查询 + 反馈/Prompt/引用溯源 + 识图 + 上传直接学习/我的文件/删除/管理员）
+- ✅ 331 项自动化回归测试（含 65 项 PCB 计算 + 文档处理/版本替换/上传审核 + 并发/路由 + 通讯录查询 + 反馈/Prompt/引用溯源 + 识图 + 上传直接学习/我的文件/删除/管理员 + PDF 检测路由）
 - ✅ 局域网共享（防火墙放行端口 8000）
 - ✅ 同事实测通过
 - ⚠️ v1.4.1 尚未在正式知识库、真实 MinerU 和钉钉生产环境完成端到端回归
@@ -215,6 +216,7 @@ FastAPI (main.py) → Agent 循环（agent.py）
 | PDF 切块引擎 | PyMuPDF 结构分析 | 多信号融合（章节号 + 字体名 + 左边界），零新依赖 |
 | Markdown 切块 | MarkdownChunker | 按标题层级（# ## ###）智能切块，中文标准章节号提取 |
 | OCR 引擎 | MinerU VLM（大模型视觉识别） | 扫描 PDF → Markdown，替代传统 OCR 路线 |
+| PDF 检测路由 | classify_pdf_type + validate_local_text（v1.10.3） | 文字层覆盖率检测：纯文字版走本地 PyMuPDF（免费高保真，省 MinerU 每日 1000 页额度）、扫描/混合版走 MinerU 保质量；`PDF_ROUTING` 开关（auto 默认/mineru 旧行为）；`compare_pdf_parsers.py` 双路径对比脚本 |
 | 向量数据库 | Chroma | 本地持久化，支持精确 + 语义搜索 |
 | Embedding | BAAI/bge-small-zh-v1.5 | 国产中文嵌入，30MB，CPU 运行 |
 | LLM | DeepSeek API (deepseek-v4-flash) | 关键词提取 + 聊天托底 |
@@ -229,7 +231,7 @@ FastAPI (main.py) → Agent 循环（agent.py）
 | 识图能力 | describe_image.py + qwen3.7-flash | 钉钉发图自动识别描述（视觉外挂，v1.10.0）；tools/ 注册 + Claude Code vision skill；magic bytes + 路径白名单 + 5xx 重试 |
 | 上传直接学习 | knowledge_review.py + dingtalk_notifier.py + file_handler.py | ⏸️ 审核已停用（v1.10.2）：上传→回「帮我学习」直接入库；「我的文件」查看、删除/重新学习、`ENTARBOSS` 管理员模式；审核代码保留注释可恢复 |
 | 崩溃恢复 | doc_mgr/recovery.py | 启动时清理/恢复遗留 staging/retired 版本数据 |
-| 自动化测试 | unittest | 315 项文档引擎、同步追踪、PCB 计算、安全和版本替换、并发路由、通讯录查询、反馈/Prompt/引用溯源、识图、上传直接学习/我的文件/删除测试 |
+| 自动化测试 | unittest | 331 项文档引擎、同步追踪、PCB 计算、安全和版本替换、并发路由、通讯录查询、反馈/Prompt/引用溯源、识图、上传直接学习/我的文件/删除、PDF 检测路由测试 |
 | 部署 | Docker + docker-compose | 可选容器化部署 |
 
 ## 运行方式

@@ -185,3 +185,120 @@ def detect_standard_title(text: str, file_name: str) -> str:
             return line[:100]
 
     return file_name.replace('.pdf', '').replace('_', ' ')
+
+
+# ==================== PDF 类型检测路由（v1.10.3）====================
+# 单页文字 ≥ 该字符数才判定为「文字页」（过滤页码/页脚/水印等零散文字）。
+# 取 50：真实文字页动辄数千字符，封面/图表页也有 50+ 字符；水印级零散文字（页码/机密戳）
+# 通常 < 50，且 validate_local_text 兜底会拦截「水印凑字」的伪文字版。
+PDF_TEXT_PAGE_MIN_CHARS = 50
+# 文字页覆盖率 ≥ 95% → 文字版（本地提取免费高保真，省 MinerU 额度）
+PDF_TEXT_COVERAGE = 0.95
+# 文字页覆盖率 ≤ 5% → 扫描版（无文字层，必须 MinerU VLM 识别）
+PDF_SCAN_COVERAGE = 0.05
+
+
+def classify_pdf_type(filepath: str) -> tuple[str, dict]:
+    """检测 PDF 类型：text（文字版）/ scanned（扫描版）/ mixed（混合版）
+
+    逐页 get_text() → clean_page_text → 统计每页字符数，
+    每页字符 ≥ PDF_TEXT_PAGE_MIN_CHARS 判定为「文字页」，
+    coverage = 文字页数 / 总页数：
+      - coverage ≥ 0.95 → "text"    （纯文字版 → 本地 PyMuPDF 免费高保真提取）
+      - coverage ≤ 0.05 → "scanned" （纯扫描版 → MinerU VLM 识别）
+      - 其他            → "mixed"   （混合 → 保守走 MinerU，避免局部质量下降）
+
+    Args:
+        filepath: PDF 文件路径
+
+    Returns:
+        (pdf_type, 摘要 dict：pages/text_pages/total_chars/coverage)
+    """
+    import fitz
+
+    try:
+        doc = fitz.open(filepath)
+    except Exception as e:
+        logger.error(f"无法打开 PDF 检测类型: {e}")
+        return "scanned", {"pages": 0, "text_pages": 0, "total_chars": 0, "coverage": 0.0}
+
+    total_pages = doc.page_count
+    text_pages = 0
+    total_chars = 0
+    for i in range(total_pages):
+        try:
+            page_text = doc[i].get_text()
+        except Exception:
+            page_text = ""
+        cleaned = clean_page_text(page_text)
+        chars = len(''.join(cleaned.split()))
+        total_chars += chars
+        if chars >= PDF_TEXT_PAGE_MIN_CHARS:
+            text_pages += 1
+
+    doc.close()
+
+    coverage = text_pages / total_pages if total_pages else 0.0
+    if coverage >= PDF_TEXT_COVERAGE:
+        pdf_type = "text"
+    elif coverage <= PDF_SCAN_COVERAGE:
+        pdf_type = "scanned"
+    else:
+        pdf_type = "mixed"
+
+    summary = {
+        "pages": total_pages,
+        "text_pages": text_pages,
+        "total_chars": total_chars,
+        "coverage": round(coverage, 4),
+    }
+    logger.info(
+        f"PDF 类型检测: {pdf_type} "
+        f"({text_pages}/{total_pages} 页有文字, 覆盖率 {coverage:.1%}, {total_chars} 字符)"
+    )
+    return pdf_type, summary
+
+
+def validate_local_text(full_text: str, expected_chars: int) -> bool:
+    """校验本地 PyMuPDF 提取质量，防止「伪文字层」导致的质量下降
+
+    两种异常判定为失败（引擎回退 MinerU）：
+      1. 字符量骤减：提取字符 < expected_chars * 0.5
+         （两者都基于 get_text()，正常应接近；骤减说明文字层损坏/水印凑字）
+      2. 乱码率过高：可读字符（CJK/字母数字/常见标点）占比 < 60%
+         （替换符 U+FFFD / 控制字符 / 编码损坏的典型特征）
+
+    Args:
+        full_text: 本地提取的全文
+        expected_chars: classify_pdf_type 返回的 total_chars
+
+    Returns:
+        True=质量合格；False=质量可疑应回退 MinerU
+    """
+    text = full_text or ""
+    actual = len(''.join(text.split()))
+
+    # 1. 字符量骤减检查
+    if expected_chars > 0 and actual < expected_chars * 0.5:
+        logger.warning(
+            f"本地提取字符量骤减（期望 ~{expected_chars}，实际 {actual}），疑似伪文字层"
+        )
+        return False
+
+    # 2. 乱码率检查（文本非空时才有意义）
+    if actual > 0:
+        readable = 0
+        for ch in text:
+            if ch.isspace():
+                continue
+            if ('一' <= ch <= '鿿'          # CJK 汉字
+                    or 'a' <= ch.lower() <= 'z'      # ASCII 字母
+                    or '0' <= ch <= '9'              # 数字
+                    or ch in '.,;:!?()[]{}<>"\'/\\|_-+=*&%$#@^~`、。，；：？！（）《》【】'):
+                readable += 1
+        ratio = readable / max(actual, 1)
+        if ratio < 0.6:
+            logger.warning(f"本地提取乱码率过高（可读字符占比 {ratio:.1%}），疑似编码损坏")
+            return False
+
+    return True
