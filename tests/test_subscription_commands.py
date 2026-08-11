@@ -240,5 +240,105 @@ class RenderConfirmationTests(unittest.TestCase):
         self.assertIn("10:30", text)
 
 
+class LLMVerifyUnitTests(unittest.TestCase):
+    """_llm_verify_subscription 解析逻辑（注入 fake llm_fn，不打真实 API）"""
+
+    def test_not_subscription_returns_none(self):
+        verdict = sc._llm_verify_subscription(
+            "看板推送是不是要收费", fallback_intent="create",
+            llm_fn=lambda prompt, max_tokens=0: '{"is_subscription": false, "intent": "null"}')
+        self.assertIsNone(verdict)
+
+    def test_llm_corrects_intent(self):
+        """LLM 把「不要推给别人」修正为 set_recipient_self"""
+        verdict = sc._llm_verify_subscription(
+            "不要推给别人", fallback_intent="change_recipients",
+            llm_fn=lambda prompt, max_tokens=0: '{"is_subscription": true, "intent": "set_recipient_self"}')
+        self.assertEqual(verdict, "set_recipient_self")
+
+    def test_bad_json_falls_back(self):
+        verdict = sc._llm_verify_subscription(
+            "看板推送是不是要收费", fallback_intent="create",
+            llm_fn=lambda prompt, max_tokens=0: "not json")
+        self.assertEqual(verdict, "create")
+
+    def test_llm_exception_falls_back(self):
+        def boom(prompt, max_tokens=0):
+            raise RuntimeError("api down")
+        verdict = sc._llm_verify_subscription(
+            "看板推送是不是要收费", fallback_intent="create", llm_fn=boom)
+        self.assertEqual(verdict, "create")
+
+    def test_needs_llm_verify_signals(self):
+        """可疑才复核：疑问句/指代词命中，普通指令不命中"""
+        self.assertTrue(sc._needs_llm_verify("看板推送是不是要收费", "create"))
+        self.assertTrue(sc._needs_llm_verify("不要推给别人", "change_recipients"))
+        self.assertFalse(sc._needs_llm_verify("帮我推个看板", "create"))
+        self.assertFalse(sc._needs_llm_verify("也推给张工", "change_recipients"))
+
+
+class LLMVerifyIntegrationTests(unittest.TestCase):
+    """parse_subscription_command 接入 LLM 复核的集成行为"""
+
+    def test_plain_commands_do_not_call_llm(self):
+        """正常指令不触发 LLM（正则快闸零成本）"""
+        with mock.patch.object(sc, "_llm_verify_subscription") as m:
+            self.assertEqual(sc.parse_subscription_command("帮我推个看板")["intent"], "create")
+            self.assertEqual(sc.parse_subscription_command("也推给张工")["intent"], "change_recipients")
+            self.assertEqual(sc.parse_subscription_command("看板不要推给李四")["intent"], "change_recipients")
+            m.assert_not_called()
+
+    def test_fee_question_released(self):
+        """修复：『看板推送是不是要收费』→ LLM 判定非订阅 → 放行"""
+        with mock.patch.object(sc, "_llm_verify_subscription", return_value=None):
+            self.assertIsNone(sc.parse_subscription_command("看板推送是不是要收费"))
+
+    def test_dont_push_others_becomes_set_self(self):
+        """修复：『不要推给别人』→ LLM 修正为只推给自己"""
+        with mock.patch.object(sc, "_llm_verify_subscription",
+                               return_value="set_recipient_self"):
+            r = sc.parse_subscription_command("不要推给别人")
+            self.assertEqual(r["intent"], "set_recipient_self")
+
+    def test_llm_failure_keeps_regex_behavior(self):
+        """LLM 失败回退正则原逻辑（create 兜底），不崩"""
+        with mock.patch.object(sc, "_llm_verify_subscription", return_value="create"):
+            r = sc.parse_subscription_command("看板推送是不是要收费")
+            self.assertEqual(r["intent"], "create")
+
+
+class FeatureRegressionTests(unittest.TestCase):
+    """v1.11.6 特征测试（awesome-test-writing tripwire）：把实测用例集固化为安全网。
+    任一改动能被这些用例捉住：正常意图必须识别、非订阅话题必须放行。"""
+
+    def test_create_variants(self):
+        for text in ("帮我开通看板", "帮我推个看板", "帮我每日推送项目看板",
+                     "给我推个看板", "替我每天推看板", "订阅发给我自己"):
+            r = sc.parse_subscription_command(text)
+            self.assertIsNotNone(r, text)
+            self.assertIn(r["intent"], ("create", "set_recipient_self"), text)
+
+    def test_stop_variants(self):
+        for text in ("把看板停掉", "把看板推送关掉", "停掉前面的看板", "关掉看板吧"):
+            self.assertEqual(sc.parse_subscription_command(text)["intent"], "stop", text)
+
+    def test_query_and_config(self):
+        self.assertEqual(sc.parse_subscription_command("看板几点推送")["intent"], "query")
+
+    def test_released_dialogs(self):
+        """非订阅话题一律放行（含历史所有误判话术）"""
+        for text in ("这跟看板功能有什么关系", "这个文档怎么学习入库",
+                     "帮我总结这份方案", "看看今天的看板",
+                     "我已经粘贴过了重新发给了你", "这个看板功能有什么用",
+                     "看板数据从哪来", "这个看板跟我有啥关系",
+                     "我想看下看板配置", "推一下看板"):
+            self.assertIsNone(sc.parse_subscription_command(text), text)
+
+    def test_doc_create_separate_function(self):
+        r = sc.parse_doc_dashboard_intent("按这几个文档做每日看板")
+        self.assertEqual(r["intent"], "doc_create")
+        self.assertIsNone(sc.parse_doc_dashboard_intent("把文档学习入库"))
+
+
 if __name__ == "__main__":
     unittest.main()

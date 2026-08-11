@@ -13,6 +13,7 @@
 - resolve_recipient(name) -> staff_id                 姓名 → userId（复用 contact_api.search）
 """
 
+import json
 import logging
 import re
 import threading
@@ -130,7 +131,14 @@ def parse_subscription_command(text: str, ctx: Optional[dict] = None) -> Optiona
     if _RECIPIENT_RE.search(text):
         names = _extract_names(text)
         if names:
-            return {"intent": "change_recipients", "recipient_names": names,
+            # v1.11.6：捕获的是指代词（"别人/他们"）或整句有疑问歧义 → LLM 复核，
+            # 防「不要推给别人」把「别人」当人名、防疑问句误加接收人
+            intent = _maybe_llm_verify(text, "change_recipients")
+            if intent is None:
+                return None
+            if intent != "change_recipients":
+                return {"intent": intent, **(ctx or {})}
+            return {"intent": intent, "recipient_names": names,
                     "add": not bool(_REMOVE_RECIPIENT_RE.search(text)),
                     **(ctx or {})}
         # v1.11.5：捕获到的人名全是代词/助词（你了、我自己）→ 不是接收人操作，
@@ -145,7 +153,11 @@ def parse_subscription_command(text: str, ctx: Optional[dict] = None) -> Optiona
     # 兜底：v1.11.5 收紧——明确的创建/开通意图才建订阅，
     # 其余含「看板」文本（质疑/反问/求助）放行给 Agent 正常聊
     if _CREATE_RE.search(text):
-        return {"intent": "create", **(ctx or {})}
+        # v1.11.6：create 是重操作，疑问/反问（"看板推送是不是要收费"）先 LLM 复核防误建
+        intent = _maybe_llm_verify(text, "create")
+        if intent is None:
+            return None
+        return {"intent": intent, **(ctx or {})}
     return None
 
 
@@ -203,6 +215,63 @@ def _extract_names(text: str) -> list[str]:
         if name not in names:
             names.append(name)
     return names
+
+
+# ===== LLM 意图复核（v1.11.6）=====
+# 正则做快闸，LLM 兜住枚举盲区。正则命中 create/change_recipients 这类「重操作」，
+# 但文本带疑问/反问（"看板推送是不是要收费"）或捕获的是指代词（"别人"）时，
+# 调一次 LLM 确认是不是真的订阅管理操作。仅可疑才调，LLM 只用在刀刃上。
+_ALL_INTENTS = {"create", "stop", "delete", "query", "change_time",
+                "change_freq", "change_recipients", "set_recipient_self"}
+_SUSPECT_QUESTION_RE = re.compile(
+    r"是不是|是否|吗|？|\?|要不要|要收费|免费|多少钱|为啥|为什么|怎么|啥|干嘛|有没有")
+_SUSPECT_REFER_RE = re.compile(r"别人|他们|她们|大家|某人|任何人")
+
+
+def _needs_llm_verify(text: str, intent: str) -> bool:
+    """重操作 + 可疑文本 → 需要 LLM 复核；普通指令直接走正则，零成本"""
+    if _SUSPECT_QUESTION_RE.search(text):
+        return intent in ("create", "change_recipients", "doc_create")
+    if intent == "change_recipients" and _SUSPECT_REFER_RE.search(text):
+        return True
+    return False
+
+
+def _llm_verify_subscription(text: str, fallback_intent: str,
+                             llm_fn=None) -> Optional[str]:
+    """调 DeepSeek 判断是否为订阅管理意图。
+
+    返回：None=放行给 Agent（LLM 判断不是订阅操作）；
+         str=最终意图（LLM 可能修正，如 change_recipients→set_recipient_self）；
+    任何失败回退 fallback_intent（保持正则原行为，不崩）。
+    """
+    try:
+        if llm_fn is None:
+            from skills.agent import call_deepseek as llm_fn
+        prompt = (
+            "你是恩特小助手『每日项目看板』订阅意图分类器。判断下面这条钉钉消息"
+            "是否在管理看板订阅（开通/停用/删除/改推送时间/改频率/改接收人/查配置）。\n"
+            "只返回一行 JSON，不要任何其他文字：\n"
+            '{"is_subscription": true或false, "intent": "create或stop或delete或query或'
+            'change_time或change_freq或change_recipients或set_recipient_self或null"}\n'
+            f"消息：{text[:200]}"
+        )
+        raw = llm_fn(prompt, max_tokens=120)
+        data = json.loads(raw.strip())
+        if not data.get("is_subscription"):
+            return None
+        intent = data.get("intent")
+        return intent if intent in _ALL_INTENTS else fallback_intent
+    except Exception as e:
+        logger.warning(f"看板意图 LLM 复核失败，回退正则({fallback_intent}): {e}")
+        return fallback_intent
+
+
+def _maybe_llm_verify(text: str, intent: str) -> Optional[str]:
+    """正则命中后统一入口：可疑才复核；返回 None=放行，str=最终意图"""
+    if not _needs_llm_verify(text, intent):
+        return intent
+    return _llm_verify_subscription(text, fallback_intent=intent)
 
 
 # ===== 接收人解析 =====

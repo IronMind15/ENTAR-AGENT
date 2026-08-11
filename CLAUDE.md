@@ -9,6 +9,7 @@
 5. **打标签前先更新 CHANGELOG 并同步版本号** — 当用户要提交版本/打 tag 时，先检查 CHANGELOG.md（唯一版本记录）是否已包含当前版本的完整变更；再同步 README.md / PROGRESS.md 的当前版本号与最近版本亮点。完整版本历史只在 CHANGELOG.md 维护，不要在多处复制
 6. **版本号由用户拍板，不自动写** — 完成实质性改动（新功能、修 bug、改配置等）后，只汇报改动 + **建议**升哪一位（major/minor/patch）+ 一句话理由，**等用户确认后才把版本号写进 CHANGELOG 并同步文档**；绝不自己定版本号写入文档（2026-08-11 用户明确要求）
 7. **发版固定动作：commit 和 tag 绑定** — 用户确认版本号 → 写 CHANGELOG/README/PROGRESS → `git commit` + `git tag vX.Y.Z` **同一次操作同步完成**（tag 指向本次提交），不再单独记，防止漏打（2026-08-11 曾漏打 v1.11.0 tag）
+8. **修 bug 先找根因，不许先改；skill 主动用，不等提醒**（2026-08-11）— 修 bug 调用 `awesome-bug-fix`（先建可复现 pass/fail 循环 → 定位根因 → 再改，禁止症状补丁）；改完代码补回归测试用 `awesome-test-writing`（tripwire 理念：每种可能的回归都有一条测试变红，新功能改动必须证明旧功能没被破坏）；发版前/复杂改动用 `awesome-code-review`（读被改行历史 + 切斯特顿栅栏：拆旧逻辑前先确认它当初挡着什么）；「为什么总是这样」类过程问题用 `awesome-root-cause`（5-Whys/PDCA）；老板/领导提模糊新功能用 `ent-feature-oracle`（能力映射 → 分层落地方案 → 天马行空发散，设计不实现，版本号只建议）。这些 skill 在项目 `.claude/skills/`（另有 `skill-creator`/`skill-finder` 辅助建/找 skill），遇到对应场景主动调用，不等用户点名
 
 ## 项目概述
 
