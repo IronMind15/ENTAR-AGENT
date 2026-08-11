@@ -130,11 +130,12 @@ def execute_tool(name: str, args: dict) -> str:
 
 
 # ===== 自动导入工具模块（确保 @register 装饰器执行） =====
-from . import search_knowledge_base  # noqa: E402, F811
-from . import search_standards       # noqa: E402, F811
+# 注：search_standards / search_experience_kb 两个旧查询工具 v1.11.5 起不再注册，
+# 统一由 search_knowledge_base（通用查询，可按知识库选择）替代，文件保留作参考。
+from . import search_knowledge_base  # noqa: E402, F811 — 通用知识库查询（v1.11.5 多库）
+from . import create_knowledge_base  # noqa: E402, F811 — 创建知识库（v1.11.5 多库）
 from . import calc_pcb_trace         # noqa: E402, F811 — PCB 走线计算（IPC-2221）
 from . import calc_copper_busbar     # noqa: E402, F811 — 铜排/母线载流（v1.6.0）
-from . import search_experience_kb   # noqa: E402, F811 — 经验知识库检索（v1.4.2 第二步）
 from . import find_employee          # noqa: E402, F811 — 钉钉通讯录员工查询（v1.7.0）
 from . import describe_image         # noqa: E402, F811 — 图片识别（千问视觉，v1.10.0）
 from . import query_dashboard        # noqa: E402, F811 — 看板实时查询（v1.11.0）

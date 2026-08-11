@@ -68,6 +68,24 @@ class LearnDingtalkDocTests(unittest.TestCase):
         # 候选标记为已学习（get_pending 返回 None）
         self.assertIsNone(self._cand.get_pending("u1"))
 
+    def test_successful_learn_to_specific_kb(self):
+        """v1.11.5：「把这个文档学到产品手册」→ 入库到指定库（collection/department 继承）"""
+        self._add_candidate()
+        fake_client = mock.Mock()
+        fake_client.read_document.return_value = {
+            "ok": True, "kind": "notable", "node_id": "n1",
+            "records": [{"fields": {"名称": "项目A"}}],
+        }
+        kb = {"key": "产品手册", "name": "产品手册", "collection": "产品手册",
+              "department": "rd"}
+        with mock.patch("doc_mgr.engine.process_text",
+                        return_value=mock.Mock(status="done", chunk_count=2)) as m_pt:
+            result = learn_dingtalk_doc("u1", client=fake_client, kb=kb)
+        self.assertTrue(result["ok"])
+        kwargs = m_pt.call_args[1]
+        self.assertEqual(kwargs["target_collection"], "产品手册")
+        self.assertEqual(kwargs["department"], "rd")
+
     def test_read_failure_keeps_candidate(self):
         self._add_candidate()
         fake_client = mock.Mock()

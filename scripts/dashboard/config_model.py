@@ -150,6 +150,21 @@ def get_source(key: str) -> Optional[SourceConfig]:
     return None
 
 
+def source_usable(src: Optional[SourceConfig]) -> bool:
+    """数据源是否可用于实际采集（v1.11.5）
+
+    钉钉文档源必须有 base_id（AI表格/在线表格的 Base ID = 文档 nodeId）。
+    静态配置里 base_id 为空的历史残留（如 project_status/test_issues）会导致
+    /v1.0/notable/bases//sheets 404，此处运行期过滤 + 告警。
+    """
+    if src is None or not src.enabled:
+        return False
+    if src.source == "dingtalk_doc" and not (src.base_id or "").strip():
+        logger.warning(f"数据源 {src.key} 未配置 base_id，跳过（请用钉钉文档登记数据源）")
+        return False
+    return True
+
+
 def load_push_config() -> PushConfig:
     """加载推送配置（标量走 config.py / local_config.py）"""
     try:

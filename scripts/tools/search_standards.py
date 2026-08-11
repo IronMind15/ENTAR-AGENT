@@ -1,10 +1,13 @@
 """
+⚠️ v1.11.5 已由通用 search_knowledge_base 替代（不再注册，本文件仅作参考）。
+
 工具：search_standards
 搜索储能变流器/光伏行业标准。
 包含国家标准(GB/T、GB)、行业标准、国际标准(IEC、EN)等，
 覆盖安全要求、并网要求、检测方法、电气性能、绝缘配合等技术规范内容。
 当用户询问国家标准、行业规范、技术要求或标准编号时使用。
 不包含 PCS 故障代码。
+多库改造后标准检索由 search_knowledge_base(query, knowledge_base='标准知识库') 承担。
 """
 
 import json

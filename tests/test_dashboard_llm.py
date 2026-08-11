@@ -49,6 +49,18 @@ class ServiceAssembleTests(unittest.TestCase):
         text = service.assemble(_parsed_results(), llm_func=llm_func)
         self.assertEqual(text, assemble_markdown(_parsed_results()))
 
+    def test_llm_timeout_falls_back_to_rules(self):
+        """v1.11.5：LLM 组装超 25s → 规则兜底（实测曾 37.8s 拖慢推送）"""
+        import threading
+        release = threading.Event()
+        def slow_func(prompt):
+            release.wait(5)   # 阻塞直到测试放行（模拟慢 LLM）
+            return "# 太慢了"
+        with mock.patch("dashboard.assembler.LLM_ASSEMBLE_TIMEOUT", 0.2):
+            text = service.assemble(_parsed_results(), llm_func=slow_func)
+        self.assertEqual(text, assemble_markdown(_parsed_results()))
+        release.set()  # 放行后台线程，避免悬挂
+
 
 class CallDeepseekWrapperTests(unittest.TestCase):
     """agent.call_deepseek 公开包装：成功取 content / 失败返回空串"""

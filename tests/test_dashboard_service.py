@@ -82,7 +82,8 @@ class ResolveSubscriptionSourcesTests(unittest.TestCase):
         sub = self._sub(["project_status", "doc_1"])
         with mock.patch("dashboard.config_model.get_source",
                         return_value=SourceConfig(key="project_status",
-                                                  name="研发项目现况表")):
+                                                  name="研发项目现况表",
+                                                  base_id="b1")):
             sources = resolve_subscription_sources(sub)
         self.assertEqual([s.key for s in sources], ["project_status", "doc_1"])
 
@@ -135,7 +136,8 @@ class LoadAllAvailableSourcesTests(unittest.TestCase):
                                      kind="notable", enabled=True))
         with mock.patch("dashboard.config_model.load_sources",
                         return_value=[SourceConfig(key="project_status",
-                                                   name="研发项目现况表")]):
+                                                   name="研发项目现况表",
+                                                   base_id="b1")]):
             sources = load_all_available_sources()
         self.assertEqual({s.key for s in sources}, {"project_status", "doc_1"})
 

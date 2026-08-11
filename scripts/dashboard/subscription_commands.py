@@ -23,9 +23,13 @@ logger = logging.getLogger("dashboard.subscription_commands")
 
 # 与"操作订阅"无关的看板话题（不拦截，放行给 Agent 正常聊/调 query_dashboard 工具）
 # 「怎么用/怎么样/什么情况」等是求助或查询实时看板，不是订阅管理
+# v1.11.5 追加「功能/关系/干嘛/为什么」等反向词：质疑反问「这跟看板功能有什么关系」
+# 不是开通订阅，应放行给 Agent；「看看/想看看/看一下」是实时查询（Agent→query_dashboard）
 _NEGATIVE_RE = re.compile(
     r"文档|方案|方法论|学习|入库|设计|功能说明|怎么用|怎么配|怎么设|怎么操作|"
-    r"怎么看|怎么查|怎么样|什么情况|什么进展|是什么|介绍")
+    r"怎么看|怎么查|怎么样|什么情况|什么进展|是什么|介绍|"
+    r"看看|想看看|看一下|"
+    r"功能|关系|干嘛|为什么|为啥|这跟|有什么用|干嘛的|干嘛用|与.*有关")
 # 看板话题门槛：必须出现「看板」
 _HAS_KANBAN_RE = re.compile(r"看板")
 
@@ -45,8 +49,20 @@ _QUERY_RE = re.compile(r"看板.*(几点|什么时候|设置|在哪|是谁)|我�
 _RECIPIENT_RE = re.compile(r"推给|发给|也推|推送给|加上|捎上")
 _ADD_RECIPIENT_RE = re.compile(r"推给|发给|也推|推送给|加上|捎上")
 _REMOVE_RECIPIENT_RE = re.compile(r"不要推给|不发给|去掉|移除|别推给")
+# v1.11.5：「只推给我自己/只发给我」→ 接收人本就是自己，不当作加人
+_SET_SELF_RE = re.compile(r"只?\s*(?:推给|发给|推送|发)\s*我(?:自己)?")
 _TIME_RE = re.compile(r"\d{1,2}[点时:：]|半")
 _FREQ_RE = re.compile(r"每周|周一到|周[一二三四五六日天]|星期|周末|每隔|隔天|频率")
+# v1.11.5：明确的创建/开通意图才建订阅；否则含「看板」文本放行给 Agent
+# 「帮我推个看板/给我推个看板」= 开通订阅（前缀 帮/给/替 必填）；
+# 「现在推看板/马上推看板」无前缀 → 放行给 Agent 调 push_dashboard 工具（立即推送），不拦截。
+_CREATE_RE = re.compile(
+    r"(?:帮我|给我|替我)\s*推.{0,6}看板|"
+    r"做.{0,6}看板|建.{0,6}看板|开通.{0,6}看板|开.{0,6}看板|"
+    r"设置.{0,6}看板|设.{0,6}看板|生成.{0,6}看板|"
+    r"要.{0,6}看板|需要.{0,6}看板|"
+    r"每日.{0,4}看板|每天.{0,4}看板|"
+    r"看板.{0,4}(推送|提醒|订阅)")
 
 # 周次用 1-7（周一=1 … 周日=7），与 datetime.isoweekday() 对齐
 _WEEKDAY_MAP = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "日": 7, "天": 7}
@@ -90,11 +106,17 @@ def parse_subscription_command(text: str, ctx: Optional[dict] = None) -> Optiona
         return {"intent": "stop", **(ctx or {})}
     if _QUERY_RE.search(text):
         return {"intent": "query", **(ctx or {})}
+    if _SET_SELF_RE.search(text):
+        # v1.11.5：「只推给我自己」接收人本就是自己，不做加人操作
+        return {"intent": "set_recipient_self", **(ctx or {})}
     if _RECIPIENT_RE.search(text):
         names = _extract_names(text)
-        return {"intent": "change_recipients", "recipient_names": names,
-                "add": not bool(_REMOVE_RECIPIENT_RE.search(text)),
-                **(ctx or {})}
+        if names:
+            return {"intent": "change_recipients", "recipient_names": names,
+                    "add": not bool(_REMOVE_RECIPIENT_RE.search(text)),
+                    **(ctx or {})}
+        # v1.11.5：捕获到的人名全是代词/助词（你了、我自己）→ 不是接收人操作，
+        # 继续下一个意图，避免误判
     if _TIME_RE.search(text):
         hour, minute = _parse_time(text)
         return {"intent": "change_time", "push_hour": hour, "push_minute": minute,
@@ -102,8 +124,11 @@ def parse_subscription_command(text: str, ctx: Optional[dict] = None) -> Optiona
     if _FREQ_RE.search(text):
         return {"intent": "change_freq", "weekdays": _parse_weekdays(text),
                 **(ctx or {})}
-    # 兜底：提到看板且未被否定/管理词命中 → 视为创建订阅
-    return {"intent": "create", **(ctx or {})}
+    # 兜底：v1.11.5 收紧——明确的创建/开通意图才建订阅，
+    # 其余含「看板」文本（质疑/反问/求助）放行给 Agent 正常聊
+    if _CREATE_RE.search(text):
+        return {"intent": "create", **(ctx or {})}
+    return None
 
 
 # ===== 时间解析 =====
@@ -141,11 +166,22 @@ def _parse_weekdays(text: str) -> str:
     return ""
 
 
+# v1.11.5：接收人必须是「人名」——含代词/助词（你我他她它自己大家们了的地得啥）
+# 的捕获块（如「我自己」「你了」）不是人名，丢弃，防止「只推给我自己」/「发给了你」
+# 被误判成加入接收人。
+_INVALID_NAME_RE = re.compile(r"[你我他她它自大家们的地得啥]")
+# 捕获块句末语气词（「李四了」「王工啦」的「了/啦」是句末助词，不是名字一部分）
+# 先剥掉再判人名
+_TRAILING_PARTICLE_RE = re.compile(r"[了啊吧呀呢嘛啦哦噢么呗嘞]+$")
+
+
 def _extract_names(text: str) -> list[str]:
-    """提取接收人姓名（2~4 个汉字，跟在 推给/发给 等词后）"""
+    """提取接收人姓名（2~4 个汉字，跟在 推给/发给 等词后，排除代词/助词）"""
     names = []
     for m in re.finditer(r"(?:推给|发给|也推给|推送给|加上|捎上)\s*([一-龥]{2,4})", text):
-        name = m.group(1)
+        name = _TRAILING_PARTICLE_RE.sub("", m.group(1))
+        if not name or _INVALID_NAME_RE.search(name):
+            continue
         if name not in names:
             names.append(name)
     return names
@@ -247,6 +283,10 @@ def render_confirmation(pending: dict, current=None) -> str:
         action = "加入接收人" if pending.get("add") else "移除接收人"
         lines.append(f"好的，看板将{action}：{'、'.join(names)}。")
         lines.append("回复「确认」生效，或直接告诉我接收人姓名。")
+
+    elif intent == "set_recipient_self":
+        lines.append("看板推送默认就是只推送给您自己的，无需调整。")
+        lines.append("如需增加其他接收人，直接告诉我姓名（如「也推给张工」）。")
 
     elif intent == "stop":
         lines.append("好的，将停止您的每日看板推送。")

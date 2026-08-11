@@ -9,11 +9,17 @@ validate 校验失败/异常一律规则兜底。遵循方法论 §5：关注置
 import json
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 
 logger = logging.getLogger("dashboard.assembler")
 
 MAX_MARKDOWN_LEN = 5000
 TABLE_SYNTAX_RE = re.compile(r"\|.*\|.*\|")
+
+# v1.11.5：LLM 组装超时秒数（实测曾 37.8s 拖慢整条看板推送），超时即规则兜底。
+# 单工作线程池常驻复用，避免每次组装都新建线程。
+LLM_ASSEMBLE_TIMEOUT = 25
+_LLM_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="dashboard-llm")
 
 _CN_NUM = ("一", "二", "三", "四", "五", "六", "七", "八", "九", "十")
 
@@ -180,10 +186,15 @@ def llm_assemble(results: list[dict], title: str = "", date_str: str = "",
     if llm_func is None:
         return assemble_markdown(results, title, date_str)
     try:
-        text = llm_func(_build_llm_prompt(results, title, date_str)) or ""
+        # v1.11.5：LLM 调用包 25s 超时，超时/异常一律规则兜底（不扩散异常）
+        future = _LLM_EXECUTOR.submit(
+            llm_func, _build_llm_prompt(results, title, date_str))
+        text = future.result(timeout=LLM_ASSEMBLE_TIMEOUT) or ""
         if validate_markdown(text)[0]:
             return text
         logger.warning("LLM 看板未过校验（空/超长/表格语法），规则兜底")
+    except FutureTimeout:
+        logger.warning(f"LLM 看板组装超时（>{LLM_ASSEMBLE_TIMEOUT}s），规则兜底")
     except Exception as e:
         logger.warning(f"LLM 看板组装失败，规则兜底: {e}")
     return assemble_markdown(results, title, date_str)

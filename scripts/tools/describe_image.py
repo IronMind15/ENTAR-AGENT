@@ -29,19 +29,43 @@ _MAX_IMAGE_BYTES = 8 * 1024 * 1024
 # 图片路径白名单根目录（防提示注入诱导读取任意文件外传）
 _UPLOAD_ROOT = Path(__file__).resolve().parents[2] / "data" / "uploads"
 
+
+def _resolve_image_path(image_path: str) -> str:
+    """解析图片路径：绝对路径优先；找不到则按文件名在上传目录递归查找。
+
+    v1.11.5：LLM 上下文里常只有文件名（如 image_1.png），
+    补这个兜底让「帮我识别这个图片的内容」也能成功，而不要求 LLM 精确猜出
+    data/uploads/{部门}/{员工}/{日期}/image_1.png 三段式路径。
+    """
+    p = os.path.abspath(image_path)
+    if os.path.isfile(p):
+        return p
+    name = os.path.basename(image_path.strip().rstrip("/\\"))
+    if name and _UPLOAD_ROOT.exists():
+        try:
+            for hit in _UPLOAD_ROOT.rglob(name):
+                if hit.is_file():
+                    logger.info(f"  按文件名找到图片: {hit}")
+                    return str(hit)
+        except OSError:
+            pass
+    return p  # 原路径（不存在），由调用方统一报错
+
+
 DEFINITION = {
     "name": "describe_image",
     "description": (
         "识别图片内容。当用户发送图片并询问图中内容、文字、参数时使用。"
-        "image_path 为图片文件的绝对路径（服务端已保存到上传目录的图片）；"
-        "question 可选，为对图片的具体提问。返回该图片的中文描述。"
+        "image_path 为图片文件路径（绝对路径或上传目录内的文件名，如 image_1.png，"
+        "工具会自动在上传目录查找）；question 可选，为对图片的具体提问。"
+        "返回该图片的中文描述。"
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "image_path": {
                 "type": "string",
-                "description": "图片文件的绝对路径（服务端本地路径，必须位于上传目录内）。",
+                "description": "图片文件路径（绝对路径，或上传目录内的文件名如 image_1.png，工具自动查找）。",
             },
             "question": {
                 "type": "string",
@@ -107,9 +131,9 @@ def execute(args: dict) -> str:
     """执行图片识别"""
     image_path = (args.get("image_path") or "").strip()
     if not image_path:
-        return json.dumps({"error": "缺少 image_path 参数，请传入图片文件的绝对路径"}, ensure_ascii=False)
+        return json.dumps({"error": "缺少 image_path 参数，请传入图片文件路径或文件名"}, ensure_ascii=False)
 
-    p = os.path.abspath(image_path)
+    p = _resolve_image_path(image_path)
     if not os.path.isfile(p):
         return json.dumps({"error": f"图片文件不存在或不可读：{image_path}"}, ensure_ascii=False)
 

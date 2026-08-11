@@ -55,6 +55,14 @@ class Collector:
             {"source_key", "name", "table_name", "records", "error"}
         """
         try:
+            # v1.11.5：空 base_id 静态残留直接记 error，避免发 /bases//sheets 404
+            from .config_model import source_usable
+            if not source_usable(source):
+                return {
+                    "source_key": source.key, "name": source.name,
+                    "table_name": "", "records": [],
+                    "error": f"数据源 {source.key} 未配置 base_id，跳过（请用钉钉文档登记数据源）",
+                }
             # 身份：动态源自带登记人 unionId（跨用户订阅优先用文档归属人身份读）
             op = source.operator_id or self._resolve_operator(operator_id, staff_id)
             kind = source.kind or "notable"

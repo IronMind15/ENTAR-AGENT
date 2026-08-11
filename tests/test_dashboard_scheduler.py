@@ -103,10 +103,19 @@ class ExecuteSubscriptionTests(unittest.TestCase):
                 except OSError:
                     pass
 
+    def _fake_sources(self):
+        """v1.11.5：静态配置 project_status base_id 为空会被 source_usable 过滤，
+        执行链测试直接 mock 数据源解析，聚焦变化检测→组装→推送→快照。"""
+        from dashboard.config_model import SourceConfig
+        return [SourceConfig(key="project_status", name="研发项目现况表",
+                             kind="notable", base_id="b1", table_id="s1")]
+
     def test_pushes_and_updates_snapshot(self):
         sub_id = self._store.create(_sub(alert_mode="always"))
         sub = self._store.get(sub_id)
-        with mock.patch("dashboard.service.collect_and_parse",
+        with mock.patch("dashboard.service.resolve_subscription_sources",
+                        return_value=self._fake_sources()), \
+             mock.patch("dashboard.service.collect_and_parse",
                         return_value=(_parsed(), [])), \
              mock.patch("dashboard.service.assemble",
                         return_value="# 看板"), \
@@ -129,7 +138,9 @@ class ExecuteSubscriptionTests(unittest.TestCase):
             "attention": [{"status": "滞后", "title": "项目A"}],
             "normal": [],
         }]
-        with mock.patch("dashboard.service.collect_and_parse",
+        with mock.patch("dashboard.service.resolve_subscription_sources",
+                        return_value=self._fake_sources()), \
+             mock.patch("dashboard.service.collect_and_parse",
                         return_value=(_parsed(), [])), \
              mock.patch("dashboard.service.push") as m_push:
             result = _execute_subscription(sub)
@@ -144,7 +155,9 @@ class ExecuteSubscriptionTests(unittest.TestCase):
             "source_key": "project_status", "table_name": "33周", "total": 9,
             "status_counts": {}, "attention": [], "normal": [],
         }]
-        with mock.patch("dashboard.service.collect_and_parse",
+        with mock.patch("dashboard.service.resolve_subscription_sources",
+                        return_value=self._fake_sources()), \
+             mock.patch("dashboard.service.collect_and_parse",
                         return_value=(_parsed(), [])), \
              mock.patch("dashboard.service.assemble", return_value="# 看板"), \
              mock.patch("dashboard.service.push", return_value=(True, "")):
@@ -161,7 +174,9 @@ class ExecuteSubscriptionTests(unittest.TestCase):
             "attention": [{"status": "滞后", "title": "项目A"}],
             "normal": [],
         }]
-        with mock.patch("dashboard.service.collect_and_parse",
+        with mock.patch("dashboard.service.resolve_subscription_sources",
+                        return_value=self._fake_sources()), \
+             mock.patch("dashboard.service.collect_and_parse",
                         return_value=(_parsed(), [])), \
              mock.patch("dashboard.service.assemble", return_value="# 看板"), \
              mock.patch("dashboard.service.push",
@@ -179,7 +194,9 @@ class ExecuteSubscriptionTests(unittest.TestCase):
             "source_key": "project_status", "table_name": "33周", "total": 9,
             "status_counts": {}, "attention": [], "normal": [],
         }]
-        with mock.patch("dashboard.service.collect_and_parse",
+        with mock.patch("dashboard.service.resolve_subscription_sources",
+                        return_value=self._fake_sources()), \
+             mock.patch("dashboard.service.collect_and_parse",
                         return_value=(_parsed(), [])), \
              mock.patch("dashboard.service.assemble", return_value="# 看板"), \
              mock.patch("dashboard.service.push",
@@ -194,7 +211,9 @@ class ExecuteSubscriptionTests(unittest.TestCase):
     def test_off_mode_skips(self):
         sub_id = self._store.create(_sub(alert_mode="off"))
         sub = self._store.get(sub_id)
-        with mock.patch("dashboard.service.collect_and_parse",
+        with mock.patch("dashboard.service.resolve_subscription_sources",
+                        return_value=self._fake_sources()), \
+             mock.patch("dashboard.service.collect_and_parse",
                         return_value=(_parsed(), [])), \
              mock.patch("dashboard.service.push") as m_push:
             result = _execute_subscription(sub)
@@ -214,7 +233,9 @@ class ExecuteSubscriptionTests(unittest.TestCase):
     def test_push_failure_keeps_snapshot_unchanged(self):
         sub_id = self._store.create(_sub(alert_mode="always"))
         sub = self._store.get(sub_id)
-        with mock.patch("dashboard.service.collect_and_parse",
+        with mock.patch("dashboard.service.resolve_subscription_sources",
+                        return_value=self._fake_sources()), \
+             mock.patch("dashboard.service.collect_and_parse",
                         return_value=(_parsed(), [])), \
              mock.patch("dashboard.service.assemble", return_value="# 看板"), \
              mock.patch("dashboard.service.push", return_value=(False, "权限不足")):

@@ -582,6 +582,9 @@ class DingTalkDocClient:
 
     def _detect_kind_uncached(self, node_id: str, operator_id: str = "") -> str:
         """detect_kind 无缓存本体（探测 API 实际调用处）"""
+        # v1.11.5：聚合三类接口探测失败原因，unknown 时一次性输出，
+        # 便于判断是权限缺失、接口版本不符，还是文档类型确实不支持（可能是视图/子表）。
+        reasons: list[str] = []
         # 1. 有 sheet 参数 → 大概率 AI表格
         # 2. 先尝试列 sheets（notable 特有接口）
         try:
@@ -593,9 +596,9 @@ class DingTalkDocClient:
         except Exception as e:
             msg = str(e)
             if "notable" in msg or "Target document" in msg or "base" in msg.lower():
-                logger.info(f"notable 探测不符（{msg[:100]}），回退判断类型")
+                reasons.append(f"notable 探测不符（{msg[:100]}）")
             else:
-                logger.debug(f"notable 探测异常（继续判断）: {msg}")
+                reasons.append(f"notable 接口异常（{msg[:100]}）")
         # 2. 回退试探 workbook（在线表格）
         try:
             sheets = self.list_workbook_sheets(node_id, operator_id)
@@ -605,19 +608,23 @@ class DingTalkDocClient:
         except DingTalkDocPermissionError:
             raise
         except Exception as e:
-            logger.info(f"workbook 探测不符: {str(e)[:120]}")
+            reasons.append(f"workbook 探测不符（{str(e)[:120]}）")
         # 3. 回退试探 doc（普通在线文档，需 Storage.File.Read 权限）
         try:
             doc = self.read_doc_content(node_id, operator_id)
             if doc.get("ok"):
                 logger.info(f"doc 探测命中：{len(doc.get('blocks') or [])} 个内容块")
                 return "doc"
+            reasons.append(f"doc 无内容（{doc.get('message', '')[:80]}）")
         except DingTalkDocPermissionError:
             raise
         except Exception as e:
-            logger.info(f"doc 探测不符: {str(e)[:120]}")
+            reasons.append(f"doc 探测不符（{str(e)[:120]}）")
         # 4. 兜底：无强证据时返回 unknown，由调用方决定
-        logger.info(f"文档类型探测结果: unknown（node={node_id[:12]}）")
+        logger.warning(
+            f"文档类型探测结果: unknown（node={node_id[:12]}）。"
+            f"三类接口均未命中，可能是视图/子表或非三类文档。原因："
+            + ("；".join(reasons) if reasons else "无探测结果"))
         return "unknown"
 
     def read_document(self, url: str, operator_id: str = "",

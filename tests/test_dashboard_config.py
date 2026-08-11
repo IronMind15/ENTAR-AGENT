@@ -97,6 +97,25 @@ class LoadSourcesTests(unittest.TestCase):
         self.assertIsNone(cm.get_source("missing"))
 
 
+class SourceUsableTests(unittest.TestCase):
+    """source_usable 过滤（v1.11.5：静态空 base_id 残留导致 404 的根因修复）"""
+
+    def test_dingtalk_doc_with_base_id_usable(self):
+        s = cm.SourceConfig(key="k", base_id="b1", enabled=True)
+        self.assertTrue(cm.source_usable(s))
+
+    def test_dingtalk_doc_without_base_id_not_usable(self):
+        s = cm.SourceConfig(key="k", base_id="", enabled=True)
+        self.assertFalse(cm.source_usable(s))
+
+    def test_disabled_not_usable(self):
+        s = cm.SourceConfig(key="k", base_id="b1", enabled=False)
+        self.assertFalse(cm.source_usable(s))
+
+    def test_none_not_usable(self):
+        self.assertFalse(cm.source_usable(None))
+
+
 class LoadPushConfigTests(unittest.TestCase):
     """推送配置加载"""
 

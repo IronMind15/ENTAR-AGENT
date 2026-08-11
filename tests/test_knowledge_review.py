@@ -409,7 +409,8 @@ class PendingLearnTests(unittest.TestCase):
              patch("knowledge_review.get_review_service", return_value=svc):
             result = learn_file_path_for_user("u1", "/x/a.pdf", "a.pdf")
         self.assertEqual(result["status"], "ok")
-        m_learn.assert_called_once_with("u1", "/x/a.pdf", "a.pdf")
+        # v1.11.5：模块级入口透传 kb 参数（未指定时 None）
+        m_learn.assert_called_once_with("u1", "/x/a.pdf", "a.pdf", kb=None)
 
 
 if __name__ == "__main__":

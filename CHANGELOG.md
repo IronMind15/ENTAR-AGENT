@@ -3,6 +3,65 @@
 > 📌 **本文档是项目唯一的版本记录（单一事实源）**——README.md、PROGRESS.md 的版本历史均指向本文件，发版时只在这里追加记录。
 > 相关：待办清单见 [TODO.md](TODO.md)，进度看板见 [PROGRESS.md](PROGRESS.md)。
 
+## v1.11.5（2026-08-11）
+
+**🗂️ 多知识库架构改造 + 实测日志 9 问题修复**——用户实测日志排查 9 个问题 + 提出知识库架构改造，一次落地：①「创建知识库」做成独立通用功能（此前 KB 绑定具体内容，集合名散落硬编码），钉钉自然语言创建；②查询工具 3 个独立（search_knowledge_base / search_standards / search_experience_kb）合并成 1 个通用工具，可在不同知识库选择查询或全库合并搜索，LLM 不再选错工具（修「已学习文档搜不到」根因）；③知识库 schema 加 `department` 字段，分部门开权限逻辑预留（`get_visible_knowledge_bases` 按 centers 过滤，现全 public 不拦截）；④静态看板源空 base_id 运行时过滤 + 停用陈旧订阅（修 404 循环）；⑤无可用源返回清晰 JSON 杜绝 Agent 幻觉「推送成功」；⑥订阅指令误判修复（「只推给我自己」/「我已经粘贴过了重新发给了你」/「这跟看板功能有什么关系」）；⑦识图路径修复（写 memory + 文件名递归查找兜底）；⑧文档类型检测 unknown 原因聚合日志；⑨看板 LLM 组装 25s 超时规则兜底（实测曾 37.8s）。全量回归 **642 项全绿**（此前 604 项）。
+
+### 功能
+
+- **知识库注册表**（`scripts/kb_registry.py`）：SQLite 表 `knowledge_bases`（`key` PK / `name` / `description` / `collection` 默认=key / `department` 默认 public / `enabled` / `created_at`），`init_schema` + `seed_default_kbs` 种子三库（故障知识库 error_codes / 标准知识库 standards / 经验知识库 experience_kb，INSERT OR IGNORE）；`list/get/resolve_kb/create/update/delete` + `get_visible_knowledge_bases(centers)`（department ∈ centers∪public 预留过滤，centers 为 None → 全部）
+- **钉钉自然语言创建知识库**（`scripts/tools/create_knowledge_base.py`）：参数 `{name, description="", department="public"}`，department 校验 `center_config.is_valid_center`（非法即拒），key 用中文名去空格生成（Chroma 支持 Unicode collection 名），重名报错；回执提示后续用法「发文档后回复『把这个文档学到XX』即可入库」；description 动态列出现有知识库，避免重名/选错
+- **学习流程支持指定库**（`knowledge_review.py` + `dashboard/doc_learn.py`）：解析「把这个文档学到XX」→ `resolve_kb` → `target_collection = kb.collection`、`department = kb.department`；`learn_dingtalk_doc` 默认 standards 可被 bot 透传指定库名覆盖；未指定维持现状
+- **通用知识库查询工具**（重写 `scripts/tools/search_knowledge_base.py`）：参数 `{query, knowledge_base=""}`——指定库按 collection 分发（`error_codes`→error_query.search_kb 故障码精确通道、`standards`→standards_query.search_kb 带 std_id 精确 + centers 过滤、`experience_kb`→experience_query.search_kb、自定义→enhanced_query + department where 过滤）；**留空 → 全部可见知识库搜索合并去重按距离排序**，每条带 `kb_name` + `source_label`；描述注明「知识库动态管理，可用库清单执行时获取」
+- **停用旧工具**（`scripts/tools/__init__.py`）：移除 `search_standards` / `search_experience_kb` 两行注册（文件保留，文件头注释「已由通用 search_knowledge_base 替代 v1.11.5」）；工具注册 10→9，LLM 只见 1 个查询工具，选型错误根除
+- **看板静态源过滤**（`dashboard/config_model.py` + `dashboard/service.py` + `dashboard/collector.py`）：`source_usable()` 判定 dingtalk_doc 源 base_id 空 → 不可用；`load_all_available_sources` 过滤不可用源并 `logger.warning`「静态数据源 {key} 未配置 base_id，跳过」；`collect()` 开头校验 base_id 非空，空则直接记 error 不发 HTTP 404（修 404 循环）
+- **停用陈旧订阅**：一次性 SQL `UPDATE dashboard_subscriptions SET enabled=0 WHERE data_sources LIKE '%project_status%' OR data_sources LIKE '%test_issues%'`（引用静态源的订阅禁用，doc_ 动态源订阅保留）
+- **杜绝 Agent 幻觉**（`tools/query_dashboard.py` + `tools/push_dashboard.py`）：无可用源/全部失败时返回清晰 JSON `{"error": "未配置可用的看板数据源（钉钉文档 base_id 未配置）。请先发钉钉文档，再回复「按这几个文档做每日看板」登记数据源。"}`，不再给 LLM 编造空间
+- **订阅指令误判修复**（`dashboard/subscription_commands.py`）：
+  - 「只推送给我自己」→ 新增 `_SET_SELF_RE` 命中 `set_recipient_self`，回复「看板默认就是只推送给您自己，无需调整」（不再误判加人）
+  - 「我已经粘贴过了重新发给了你」→ `_extract_names` 新增 `_INVALID_NAME_RE`（含 我/你/他/她/它/自己/大家/们/的/地/得 等 → 丢弃）+ `_TRAILING_PARTICLE_RE` 去尾部语气词（了啊吧呀呢嘛啦哦噢么呗嘞），全丢返回 `[]`；`change_recipients` 分支改 `if _RECIPIENT_RE.search(text) and names:`，names 空继续下一意图
+  - 「这跟看板功能有什么关系」→ `_NEGATIVE_RE` 扩展（看看/想看看/看一下/功能/关系/干嘛/什么关系/有什么用…）+ 兜底 create 收紧 `_CREATE_RE`（前缀 帮我/给我/替我 + 推/做/建/开通/开/设置/生成/要/需要 + 看板；每日/每天 + 看板；看板 + 推送/提醒/订阅），双保险不再误判开通
+- **识图路径修复**（`skills/dingtalk_bot.py` + `tools/describe_image.py` + `prompts/system_prompt.txt`）：图片保存后写 memory `[发送图片] {绝对路径}`（LLM 上下文有真实路径）；`describe_image.execute` 路径不存在/不在白名单时按文件名在 `_UPLOAD_ROOT` 下 `rglob` 递归查找同名文件兜底，找不到才报错；system prompt 补真实目录结构示例（`data/uploads/研发中心/张三/2026-08-11/image_1.png` + 「识别图片时可用图片文件名，工具会自动查找」）
+- **文档类型检测 unknown 原因聚合**（`dingtalk_doc_client.py`）：`_detect_kind_uncached` 聚合三类探测失败原因（接口/错误码）存 `reasons`，unknown 时 `logger.warning`「三类接口均未命中，可能是视图/子表或非三类文档」；bot 对 unknown 返回友好提示
+- **看板 LLM 组装超时**（`dashboard/assembler.py`）：`llm_assemble` 经 `ThreadPoolExecutor(max_workers=1)` + `future.result(timeout=LLM_ASSEMBLE_TIMEOUT=25)`，超时/异常走规则兜底（实测曾 37.8s 拖慢推送）
+
+### 测试
+
+- 新增 38 项：新建 `test_kb_registry`（临时 DB 注册表 CRUD/种子三库/可见性/create 工具合法非法 department/重名）；新建 `test_search_knowledge_base`（通用工具指定库分发到经验/故障/标准、unknown 库提示、部门不可见/可见、留空全库合并按距离排序、无结果、停用库）；`test_experience_query` 迁移通用工具断言（search_experience_kb 不再注册）；`test_subscription_commands` 追加 ④⑤⑥ 用例（只推给我自己→set_self、我已经粘贴过了重新发给了你→None、这跟看板功能有什么关系→None）+ 去除尾部语气词人名断言；`test_describe_image` 文件名查找兜底；`test_dashboard_config` `SourceUsableTests`（base_id 空不可用）；`test_dashboard_llm` LLM 超时兜底；`test_doc_learn` 指定库入库（collection/department 继承）；`test_knowledge_review` 断言 kb 参数透传；`test_dashboard_scheduler`/`test_dashboard_service` 补 base_id mock
+- 全量回归 **642 项通过**（此前 604 项）
+
+### 已知限制
+
+- 自定义知识库检索走 `enhanced_query`（无故障码精确匹配 / std_id 快速通道），需要精确通道的库仍用内置三库分发
+- 新创建知识库 `department` 默认 public 全可见；分部门开权限逻辑（`get_visible_knowledge_bases`）已预留但现不拦截，待 v2.0 多中心权限一起启用
+- 旧 `search_standards` / `search_experience_kb` 文件保留不再注册；测试若直接 import 模块仍可用（不经工具注册中心）
+- 停用的陈旧订阅是测试期静态源订阅，用户真实 doc_ 动态源订阅不受影响；如需重新启用可再建
+
+### 修改文件
+
+| 文件 | 改动 |
+|------|------|
+| `scripts/kb_registry.py` | 🆕 知识库注册表（SQLite 表 + CRUD + 种子三库 + 部门可见性） |
+| `scripts/tools/create_knowledge_base.py` | 🆕 钉钉自然语言创建知识库工具 |
+| `scripts/tools/search_knowledge_base.py` | 重写为通用查询工具（指定库分发 + 留空全库合并） |
+| `scripts/tools/__init__.py` | 注册 create_knowledge_base；移除 search_standards/search_experience_kb 注册（10→9） |
+| `scripts/tools/search_standards.py` | 文件头注释替代说明，不再注册 |
+| `scripts/tools/search_experience_kb.py` | 文件头注释替代说明，不再注册 |
+| `scripts/knowledge_review.py` | 学习指令解析指定知识库（resolve_kb → collection/department） |
+| `scripts/dashboard/doc_learn.py` | `learn_dingtalk_doc` 支持指定库（默认 standards） |
+| `scripts/dashboard/config_model.py` | `source_usable()` 静态源 base_id 过滤 |
+| `scripts/dashboard/service.py` | `load_all_available_sources` 过滤不可用源 + warning |
+| `scripts/dashboard/collector.py` | collect 前置校验 base_id 空直接记 error |
+| `scripts/tools/query_dashboard.py` | 无可用源清晰错误 JSON（杜绝幻觉） |
+| `scripts/tools/push_dashboard.py` | 同上 |
+| `scripts/dashboard/subscription_commands.py` | set_recipient_self + 人名过滤 + _NEGATIVE/_CREATE 收紧 |
+| `scripts/skills/dingtalk_bot.py` | 图片写 memory（[发送图片] 路径）+ unknown 文档友好提示 |
+| `scripts/tools/describe_image.py` | 文件名 rglob 递归查找兜底 |
+| `scripts/prompts/system_prompt.txt` | 补真实上传目录结构示例 |
+| `scripts/dashboard/assembler.py` | llm_assemble 25s 超时 + 规则兜底 |
+| `scripts/dingtalk_doc_client.py` | detect_kind unknown 原因聚合日志 |
+| `data/user_store.db` | 一次性 SQL 停用陈旧静态源订阅 |
+
 ## v1.11.4（2026-08-11）
 
 **📊 看板实测修复：每日必推 + 本次文档做数据源 + 创建时完整看板 + 输出格式增强**——用户实测 v1.11.3 看板后 4 个问题一次修复：①「每日有更新才推送」非每日必推 → `alert_mode` 默认改 `always`（每天必推），顶部注入变化标注（新增 `change_banner`：有变化 `📌 今日变化：板块：总数 2→3；新增关注1`、无变化 `📌 今日无变化`），`changes_only`/`off` 保留为选项；②发 4 个文件出现 6 条大标题 → 根因是 `_handle_doc_create` 取「全部历史 enabled 候选」（本次 4 个 + 昨天登记同文档 2 条），改为 bot 收集**本次**识别候选 id 透传，历史候选不再混入；③创建时示例看板简略（LLM 组装失败退回简略规则兜底）→ 规则兜底新增「📌 今日要点」段（关注项摘要 / 整体正常兜底）+ LLM prompt 强化严禁表格语法；④确认文案同步「每天固定推送（附今日变化）」。现有 5 个订阅 SQL 迁移为 `always`。全量回归 **604 项全绿**（此前 590 项）。

@@ -13,9 +13,10 @@ logger = logging.getLogger("dashboard.service")
 
 
 def load_enabled_sources() -> list:
-    """全部启用数据源（配置层）"""
-    from .config_model import load_sources
-    return [s for s in load_sources() if s.enabled]
+    """全部启用且可用的数据源（配置层，v1.11.5 过滤空 base_id 静态残留）"""
+    from .config_model import load_sources, source_usable
+    return [s for s in load_sources()
+            if s.enabled and source_usable(s)]
 
 
 # ===== 动态数据源桥接（v1.11.0：发文档动态注册，不依赖配置文件） =====
@@ -65,7 +66,7 @@ def resolve_subscription_sources(sub) -> list:
     - `doc_<id>` key：查文档候选 → build_dynamic_source（候选缺失/已删则跳过）
     - 其余 key：配置源 get_source（缺配置则跳过）
     """
-    from .config_model import get_source
+    from .config_model import get_source, source_usable
     from .doc_candidates import get_candidate_store
     out = []
     cand_store = None
@@ -82,7 +83,7 @@ def resolve_subscription_sources(sub) -> list:
                 continue
         else:
             src = get_source(key)
-            if src and src.enabled:
+            if src and src.enabled and source_usable(src):
                 out.append(src)
     return out
 

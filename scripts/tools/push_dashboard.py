@@ -21,7 +21,10 @@ def execute(args: dict) -> str:
 
     sources = service.load_all_available_sources()
     if not sources:
-        return json.dumps({"error": "未配置看板数据源"}, ensure_ascii=False)
+        return json.dumps(
+            {"error": "未配置可用的看板数据源（钉钉文档 base_id 未配置）。"
+                     "请先发钉钉文档，再回复「按这几个文档做每日看板」登记数据源。"},
+            ensure_ascii=False)
 
     subs = [s for s in get_subscription_store().list_enabled() if s.recipients]
     if not subs:

@@ -347,11 +347,14 @@ class KnowledgeReviewService:
                     "message": f"匹配到多个文件，请用序号指定：\n{names}"}
         return {"status": "ok", "row": matches[0][1]}
 
-    def learn_for_user(self, user_id: str, user_name: str = "") -> dict:
+    def learn_for_user(self, user_id: str, user_name: str = "",
+                       kb: Optional[dict] = None) -> dict:
         """用户上传文件后回复「帮我学习」→ 直接同步入库（无审核）。
 
         取该用户最新待学习文件（pending/error），同步调 process_file，
         复用 engine 内部 _record_sync_status 自动 mark_synced/mark_error。
+        kb: 可选，指定知识库（v1.11.5 多库：resolve_kb 结果 dict），
+            其 collection/department 覆盖默认库与 'public'。
         """
         from doc_mgr.engine import process_file
 
@@ -369,14 +372,19 @@ class KnowledgeReviewService:
 
         # 必须显式传 collection：engine 内部 .md 默认走 standards，
         # 与 default_collection 的 .md→experience_kb 不一致，按登记库入库。
-        collection = row.get("target_collection") or default_collection(file_name)
+        if kb:
+            collection = kb.get("collection") or kb.get("key")
+            department = kb.get("department") or "public"
+        else:
+            collection = row.get("target_collection") or default_collection(file_name)
+            department = "public"  # v1.10.2 暂不划分部门；未来改传用户主部门
         try:
             doc = process_file(
                 file_path,
                 file_name=file_name,
                 target_collection=collection,
                 force=False,
-                department="public",  # v1.10.2 暂不划分部门；未来改传用户主部门
+                department=department,
             )
         except Exception as exc:
             logger.exception(f"用户直接学习失败: {file_path}")
@@ -396,11 +404,13 @@ class KnowledgeReviewService:
                 "message": getattr(doc, "message", "") or "处理失败"}
 
     def learn_file_path(self, user_id: str, file_path: str,
-                        file_name: str = "") -> dict:
+                        file_name: str = "",
+                        kb: Optional[dict] = None) -> dict:
         """按指定文件路径直接入库（v1.11.0 上传后「自动推荐→确认」用）。
 
         与 learn_for_user 同构：校验路径安全 → 取 target_collection →
         同步 process_file → 返回同构结果。engine.process_file 行为不变。
+        kb: 可选，指定知识库（v1.11.5），覆盖 tracker 登记库与默认库。
         """
         from doc_mgr.engine import process_file
 
@@ -411,16 +421,21 @@ class KnowledgeReviewService:
             return {"status": "failed", "file_name": fname,
                     "message": "文件不存在或路径不安全，请重新发送文件。"}
 
-        # 优先用 tracker 已登记的目标库；无则按扩展名默认
-        collection = "standards"
-        try:
-            st = self.tracker.get_status(file_path)
-            if st and st.get("target_collection"):
-                collection = st["target_collection"]
-            else:
+        # 指定知识库优先；否则用 tracker 已登记的目标库；无则按扩展名默认
+        if kb:
+            collection = kb.get("collection") or kb.get("key")
+            department = kb.get("department") or "public"
+        else:
+            collection = "standards"
+            try:
+                st = self.tracker.get_status(file_path)
+                if st and st.get("target_collection"):
+                    collection = st["target_collection"]
+                else:
+                    collection = default_collection(fname)
+            except Exception:
                 collection = default_collection(fname)
-        except Exception:
-            collection = default_collection(fname)
+            department = "public"
 
         try:
             doc = process_file(
@@ -428,7 +443,7 @@ class KnowledgeReviewService:
                 file_name=fname,
                 target_collection=collection,
                 force=False,
-                department="public",
+                department=department,
             )
         except Exception as exc:
             logger.exception(f"按路径学习失败: {file_path}")
@@ -447,8 +462,12 @@ class KnowledgeReviewService:
                 "message": getattr(doc, "message", "") or "处理失败"}
 
     def relearn_for_user(self, user_id: str, target: str,
-                         is_admin: bool = False) -> dict:
-        """对已上传文件强制重新学习（force=True 重新解析入库）。"""
+                         is_admin: bool = False,
+                         kb: Optional[dict] = None) -> dict:
+        """对已上传文件强制重新学习（force=True 重新解析入库）。
+
+        kb: 可选，指定知识库（v1.11.5），覆盖登记库。
+        """
         from doc_mgr.engine import process_file
 
         located = self._locate_file(user_id, target, is_admin)
@@ -462,14 +481,19 @@ class KnowledgeReviewService:
         if not self._is_safe_upload_file(file_path):
             return {"status": "failed", "file_name": file_name,
                     "message": "文件不存在或路径不安全，请重新发送文件。"}
-        collection = row.get("target_collection") or default_collection(file_name)
+        if kb:
+            collection = kb.get("collection") or kb.get("key")
+            department = kb.get("department") or "public"
+        else:
+            collection = row.get("target_collection") or default_collection(file_name)
+            department = "public"
         try:
             doc = process_file(
                 file_path,
                 file_name=file_name,
                 target_collection=collection,
                 force=True,
-                department="public",
+                department=department,
             )
         except Exception as exc:
             logger.exception(f"强制重学失败: {file_path}")
@@ -657,9 +681,13 @@ def handle_review_message(text: str, sender_staff_id: str) -> Optional[str]:
 
 # ===== v1.10.2 直接学习 / 我的文件 / 删除 模块级入口（供 dingtalk_bot 调用） =====
 
-def learn_file_for_user(user_id: str, user_name: str = "") -> dict:
-    """用户回复「帮我学习」→ 直接入库最新待学习文件。"""
-    return get_review_service().learn_for_user(user_id, user_name)
+def learn_file_for_user(user_id: str, user_name: str = "",
+                        kb: Optional[dict] = None) -> dict:
+    """用户回复「帮我学习」→ 直接入库最新待学习文件。
+
+    kb: 可选，指定知识库（v1.11.5 多库），覆盖默认库。
+    """
+    return get_review_service().learn_for_user(user_id, user_name, kb=kb)
 
 
 # ===== v1.11.0 上传后「自动推荐入库」确认（内存 pending，重启失效可接受） =====
@@ -684,9 +712,13 @@ def clear_pending_learn(user_id: str):
 
 
 def learn_file_path_for_user(user_id: str, file_path: str,
-                             file_name: str = "") -> dict:
-    """按指定路径入库（bot 确认分支调用）"""
-    return get_review_service().learn_file_path(user_id, file_path, file_name)
+                             file_name: str = "",
+                             kb: Optional[dict] = None) -> dict:
+    """按指定路径入库（bot 确认分支调用）
+
+    kb: 可选，指定知识库（v1.11.5 多库），覆盖登记库。
+    """
+    return get_review_service().learn_file_path(user_id, file_path, file_name, kb=kb)
 
 
 def list_files_for_user(user_id: str, is_admin: bool = False) -> list[dict]:

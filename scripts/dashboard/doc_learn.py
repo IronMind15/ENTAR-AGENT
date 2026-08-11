@@ -12,8 +12,11 @@ import logging
 logger = logging.getLogger("dashboard.doc_learn")
 
 
-def learn_dingtalk_doc(user_id: str, client=None) -> dict:
+def learn_dingtalk_doc(user_id: str, client=None, kb=None) -> dict:
     """入库用户最近一个未学习的钉钉文档候选
+
+    kb: 可选，指定知识库 dict（v1.11.5 多库），其 collection/department
+        覆盖默认库（standards / public）。
 
     Returns:
         {"has_candidate": bool, "ok": bool, "message": str,
@@ -57,9 +60,18 @@ def learn_dingtalk_doc(user_id: str, client=None) -> dict:
     file_name = f"钉钉文档_{node_id[:8]}.md"
 
     from doc_mgr.engine import process_text
+    # v1.11.5：指定知识库则入库到该库（collection/department 由 kb 提供），
+    # 未指定默认标准知识库 standards / public。
+    if kb:
+        target_collection = kb.get("collection") or kb.get("key")
+        department = kb.get("department") or "public"
+    else:
+        target_collection = "standards"
+        department = "public"
     try:
         doc = process_text(md, file_name=file_name,
-                           target_collection="standards", department="public")
+                           target_collection=target_collection,
+                           department=department)
     except Exception as e:
         return {"has_candidate": True, "ok": False,
                 "message": f"入库失败：{e}", "chunk_count": 0, "records": len(records)}

@@ -96,6 +96,12 @@ _admin_sessions: set[str] = set()
 _LEARN_RE = re.compile(
     r"^(?:帮我\s*)?(?:学习|入库)(?:\s*(?:一下|这个文件|这些文件|该文件))?\s*[!！。.]?$"
 )
+# v1.11.5 多库：指定知识库学习「把这个文档学到产品手册 / 入库到经验库」
+_LEARN_TO_KB_RE = re.compile(
+    r"^(?:帮我\s*)?(?:把(?:这个|该)?\s*)?(?:文件|文档)?\s*"
+    r"(?:学到|学进|入库到|放入|放进|存到|存进)\s*"
+    r"(.+?)(?:知识库|库)?[!！。.]?$"
+)
 # 「我的文件」：查看自己上传过的文件
 _MY_FILES_RE = re.compile(r"^(查看\s*)?(?:我的文件|我的上传|我上传的文件)$")
 # 「删除学习 X」/「删除 X」
@@ -164,11 +170,14 @@ def _collect_rich_strings(v, out: list[str]):
             _collect_rich_strings(it, out)
 
 
-def learn_dingtalk_doc_for_user(user_id: str) -> dict:
-    """为用户学习最近一个钉钉文档候选（懒加载避免循环 import）"""
+def learn_dingtalk_doc_for_user(user_id: str, kb=None) -> dict:
+    """为用户学习最近一个钉钉文档候选（懒加载避免循环 import）
+
+    kb: 可选，指定知识库（v1.11.5 多库），透传给 doc_learn。
+    """
     try:
         from dashboard.doc_learn import learn_dingtalk_doc
-        return learn_dingtalk_doc(user_id)
+        return learn_dingtalk_doc(user_id, kb=kb)
     except Exception as e:
         logger.warning(f"钉钉文档学习失败: {e}")
         return {"has_candidate": False, "ok": False, "message": f"学习失败：{e}",
@@ -176,10 +185,12 @@ def learn_dingtalk_doc_for_user(user_id: str) -> dict:
 
 
 def _format_doc_learn_result(result: dict) -> str:
-    """格式化「帮我学习」钉钉文档入库结果（v1.11.2：说明入库去向与用途）"""
+    """格式化「帮我学习」钉钉文档入库结果（v1.11.2：说明入库去向与用途；
+    v1.11.5：支持指定知识库名）"""
     if result.get("ok"):
+        kb_name = result.get("kb_name") or "标准文档库"
         return (
-            "✅ 已存入企业知识库（标准文档库）\n"
+            f"✅ 已存入企业知识库（{kb_name}）\n"
             f"· 内容块：{result.get('chunk_count', '?')} 块\n"
             f"· 记录：{result.get('records', 0)} 条\n"
             "· 现在可用自然语言检索这份内容\n\n"
@@ -227,7 +238,9 @@ def _format_learn_result(result: dict) -> str:
     """格式化「帮我学习」/「重新学习」结果"""
     status = result.get("status")
     if status == "ok":
-        coll = _COLLECTION_LABELS.get(result.get("collection", ""), "标准文档库")
+        coll = (result.get("kb_name")
+                or _COLLECTION_LABELS.get(result.get("collection", ""),
+                                          result.get("collection", "知识库")))
         return (
             f"✅ 学习完成：{result.get('file_name', '')}\n"
             f"已入库到{coll}，共 {result.get('chunk_count', 0)} 块。\n\n"
@@ -530,6 +543,34 @@ class ErrorQueryHandler(ChatbotHandler):
                     return {"answer": answer, "source": "knowledge_learn"}
             except Exception as e:
                 logger.warning(f"推荐入库确认处理失败: {e}")
+
+        # 5.75 学到指定知识库（v1.11.5 多库）：「把这个文档学到产品手册」
+        m = _LEARN_TO_KB_RE.match(t)
+        if m:
+            kb_name = (m.group(1) or "").strip()
+            try:
+                from kb_registry import list_knowledge_bases, resolve_kb
+                kb = resolve_kb(kb_name) if kb_name else None
+            except Exception:
+                kb = None
+            if not kb:
+                names = "、".join(
+                    k["name"] for k in list_knowledge_bases())
+                answer = (f"没找到知识库「{kb_name}」。当前可用：{names}。"
+                          f"回复「创建知识库，名字叫XX」可新建。")
+            else:
+                # 先看有没有钉钉文档候选，有则学文档到该库；无候选走文件路径
+                doc_result = learn_dingtalk_doc_for_user(user_id, kb=kb)
+                if doc_result.get("has_candidate"):
+                    doc_result["kb_name"] = kb.get("name")
+                    answer = _format_doc_learn_result(doc_result)
+                else:
+                    result = learn_file_for_user(user_id, kb=kb)
+                    result["kb_name"] = kb.get("name")
+                    answer = _format_learn_result(result)
+            if on_chunk:
+                on_chunk(answer, "done")
+            return {"answer": answer, "source": "knowledge_learn"}
 
         # 6. 帮我学习 → 直接入库（v1.10.2 取消主管审核）
         if _is_learn_command(t):
@@ -955,6 +996,20 @@ class ErrorQueryHandler(ChatbotHandler):
                         "name": result.get("file_name", file_name),
                         "path": result.get("file_path", ""),
                     })
+
+            # v1.11.5：图片保存路径写入会话记忆，让 Agent 后续能定位图片
+            #（如「帮我识别这个图片的内容」；describe_image 也支持按文件名查找）
+            if saved_files:
+                try:
+                    from skills import memory
+                    for item in saved_files:
+                        if item["path"]:
+                            memory.add(user_id, "user",
+                                       f"[发送图片] {item['name']}（路径：{item['path']}）")
+                        else:
+                            memory.add(user_id, "user", f"[发送图片] {item['name']}")
+                except Exception as mem_err:
+                    logger.warning(f"记录图片记忆失败: {mem_err}")
 
             # 识图：已配置 key 时逐张调 describe_image（千问视觉）
             from config import DASHSCOPE_API_KEY

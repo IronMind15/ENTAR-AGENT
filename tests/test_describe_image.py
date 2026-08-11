@@ -84,6 +84,19 @@ class DescribeImageToolTests(unittest.TestCase):
         out = json.loads(describe_image.execute({"image_path": str(SCRIPTS_DIR / "config.py")}))
         self.assertIn("上传目录", out.get("error", ""))
 
+    def test_filename_lookup_in_uploads(self):
+        """v1.11.5：LLM 上下文只有文件名（image_1.png，三段式路径不全）时，
+        按文件名在上传目录递归查找兜底"""
+        nested = self.tmp_path / "研发中心" / "张三" / "2026-08-11"
+        nested.mkdir(parents=True, exist_ok=True)
+        img = nested / "image_1.png"
+        img.write_bytes(MAGIC["png"])
+        with mock.patch.object(describe_image, "_UPLOAD_ROOT", self.tmp_path), \
+             mock.patch.object(describe_image._HTTP_CLIENT, "post") as mpost:
+            mpost.return_value = _FakeResp(200, {"choices": [{"message": {"content": "电路板特写"}}]})
+            out = json.loads(describe_image.execute({"image_path": "image_1.png"}))
+        self.assertEqual(out["description"], "电路板特写")
+
     # ── 格式识别 ──
     def test_mime_detection(self):
         for mime, magic in MAGIC.items():

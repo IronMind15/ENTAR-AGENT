@@ -17,9 +17,16 @@ class ParseIntentTests(unittest.TestCase):
     """各意图识别"""
 
     def test_create(self):
-        for text in ("帮我推个看板", "帮我每日推送项目看板", "我想看看板"):
+        for text in ("帮我推个看板", "帮我每日推送项目看板", "给我推个看板",
+                     "替我每天推看板"):
             r = sc.parse_subscription_command(text)
             self.assertEqual(r["intent"], "create", text)
+
+    def test_query_view_not_create(self):
+        """v1.11.5：想看实时看板（我想看看板/现在推看板）→ 放行 Agent 调
+        query_dashboard/push_dashboard 工具，不建订阅、不误判"""
+        for text in ("我想看看板", "帮我看看板", "看板今天怎么样", "现在推看板", "马上推看板"):
+            self.assertIsNone(sc.parse_subscription_command(text), text)
 
     def test_change_time(self):
         r = sc.parse_subscription_command("改看板时间到10点")
@@ -42,6 +49,27 @@ class ParseIntentTests(unittest.TestCase):
         r = sc.parse_subscription_command("不要推给李四了")
         self.assertEqual(r["intent"], "change_recipients")
         self.assertFalse(r["add"])
+        self.assertEqual(r["recipient_names"], ["李四"])
+
+    def test_remove_recipient_trailing_particle(self):
+        """v1.11.5：句末语气词剥掉——「李四了」取人名「李四」"""
+        r = sc.parse_subscription_command("别推给王工啦")
+        self.assertEqual(r["intent"], "change_recipients")
+        self.assertEqual(r["recipient_names"], ["王工"])
+        self.assertFalse(r["add"])
+
+    def test_recipient_self_not_change(self):
+        """④v1.11.5：「只推送给我自己」接收人本就是自己，不当作加人"""
+        r = sc.parse_subscription_command("只推给我自己")
+        self.assertEqual(r["intent"], "set_recipient_self")
+
+    def test_pasted_again_not_recipient(self):
+        """⑤v1.11.5：「我已经粘贴过了重新发给了你」的「了你」不是人名"""
+        self.assertIsNone(sc.parse_subscription_command("我已经粘贴过了重新发给了你"))
+
+    def test_kanban_relationship_question_not_create(self):
+        """⑥v1.11.5：质疑反问「这跟看板功能有什么关系」不拦截、不建订阅"""
+        self.assertIsNone(sc.parse_subscription_command("这跟看板功能有什么关系"))
 
     def test_stop(self):
         r = sc.parse_subscription_command("停掉看板")

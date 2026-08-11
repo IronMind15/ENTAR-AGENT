@@ -1,6 +1,7 @@
 """经验知识库查询测试（第二步 experience_kb）：search_kb / 格式化 / Agent 工具"""
 
 import json
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -81,36 +82,64 @@ class ExperienceFormatTests(unittest.TestCase):
 
 
 class SearchExperienceToolTests(unittest.TestCase):
-    """Agent 工具 search_experience_kb"""
+    """v1.11.5：通用 search_knowledge_base 工具检索经验知识库（取代旧 search_experience_kb）"""
+
+    def setUp(self):
+        import tempfile
+        from kb_registry import KBRegistry
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self._db_path = path
+        self.reg = KBRegistry(db_path=path)
+        self.patch_reg = mock.patch("kb_registry.get_registry", return_value=self.reg)
+        self.patch_reg.start()
+        self.addCleanup(self.patch_reg.stop)
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self):
+        try:
+            self.reg.close()
+        except Exception:
+            pass
+        for suffix in ("", "-wal", "-shm"):
+            p = self._db_path + suffix
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
 
     def test_tool_registered(self):
         from tools import get_tool_names
-        self.assertIn("search_experience_kb", get_tool_names())
+        self.assertIn("search_knowledge_base", get_tool_names())
+        # 旧独立工具不再注册（统一由通用工具承担）
+        self.assertNotIn("search_experience_kb", get_tool_names())
 
     def test_tool_empty_query_error(self):
-        from tools.search_experience_kb import execute
+        from tools.search_knowledge_base import execute
         r = json.loads(execute({"query": "  "}))
         self.assertIn("error", r)
 
     def test_tool_found_structure(self):
-        from tools.search_experience_kb import execute
+        from tools.search_knowledge_base import execute
         fake_results = [{
             "std_title": "经验条目：过温", "_content": "清理风扇",
             "chapter_title": "解决方案", "_score": 0.3, "_match_type": "semantic",
         }]
         with mock.patch("skills.experience_query.search_kb",
                         return_value=fake_results):
-            r = json.loads(execute({"query": "过温"}))
+            r = json.loads(execute({"query": "过温", "knowledge_base": "经验知识库"}))
         self.assertTrue(r["found"])
         self.assertEqual(len(r["results"]), 1)
+        self.assertEqual(r["results"][0]["kb_name"], "经验知识库")
         # 内部字段清理：_content 重命名为 content_summary 供 LLM 参考
         self.assertIn("content_summary", r["results"][0])
         self.assertNotIn("_match_type", r["results"][0])
 
     def test_tool_not_found(self):
-        from tools.search_experience_kb import execute
+        from tools.search_knowledge_base import execute
         with mock.patch("skills.experience_query.search_kb", return_value=[]):
-            r = json.loads(execute({"query": "xxx"}))
+            r = json.loads(execute({"query": "xxx", "knowledge_base": "经验知识库"}))
         self.assertFalse(r["found"])
 
 

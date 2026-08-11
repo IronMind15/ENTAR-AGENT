@@ -14,7 +14,7 @@
 
 恩特能源（天津恩特能源科技有限公司，Tianjin Entar Energy Technology Co., Ltd.，品牌 ENTAR）AI Agent 项目。目标是搭建面向中小企业的 AI Agent 全生命周期管理平台。
 
-### 当前进度：三步走计划 — 第一步稳定化 + 第二步经验知识库启动（v1.11.4）
+### 当前进度：三步走计划 — 第一步稳定化 + 第二步经验知识库启动（v1.11.5）
 
 **第一步：智能查询 + 标准文档检索 + 通用聊天 + 多技能（故障/标准/PCB 计算）——核心能力已完成，正在做真实环境验收与安全收尾**
 - 基于 RAG（检索增强生成）架构的内部工具
@@ -35,11 +35,13 @@
 - ✅ 钉钉文档类型自动识别（v1.11.1）：入口统一允许所有类型——发任意钉钉文档链接（AI表格 notable / 在线表格 workbook / 普通文档 doc）自动探测类型后按类型读取；doc 走 `GET /v1.0/doc/suites/documents/{node}/blocks`（需 **Storage.File.Read** 权限），blocks 逐块转保真 Markdown（段落→正文、表格→Markdown 表格、单元格 `\n`→`<br>`）；「帮我学习」doc 按全文 Markdown 入库；doc 也可做看板数据源（格式不统一，采集全文由 LLM 提炼）
 - ✅ 实测修复包（v1.11.2）：一次发多个文档链接不再丢（`urls[:5]` 放宽）；卡片/富文本消息也能识别「做每日看板」意图（`_handle_doc_link_with_kanban` 合并文档摘要 + 看板创建确认，接入文本/富文本/卡片三处路由）；「帮我学习」说明加强——入库进哪个库（企业知识库·标准文档库）、怎么检索（自然语言命中示例）、看板不受影响（实时拉取不进库），入库成功提示补块数/记录数/「我的文件」入口
 - ✅ 上传文件自动推荐入库（v1.11.0）：保存后回执主动推荐「要不要入库？回复『入库/确认』」→ 按路径入库（learn_file_path）；图片不支持不推荐
+- ✅ 多知识库注册表（v1.11.5）：SQLite 表 `knowledge_bases`（key/name/description/collection/department/enabled）注册管理，种子故障/标准/经验三库；钉钉自然语言创建（「创建知识库，名字叫产品手册，用来放产品说明书，研发部」）；「把这个文档学到XX」学习入库指定库（target_collection/department 从 KB 继承）；`department` 字段为分部门开权限预留（`get_visible_knowledge_bases` 按 centers 过滤，现全 public 不拦截）
+- ✅ 通用知识库查询工具（v1.11.5）：`search_knowledge_base(query, knowledge_base="")` 一个工具替代旧 3 个——指定库按 collection 分发（故障码精确/标准编号精确/经验语义/自定义 enhanced_query + department where 过滤），留空自动全可见库合并搜索，每条带 kb_name + source_label；旧 search_standards/search_experience_kb 文件保留不再注册（10→9 工具）
 - ✅ SQLite 用户、对话和权限存储（v1.2.4）
 - ✅ Web 同步管理、强制重学和任务进度追踪（v1.2.5）
 - ✅ SHA-256 内容指纹、安全版本替换和 MinerU 安全加固（v1.2.6）
 - ⏸️ 上传审核流程（v1.10.2 已停用）：固定审核人主动推送与审批口令代码保留注释，未来恢复部门划分与审核时取消 `queue_review_for_upload` 注释即可
-- ✅ 604 项自动化回归测试（含 65 项 PCB 计算 + 文档处理/版本替换/上传审核 + 并发/路由 + 通讯录查询 + 反馈/Prompt/引用溯源 + 识图 + 上传直接学习/我的文件/删除/管理员 + PDF 检测路由 + 看板配置/解析/采集/组装/订阅/技能/调度/动态源/文档学习入库 + 上传推荐入库 + 每日必推 change_banner/本次文档做数据源/今日要点）
+- ✅ 642 项自动化回归测试（含 65 项 PCB 计算 + 文档处理/版本替换/上传审核 + 并发/路由 + 通讯录查询 + 反馈/Prompt/引用溯源 + 识图 + 上传直接学习/我的文件/删除/管理员 + PDF 检测路由 + 看板配置/解析/采集/组装/订阅/技能/调度/动态源/文档学习入库 + 上传推荐入库 + 每日必推 change_banner/本次文档做数据源/今日要点 + 多知识库注册表/创建/通用查询/部门可见性 + 订阅指令误判 + LLM 超时兜底）
 - ✅ 局域网共享（防火墙放行端口 8000）
 - ✅ 同事实测通过
 - ⚠️ v1.4.1 尚未在正式知识库、真实 MinerU 和钉钉生产环境完成端到端回归
@@ -92,12 +94,14 @@ D:\ENTAR_AGENT\
 │   │   │   ├── unstructured_chunk.py            #    Unstructured 备用
 │   │   │   └── fallback.py                      #    滑动窗口回退
 │   │   └── extractors/                          #    文本提取（Excel + PyMuPDF）
+│   ├── kb_registry.py                           # 🆕 知识库注册表（v1.11.5：SQLite 表 + 部门可见性）
 │   ├── tools/                                   # 🆕 工具注册中心（v1.2.7）
 │   │   ├── __init__.py                          #    @register 注册 + 分发
-│   │   ├── search_knowledge_base.py             #    知识库检索工具
-│   │   ├── search_standards.py                  #    标准检索工具
+│   │   ├── search_knowledge_base.py             # 🆕 通用知识库查询（v1.11.5：指定库分发/全库合并）
+│   │   ├── create_knowledge_base.py             # 🆕 钉钉自然语言创建知识库（v1.11.5）
 │   │   ├── calc_pcb_trace.py                    #    PCB 走线计算工具（IPC-2221）
-│   │   └── search_experience_kb.py              # 🆕 经验知识库检索工具（v1.4.2）
+│   │   ├── search_standards.py                  # ⚠️ 已停用注册（v1.11.5 由通用工具替代，文件保留）
+│   │   └── search_experience_kb.py              # ⚠️ 已停用注册（v1.11.5 由通用工具替代，文件保留）
 │   └── skills/
 │       ├── __init__.py
 │       ├── agent.py                             # 🤖 Agent 循环路由（聊天托底）
@@ -230,7 +234,9 @@ FastAPI (main.py) → Agent 循环（agent.py）
 | Web 框架 | FastAPI | Web 页面 + HTTP API 入口（/admin 挂载） |
 | 钉钉 SDK | dingtalk-stream | Stream 模式，WebSocket 长连接，无需公网 IP |
 | Agent 路由 | agent.py | 统一 Agent 循环：路由、聊天托底、记忆管理 |
-| 工具注册 | tools/ | @register 装饰器注册，新增工具无需改 agent.py（v1.2.7） |
+| 工具注册 | tools/ | @register 装饰器注册，新增工具无需改 agent.py（v1.2.7）；v1.11.5 查询工具收敛为 1 个通用 search_knowledge_base（10→9 工具） |
+| 知识库注册表 | kb_registry.py（v1.11.5） | SQLite 表 `knowledge_bases`（key/name/description/collection/department/enabled）注册管理，种子三库（故障/标准/经验）；钉钉自然语言创建（tools/create_knowledge_base.py）；「把这个文档学到XX」学习入库指定库；`department` 字段 + `get_visible_knowledge_bases(centers)` 分部门开权限预留（现全 public 不拦截） |
+| 通用知识库查询 | tools/search_knowledge_base.py（v1.11.5） | `search_knowledge_base(query, knowledge_base="")` 指定库按 collection 分发（故障码精确/标准编号精确/经验语义/自定义 enhanced_query + department where 过滤），留空自动全可见库合并搜索，每条带 kb_name + source_label；旧 search_standards / search_experience_kb 文件保留不再注册 |
 | 标准查询 | standards_query.py | 标准文档检索工具（含标准编号快速通道 v1.2.3） |
 | 增强检索 | enhanced_search.py | 向量 + BM25 双路召回 RRF 融合 + bge-reranker 重排（v1.3.0） |
 | PCB 计算 | pcb_calc.py + tools/calc_pcb_trace.py | 54 类 PCB 计算器，全本地秒回（v1.5.4 以 pcb-tools.cn 为基准） |
@@ -238,7 +244,7 @@ FastAPI (main.py) → Agent 循环（agent.py）
 | 识图能力 | describe_image.py + qwen3.7-flash | 钉钉发图自动识别描述（视觉外挂，v1.10.0）；tools/ 注册 + Claude Code vision skill；magic bytes + 路径白名单 + 5xx 重试 |
 | 上传直接学习 | knowledge_review.py + dingtalk_notifier.py + file_handler.py | ⏸️ 审核已停用（v1.10.2）：上传→回「帮我学习」直接入库；「我的文件」查看、删除/重新学习、`ENTARBOSS` 管理员模式；审核代码保留注释可恢复 |
 | 崩溃恢复 | doc_mgr/recovery.py | 启动时清理/恢复遗留 staging/retired 版本数据 |
-| 自动化测试 | unittest | 604 项文档引擎、同步追踪、PCB 计算、安全和版本替换、并发路由、通讯录查询、反馈/Prompt/引用溯源、识图、上传直接学习/我的文件/删除、PDF 检测路由、看板配置/解析/采集/组装/订阅/技能/调度/动态源、文档学习入库、上传推荐入库、每日必推变化标注/本次文档数据源/今日要点测试 |
+| 自动化测试 | unittest | 642 项文档引擎、同步追踪、PCB 计算、安全和版本替换、并发路由、通讯录查询、反馈/Prompt/引用溯源、识图、上传直接学习/我的文件/删除、PDF 检测路由、看板配置/解析/采集/组装/订阅/技能/调度/动态源、文档学习入库、上传推荐入库、每日必推变化标注/本次文档数据源/今日要点、多知识库注册表/创建/通用查询/部门可见性、订阅指令误判、LLM 超时兜底测试 |
 | 部署 | Docker + docker-compose | 可选容器化部署 |
 
 ## 运行方式

@@ -1,10 +1,13 @@
 """
+⚠️ v1.11.5 已由通用 search_knowledge_base 替代（不再注册，本文件仅作参考）。
+
 工具：search_experience_kb
 搜索公司内部工程经验知识库（维修记录、常见问题、故障排查经验）。
 
 经验条目为五段式：故障现象 → 排查步骤 → 根因 → 解决方案 → 验证结果。
 当用户询问"怎么排查/怎么解决/遇到过吗/维修经验/常见问题怎么处理"时使用。
 不包含 PCS 故障代码定义（用 search_knowledge_base）和行业标准规范（用 search_standards）。
+多库改造后经验检索由 search_knowledge_base(query, knowledge_base='经验知识库') 承担。
 """
 
 import json
