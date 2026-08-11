@@ -4,13 +4,20 @@
 纯函数，零外部依赖，可单测。参考方法论文档 §3.3/§3.4/§4。
 """
 
+import hashlib
+import json
 import logging
 import re
+from datetime import datetime
 from typing import Optional
 
 from .config_model import FieldSpec, SourceConfig
 
 logger = logging.getLogger("dashboard.parser")
+
+_SENSITIVE_LABEL_RE = re.compile(
+    r"(password|passwd|secret|token|client.?secret|access.?key|密码|密钥|令牌|"
+    r"身份证|银行卡|手机号)", re.IGNORECASE)
 
 
 # ===== 单元格通用解析（方法论 §3.3） =====
@@ -126,7 +133,8 @@ def _infer_field_map(records: list[dict]) -> dict:
     return out
 
 
-def _extract_field(cells: dict, fid: str, spec: FieldSpec) -> str:
+def _extract_field(cells: dict, fid: str, spec: FieldSpec,
+                   truncate: bool = True) -> str:
     """提取单个字段：按 type 解析 + 截断。
 
     records 的键可能是 field_id 或中文列名（钉钉 AI表格 records 实测用中文列名，
@@ -139,9 +147,38 @@ def _extract_field(cells: dict, fid: str, spec: FieldSpec) -> str:
         return format_number(raw)
     value = extract_cell_value(raw)
     max_len = spec.max_len or 200
-    if len(value) > max_len:
+    if truncate and len(value) > max_len:
         value = value[:max_len] + "…"
     return value
+
+
+def _is_sensitive_label(label: str) -> bool:
+    """仅拦截凭证和高风险个人标识；普通业务字段完整交给 LLM。"""
+    return bool(_SENSITIVE_LABEL_RE.search(label or ""))
+
+
+def _source_url(source: SourceConfig) -> str:
+    if source.source_url:
+        return source.source_url
+    if source.base_id:
+        return f"https://alidocs.dingtalk.com/i/nodes/{source.base_id}"
+    return ""
+
+
+def _record_identity(source: SourceConfig, rec: dict, fields: dict,
+                     row_number: int) -> tuple[str, str]:
+    """优先使用平台记录 ID；否则用业务首字段生成跨排序稳定键。"""
+    for key in ("recordId", "record_id", "id"):
+        value = rec.get(key)
+        if value not in (None, ""):
+            record_id = str(value)
+            return record_id, record_id
+    business_value = next((str(v) for k, v in fields.items()
+                           if v and "状态" not in k), "")
+    seed = json.dumps([source.key, business_value or fields], ensure_ascii=False,
+                      sort_keys=True, default=str)
+    stable_key = "auto-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
+    return stable_key, stable_key if business_value else f"{stable_key}-{row_number}"
 
 
 def parse_source_records(source: SourceConfig, records: list[dict],
@@ -171,15 +208,44 @@ def parse_source_records(source: SourceConfig, records: list[dict],
     normal_items: list[dict] = []
     other_items: list[dict] = []
 
-    for rec in records or []:
+    captured_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    detailed_items: list[dict] = []
+    identity_counts: dict[str, int] = {}
+    for row_number, rec in enumerate(records or [], 1):
         if not isinstance(rec, dict):
             continue
         cells = rec.get("cells") or rec.get("fields") or rec
         if not isinstance(cells, dict):
             continue
         item: dict = {}
+        detailed_fields: dict = {}
         for fid, spec in field_map.items():
+            if _is_sensitive_label(spec.label):
+                continue
             item[spec.label] = _extract_field(cells, fid, spec)
+            detailed_fields[spec.label] = _extract_field(
+                cells, fid, spec, truncate=False)
+        record_id, record_key = _record_identity(
+            source, rec, detailed_fields, row_number)
+        identity_counts[record_key] = identity_counts.get(record_key, 0) + 1
+        if identity_counts[record_key] > 1:
+            suffix = identity_counts[record_key]
+            record_id = f"{record_id}-{suffix}"
+            record_key = f"{record_key}-{suffix}"
+        evidence = {
+            "source_key": source.key,
+            "source_name": source.name,
+            "source_kind": source.kind,
+            "source_url": _source_url(source),
+            "node_id": source.base_id,
+            "sheet_id": source.table_id,
+            "table_name": table_name or "",
+            "record_id": record_id,
+            "record_key": record_key,
+            "row_number": row_number,
+            "captured_at": captured_at,
+        }
+        detailed_items.append({"fields": detailed_fields, "evidence": evidence})
         # 状态统计与分组
         status_value = item.get(status_label, "") if status_label else ""
         if status_label:
@@ -198,6 +264,13 @@ def parse_source_records(source: SourceConfig, records: list[dict],
         "table_name": table_name or "",
         "total": len(items),
         "items": items,
+        "detailed_items": detailed_items,
+        "source_meta": {
+            "source_key": source.key, "source_name": source.name,
+            "source_kind": source.kind, "source_url": _source_url(source),
+            "node_id": source.base_id, "sheet_id": source.table_id,
+            "table_name": table_name or "", "captured_at": captured_at,
+        },
         "status_counts": status_counts,
         "attention_items": attention_items,
         "normal_items": normal_items,

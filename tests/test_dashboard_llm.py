@@ -94,6 +94,15 @@ class CallDeepseekWrapperTests(unittest.TestCase):
             text = service.assemble(_parsed_results(), llm_func=call_deepseek)
         self.assertIn("## 一、研发项目现况表", text)
 
+    @mock.patch("skills.agent._call_deepseek")
+    def test_json_wrapper_disables_thinking(self, mock_call):
+        mock_call.return_value = {"role": "assistant", "content": "{\"ok\":true}"}
+        from skills.agent import call_deepseek_json
+        self.assertEqual(call_deepseek_json("x"), '{"ok":true}')
+        self.assertFalse(mock_call.call_args.kwargs["thinking"])
+        self.assertTrue(mock_call.call_args.kwargs["json_output"])
+        self.assertGreater(mock_call.call_args.kwargs["timeout_seconds"], 60)
+
 
 if __name__ == "__main__":
     unittest.main()

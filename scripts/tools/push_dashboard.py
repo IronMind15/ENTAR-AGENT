@@ -40,7 +40,16 @@ def execute(args: dict) -> str:
             ensure_ascii=False)
 
     recipients = list({sid for s in subs for sid in s.recipients})
-    text = service.assemble(parsed, title=sub0.title, date_str=service.today_str())
+    try:
+        from skills.agent import call_deepseek_json
+        text = service.assemble(
+            parsed, title=sub0.title, date_str=service.today_str(),
+            llm_func=call_deepseek_json, old_snapshot=sub0.last_snapshot,
+            evidence_pipeline=True, errors=errors)
+    except Exception:
+        text = service.assemble(
+            parsed, title=sub0.title, date_str=service.today_str(),
+            old_snapshot=sub0.last_snapshot, evidence_pipeline=True, errors=errors)
     ok, msg = service.push(recipients, sub0.title, text)
     if not ok:
         return json.dumps({"error": f"推送失败：{msg}"}, ensure_ascii=False)

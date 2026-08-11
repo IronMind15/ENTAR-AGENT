@@ -7,7 +7,7 @@ from tools import register
 DEFINITION = {
     "name": "query_dashboard",
     "description": (
-        "实时查询恩特能源项目看板数据（研发项目现况表/整机下线测试问题等），"
+        "实时查询当前已登记的企业项目看板数据，自动适配新增、删除或更换的数据源，"
         "返回 Markdown 看板正文。用于回答『今天看板怎么样』『现在有哪些滞后项目/故障问题』等。"
         "注意：看板数据源 base_id 未配置时返回未配置提示。"
     ),
@@ -31,5 +31,12 @@ def execute(args: dict) -> str:
         return json.dumps(
             {"error": "看板暂无数据：" + ("；".join(errors[:3]) or "数据源未配置")},
             ensure_ascii=False)
-    text = service.assemble(parsed, date_str=service.today_str())
+    try:
+        from skills.agent import call_deepseek_json
+        text = service.assemble(parsed, date_str=service.today_str(),
+                                llm_func=call_deepseek_json,
+                                evidence_pipeline=True, errors=errors)
+    except Exception:
+        text = service.assemble(parsed, date_str=service.today_str(),
+                                evidence_pipeline=True, errors=errors)
     return json.dumps({"dashboard": text, "sources": len(parsed)}, ensure_ascii=False)

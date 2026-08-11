@@ -101,10 +101,26 @@ def call_deepseek(prompt: str, max_tokens: int = 4000) -> str:
     return ""
 
 
+def call_deepseek_json(prompt: str, max_tokens: int = 4000) -> str:
+    """结构化提炼专用调用：关闭思考模式，避免推理 token 挤占 JSON 正文。"""
+    try:
+        resp = _call_deepseek([{"role": "user", "content": prompt}],
+                              max_tokens=max_tokens, thinking=False,
+                              json_output=True, timeout_seconds=100)
+        if resp and resp.get("content"):
+            return resp["content"]
+    except Exception as e:
+        logger.warning(f"call_deepseek_json 失败: {e}")
+    return ""
+
+
 def _call_deepseek(
     messages: list[dict],
     tools: list | None = None,
     max_tokens: int = 8000,
+    thinking: bool = True,
+    json_output: bool = False,
+    timeout_seconds: float = 60,
 ) -> dict | None:
     """调用 DeepSeek API（通用封装）
 
@@ -127,8 +143,10 @@ def _call_deepseek(
         "messages": messages,
         "temperature": 0.3,
         "max_tokens": max_tokens,
-        "thinking": {"type": "enabled"},
     }
+    body["thinking"] = {"type": "enabled" if thinking else "disabled"}
+    if json_output:
+        body["response_format"] = {"type": "json_object"}
     # 注意：thinking mode 启用后 temperature/top_p 等采样参数自动失效
     if tools:
         body["tools"] = tools
@@ -146,6 +164,7 @@ def _call_deepseek(
                     "https://api.deepseek.com/chat/completions",
                     headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
                     json=body,
+                    timeout=timeout_seconds,
                 )
             if r.status_code == 200:
                 data = r.json()

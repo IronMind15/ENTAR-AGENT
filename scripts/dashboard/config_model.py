@@ -41,6 +41,7 @@ class SourceConfig:
     source: str = "dingtalk_doc"        # dingtalk_doc | xlsx_file（v1.11 只做 dingtalk_doc）
     kind: str = "notable"               # notable | workbook | doc
     base_id: str = ""                   # AI表格 Base ID（= 文档 nodeId）
+    source_url: str = ""                # 原始钉钉文档地址（报告来源索引用）
     table_mode: str = "fixed"           # fixed | latest_week（按周分表自动取最新）
     table_id: str = ""                  # fixed 模式的 sheetId
     field_map: dict[str, FieldSpec] = field(default_factory=dict)  # field_id → FieldSpec
@@ -103,6 +104,7 @@ def _parse_sources(data: dict) -> list[SourceConfig]:
             source=str(raw.get("source", "dingtalk_doc")),
             kind=str(raw.get("kind", "notable")),
             base_id=str(raw.get("base_id", "")),
+            source_url=str(raw.get("source_url", "")),
             table_mode=str(raw.get("table_mode", "fixed")),
             table_id=str(raw.get("table_id", "")),
             field_map=field_map,

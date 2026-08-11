@@ -108,6 +108,7 @@ def _execute_subscription(sub) -> dict:
 
     parsed, errors = service.collect_and_parse(
         sources, operator_id=sub.owner_union_id, staff_id=sub.owner_staff_id)
+    errors = service.source_resolution_warnings(sub, sources) + errors
     if not parsed:
         detail = "；".join(errors[:2]) or "采集结果为空"
         logger.warning(f"[看板] 订阅 {sub.id} 采集为空：{detail}")
@@ -118,6 +119,10 @@ def _execute_subscription(sub) -> dict:
     changed = has_changes(sub.last_snapshot, snap)
 
     if sub.alert_mode == "changes_only" and not changed:
+        # 旧版去噪快照静默升级为完整记录快照，下一次即可检测业务字段变化。
+        if sub.last_snapshot and any(
+                "records" not in source for source in sub.last_snapshot):
+            get_subscription_store().set_snapshot(sub.id, snap)
         logger.info(f"[看板] 订阅 {sub.id} 数据无变化，静默（changes_only）")
         return {"ok": False, "reason": "no_changes"}
     if sub.alert_mode == "off":
@@ -125,11 +130,15 @@ def _execute_subscription(sub) -> dict:
 
     # LLM 组装 → 失败/超长规则兜底（service.assemble 内部处理）
     try:
-        from skills.agent import call_deepseek
+        from skills.agent import call_deepseek_json
         text = service.assemble(parsed, title=sub.title, date_str=service.today_str(),
-                                llm_func=call_deepseek)
+                                llm_func=call_deepseek_json,
+                                old_snapshot=sub.last_snapshot,
+                                evidence_pipeline=True, errors=errors)
     except Exception:
-        text = service.assemble(parsed, title=sub.title, date_str=service.today_str())
+        text = service.assemble(
+            parsed, title=sub.title, date_str=service.today_str(),
+            old_snapshot=sub.last_snapshot, evidence_pipeline=True, errors=errors)
 
     # 每日必推：顶部注入变化标注（有变化列变更、无变化显式说明）
     if sub.alert_mode == "always":

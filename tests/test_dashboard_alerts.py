@@ -71,6 +71,18 @@ class HasChangesTests(unittest.TestCase):
         b = make_snapshot([_res()])
         self.assertTrue(has_changes(None, b))
 
+    def test_legacy_snapshot_does_not_report_schema_upgrade_as_business_change(self):
+        old = make_snapshot([_res()])
+        enriched = _res(
+            detailed_items=[{
+                "fields": {"项目名称": "项目A", "本周进展": "x"},
+                "evidence": {"record_id": "r1", "record_key": "r1"},
+            }],
+            source_meta={"source_name": "板块一", "source_url": "https://example"},
+        )
+        new = make_snapshot([enriched])
+        self.assertFalse(has_changes(old, new))
+
 
 class DiffSummaryTests(unittest.TestCase):
     def test_no_diff_empty(self):
@@ -156,6 +168,10 @@ class ChangeBannerTests(unittest.TestCase):
         b = make_snapshot([_res()])
         banner = change_banner(None, b)
         self.assertTrue(banner.startswith("📌 今日变化："))
+
+    def test_banner_is_bounded_for_many_sources(self):
+        new = [dict(_res(), source_key=f"source_{i}") for i in range(50)]
+        self.assertLessEqual(len(change_banner([], make_snapshot(new))), 350)
 
 
 if __name__ == "__main__":

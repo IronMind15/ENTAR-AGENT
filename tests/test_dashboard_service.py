@@ -15,6 +15,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 from dashboard.doc_candidates import DocCandidate, DocCandidateStore  # noqa: E402
 from dashboard.service import (  # noqa: E402
     build_dynamic_source, load_all_available_sources, resolve_subscription_sources,
+    source_resolution_warnings,
 )
 from dashboard.subscription_store import Subscription  # noqa: E402
 
@@ -30,6 +31,7 @@ class BuildDynamicSourceTests(unittest.TestCase):
         self.assertEqual(src.base_id, "n1")
         self.assertEqual(src.table_id, "s1")
         self.assertEqual(src.operator_id, "union1")
+        self.assertEqual(src.source_url, "u")
         self.assertEqual(src.field_map["a1"].label, "名称")
         self.assertEqual(src.kind, "notable")
 
@@ -106,6 +108,13 @@ class ResolveSubscriptionSourcesTests(unittest.TestCase):
         with mock.patch("dashboard.config_model.get_source", return_value=None):
             sources = resolve_subscription_sources(sub)
         self.assertEqual(sources, [])
+
+    def test_missing_source_has_generic_warning(self):
+        from dashboard.config_model import SourceConfig
+        sub = self._sub(["doc_1", "doc_2"])
+        warnings = source_resolution_warnings(
+            sub, [SourceConfig(key="doc_1", base_id="n1")])
+        self.assertIn("doc_2", warnings[0])
 
 
 class LoadAllAvailableSourcesTests(unittest.TestCase):

@@ -51,6 +51,7 @@ def build_dynamic_source(cand) -> "SourceConfig":
         source="dingtalk_doc",
         kind=cand.kind or "notable",
         base_id=cand.node_id,
+        source_url=cand.url or "",
         table_mode=cand.table_mode or "fixed",
         table_id=cand.sheet_id or "",
         field_map=field_map,
@@ -86,6 +87,16 @@ def resolve_subscription_sources(sub) -> list:
             if src and src.enabled and source_usable(src):
                 out.append(src)
     return out
+
+
+def source_resolution_warnings(sub, resolved_sources: list) -> list[str]:
+    """报告订阅里已删除、停用或失效的数据源，避免部分缺数却静默出报。"""
+    resolved = {source.key for source in resolved_sources}
+    missing = [key for key in (sub.data_sources or []) if key not in resolved]
+    if not missing:
+        return []
+    return [f"订阅中有 {len(missing)} 个数据源已删除、停用或配置不可用："
+            + "、".join(missing[:5])]
 
 
 def load_all_available_sources() -> list:
@@ -127,8 +138,18 @@ def collect_and_parse(sources: list, operator_id: str = "", staff_id: str = ""):
 
 
 def assemble(parsed: list, title: str = "恩特能源每日项目看板",
-             date_str: str = "", llm_func=None) -> str:
-    """组装 Markdown（llm_func 传入则走 LLM→validate→规则兜底，None 走规则模板）"""
+             date_str: str = "", llm_func=None, old_snapshot=None,
+             evidence_pipeline: bool = False, errors: list[str] | None = None) -> str:
+    """组装 Markdown。
+
+    evidence_pipeline=True 使用完整字段、分批 LLM 和来源校验；默认保留旧接口，
+    避免外部调用在升级时失效。
+    """
+    if evidence_pipeline:
+        from .llm_pipeline import build_dashboard_report
+        return build_dashboard_report(
+            parsed, old_snapshot, llm_func, title=title, date_str=date_str,
+            collection_errors=errors).text
     from .assembler import assemble_markdown, llm_assemble
     if llm_func:
         return llm_assemble(parsed, title=title, date_str=date_str,

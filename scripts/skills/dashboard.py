@@ -254,18 +254,23 @@ class DashboardSkill(BaseSkill):
             return "（数据源未配置，配置后每日自动推送）"
         parsed, errors = service.collect_and_parse(
             sources, operator_id=sub.owner_union_id, staff_id=sub.owner_staff_id)
+        errors = service.source_resolution_warnings(sub, sources) + errors
         if not parsed:
             msg = "；".join(errors[:2]) or "无数据"
             return f"（推送前准备失败：{msg}，配置好数据源后每日自动推送）"
         # 样例推送与定时推送统一走 LLM 组装（失败规则兜底）
         try:
-            from skills.agent import call_deepseek
+            from skills.agent import call_deepseek_json
             text = service.assemble(parsed, title=sub.title,
                                     date_str=service.today_str(),
-                                    llm_func=call_deepseek)
+                                    llm_func=call_deepseek_json,
+                                    old_snapshot=sub.last_snapshot,
+                                    evidence_pipeline=True, errors=errors)
         except Exception:
             text = service.assemble(parsed, title=sub.title,
-                                    date_str=service.today_str())
+                                    date_str=service.today_str(),
+                                    old_snapshot=sub.last_snapshot,
+                                    evidence_pipeline=True, errors=errors)
         ok, msg = service.push(sub.recipients, sub.title, text)
         if ok:
             return "已推送示例看板给您，可先查看效果！"
