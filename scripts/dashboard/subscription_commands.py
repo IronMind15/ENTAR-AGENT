@@ -51,6 +51,18 @@ _ADD_RECIPIENT_RE = re.compile(r"推给|发给|也推|推送给|加上|捎上")
 _REMOVE_RECIPIENT_RE = re.compile(r"不要推给|不发给|去掉|移除|别推给")
 # v1.11.5：「只推给我自己/只发给我」→ 接收人本就是自己，不当作加人
 _SET_SELF_RE = re.compile(r"只?\s*(?:推给|发给|推送|发)\s*我(?:自己)?")
+# v1.11.6：恢复订阅——复用已停用订阅重新启用（不新建重复）；触发词须在 _CREATE_RE
+# 的「开通」之前判定（「重新开通看板」= 恢复，不是新建）
+_RESUME_RE = re.compile(
+    r"恢复.*看板|重新开通.*看板|重新打开.*看板|重新开启.*看板|"
+    r"启用.*看板|重启.*看板|"
+    r"看板.*恢复|看板.*重新开通|看板.*重新打开|"
+    r"继续.*看板推送|接着.*看板推送")
+# v1.11.6：删除订阅——确认后彻底移除（不可恢复）；须在 _QUERY_RE 之前判定
+# （「删除看板订阅」会命中 _QUERY_RE 的「看板.*订阅」被误判成查看设置）
+_DELETE_RE = re.compile(
+    r"删除.*看板|删掉.*看板|解绑.*看板|注销.*看板|移除订阅.*看板|"
+    r"看板.*删除|看板.*删掉|看板.*解绑|看板.*注销")
 _TIME_RE = re.compile(r"\d{1,2}[点时:：]|半")
 _FREQ_RE = re.compile(r"每周|周一到|周[一二三四五六日天]|星期|周末|每隔|隔天|频率")
 # v1.11.5：明确的创建/开通意图才建订阅；否则含「看板」文本放行给 Agent
@@ -104,6 +116,12 @@ def parse_subscription_command(text: str, ctx: Optional[dict] = None) -> Optiona
 
     if _STOP_RE.search(text):
         return {"intent": "stop", **(ctx or {})}
+    if _RESUME_RE.search(text):
+        # v1.11.6：恢复已停用订阅（复用，不新建重复）
+        return {"intent": "resume", **(ctx or {})}
+    if _DELETE_RE.search(text):
+        # v1.11.6：删除订阅（确认后彻底移除）
+        return {"intent": "delete", **(ctx or {})}
     if _QUERY_RE.search(text):
         return {"intent": "query", **(ctx or {})}
     if _SET_SELF_RE.search(text):
@@ -287,6 +305,10 @@ def render_confirmation(pending: dict, current=None) -> str:
     elif intent == "set_recipient_self":
         lines.append("看板推送默认就是只推送给您自己的，无需调整。")
         lines.append("如需增加其他接收人，直接告诉我姓名（如「也推给张工」）。")
+
+    elif intent == "delete":
+        lines.append("好的，将删除您的看板订阅（此操作不可恢复，历史推送配置一并清除）。")
+        lines.append("回复「确认」删除；如果只是想暂停，说「停掉看板」即可。")
 
     elif intent == "stop":
         lines.append("好的，将停止您的每日看板推送。")

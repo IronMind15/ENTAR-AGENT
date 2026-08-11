@@ -3,6 +3,42 @@
 > 📌 **本文档是项目唯一的版本记录（单一事实源）**——README.md、PROGRESS.md 的版本历史均指向本文件，发版时只在这里追加记录。
 > 相关：待办清单见 [TODO.md](TODO.md)，进度看板见 [PROGRESS.md](PROGRESS.md)。
 
+## v1.11.6（2026-08-11）
+
+**🛡️ 看板运维增强：失败告警 + 恢复/删除订阅 + 创建前权限预检 + set_recipient_self 补处理**——看板从「能推」补齐到「能稳定推、能管、坏了一目了然」：①订阅执行失败（数据源不可用/采集为空/推送失败/执行异常）主动推送给创建人 + 管理员（`CONTACT_ADMIN_STAFF_IDS`，逗号/空格/分号分隔），静默失败（用户每天等不到看板却无人知）从此有主动消息兜底；`changes_only` 无变化和 `off` 属正常行为不误告警，告警自身失败不影响主流程；②「重新开通看板」此前会新建重复订阅 → 新增恢复意图（恢复/重新开通/启用/重启看板）复用已停用订阅，不再重复；③「删除看板订阅」此前误判成 query 查看设置 → 新增删除意图（删除/删掉/解绑看板），确认后彻底移除并提示不可恢复；④创建前权限预检——「按这几个文档做每日看板」登记候选后先概要模式探测可读性，不可读的（未分享/应用无权限）剔除并逐条提示，全不可读直接拒绝创建，避免「订阅建好但每天推送失败」；⑤v1.11.5 解析出的 set_recipient_self 意图补上消费（回复「看板默认就是只推送给您自己，无需调整」）。全量回归 **662 项全绿**（此前 642 项）。
+
+### 功能
+
+- **失败告警**（`dashboard_scheduler.py`）：新增 `_admin_staff_ids()`（读 `CONTACT_ADMIN_STAFF_IDS` 拆分去空）+ `_notify_failure(sub, reason)`（推送给 `owner_staff_id` + 管理员，Markdown 说明订阅名 + 失败原因 + 处理建议，自身异常仅记 warning 不影响主流程）；`_execute_subscription` 的 no_sources / no_data / push 失败三点接入，`_tick` 的订阅执行异常 except 也接入；`changes_only` 无变化静默、`off` 停用、`no_changes` 不告警
+- **恢复订阅**（`subscription_commands.py` + `dashboard.py`）：新增 `_RESUME_RE`（恢复/重新开通/重新打开/启用/重启/重新开始…看板）；handle 新增 `resume` 分支调 `_resume_subscription()`——取该用户停用订阅 `set_enabled(True)` 复用原配置，无停用订阅时提示「都在运行中/还没有订阅」，不再新建重复订阅
+- **删除订阅**（`subscription_commands.py` + `dashboard.py`）：新增 `_DELETE_RE`（删除/删掉/解绑/移除…看板）；handle 新增 `delete` 分支——有订阅则存 pending 反问确认，`render_confirmation` 补 delete 文案「好的，将删除您的看板订阅（此操作不可恢复）」；`_execute_pending` 新增 delete 处理（遍历 `sub_ids` 调 `store.delete`，成功后提示可重新开通）
+- **意图判定顺序**（`subscription_commands.py`）：调整为 `stop → resume → delete → query → set_self → recipient → time → freq → create`，恢复/删除在 query 之前命中，杜绝「删除看板订阅」被 `_QUERY_RE` 的「看板.*订阅」吞掉的回归
+- **创建前权限预检**（`dashboard.py`）：新增 `_precheck_doc_candidates(cands)` 返回 `(usable, blocked)`——对每个候选调 `client.read_document(url, summary=True)` 概要模式探测：返回 `ok=False` 剔除并记录原因、抛 `DingTalkDocPermissionError` 剔除（提示「权限不足（应用未授权或文档未分享）」）、其他异常（网络瞬断/限流）不确定不可读则保守放行防误杀；`_handle_doc_create` 在候选非空后调用，全不可读返回「这些文档当前无法读取…」+ 逐条原因 + 处理建议，部分不可读则只用可用候选建订阅
+- **set_recipient_self 补处理**（`dashboard.py`）：v1.11.5 解析出的 `set_recipient_self` 意图补上 handle 分支，回复「看板默认就是只推送给您自己，无需调整」（此前解析出意图但未消费，会落到兜底帮助文本）
+
+### 测试
+
+- 新增 20 项：`test_subscription_commands` 追加恢复意图（恢复/重新开通/重新打开/启用/重新开通我的每日看板）+ 删除意图（删除/删掉/删除看板订阅/解绑/把看板删除）+ `test_delete_not_swallowed_by_query` 回归（「删除看板订阅」不得被 query 吞）；`test_dashboard_skill` 新增 `DocCreatePrecheckTests`（全不可读逐条提示、部分剔除仅用可用候选）+ `HandleResumeDeleteTests`（恢复不新建重复订阅、重新开通=恢复回归、删除确认→落地→提示可重新开通）+ `HandleSetRecipientSelfTests` + `PrecheckTests`（ok=False 剔除/权限错剔除/其他异常放行）；`test_dashboard_scheduler` 新增 `FailureAlertTests`（推送失败通知创建人、无数据源通知创建人、no_changes 静默不告警、off 不告警）+ 已有 no_sources / push_failure 两测试补 `mock.patch("dingtalk_notifier.DingTalkNotifier")` 防真实 API 请求
+- 全量回归 **662 项通过**（此前 642 项）
+
+### 已知限制
+
+- 失败告警的钉钉主动消息依赖应用已开通机器人单聊权限；管理员名单 `CONTACT_ADMIN_STAFF_IDS` 为空时只推送给订阅创建人（local_config 可配）
+- 权限预检走概要模式探测（`summary=True`），概要可读不代表全量采集必然成功（如超大表格翻页超时），但已拦截最常见的权限/未分享问题
+- 删除订阅不可恢复（确认文案已提示）；恢复订阅复用原配置（时间/频率/接收人/数据源），如需调整可再发调整指令
+- 恢复/删除意图的「启用」「删除」等关键词不含「看板」字样时不会命中（`_RESUME_RE`/`_DELETE_RE` 均要求含「看板」，防误伤普通对话）
+
+### 修改文件
+
+| 文件 | 改动 |
+|------|------|
+| `scripts/dashboard/subscription_commands.py` | 新增 `_RESUME_RE`/`_DELETE_RE` + 判定顺序调整（stop→resume→delete→query→set_self）+ delete 确认文案 |
+| `scripts/skills/dashboard.py` | handle 补 resume/delete/set_recipient_self 三分支 + `_resume_subscription` 复用停用订阅 + `_execute_pending` delete 彻底移除 + `_precheck_doc_candidates` 创建前权限预检 |
+| `scripts/dashboard_scheduler.py` | 失败告警：`_admin_staff_ids` + `_notify_failure` 接入 no_sources/no_data/push失败/tick异常（no_changes/off 不告警） |
+| `tests/test_subscription_commands.py` | 新增恢复/删除意图 + 删除不被 query 吞回归测试 |
+| `tests/test_dashboard_skill.py` | 新增 DocCreatePrecheckTests / HandleResumeDeleteTests / HandleSetRecipientSelfTests / PrecheckTests |
+| `tests/test_dashboard_scheduler.py` | 新增 FailureAlertTests（4 例）+ 已有测试补 notifier mock |
+
 ## v1.11.5（2026-08-11）
 
 **🗂️ 多知识库架构改造 + 实测日志 9 问题修复**——用户实测日志排查 9 个问题 + 提出知识库架构改造，一次落地：①「创建知识库」做成独立通用功能（此前 KB 绑定具体内容，集合名散落硬编码），钉钉自然语言创建；②查询工具 3 个独立（search_knowledge_base / search_standards / search_experience_kb）合并成 1 个通用工具，可在不同知识库选择查询或全库合并搜索，LLM 不再选错工具（修「已学习文档搜不到」根因）；③知识库 schema 加 `department` 字段，分部门开权限逻辑预留（`get_visible_knowledge_bases` 按 centers 过滤，现全 public 不拦截）；④静态看板源空 base_id 运行时过滤 + 停用陈旧订阅（修 404 循环）；⑤无可用源返回清晰 JSON 杜绝 Agent 幻觉「推送成功」；⑥订阅指令误判修复（「只推给我自己」/「我已经粘贴过了重新发给了你」/「这跟看板功能有什么关系」）；⑦识图路径修复（写 memory + 文件名递归查找兜底）；⑧文档类型检测 unknown 原因聚合日志；⑨看板 LLM 组装 25s 超时规则兜底（实测曾 37.8s）。全量回归 **642 项全绿**（此前 604 项）。

@@ -86,6 +86,23 @@ class DashboardSkill(BaseSkill):
         if intent == "query":
             return {"answer": cls._render_subscription_status(uid), "source": "dashboard"}
 
+        if intent == "resume":
+            return {"answer": cls._resume_subscription(uid), "source": "dashboard"}
+
+        if intent == "delete":
+            store = get_subscription_store()
+            subs = store.list_for_owner(uid)
+            if not subs:
+                return {"answer": "您还没有订阅看板，无需删除。说「帮我推个看板」即可开通。",
+                        "source": "dashboard"}
+            pending = {"intent": "delete", "sub_ids": [s.id for s in subs]}
+            sub_cmd.set_pending(uid, pending)
+            return {"answer": sub_cmd.render_confirmation(pending), "source": "dashboard"}
+
+        if intent == "set_recipient_self":
+            return {"answer": sub_cmd.render_confirmation({"intent": "set_recipient_self"}),
+                    "source": "dashboard"}
+
         if intent == "stop":
             return {"answer": cls._stop_subscription(uid), "source": "dashboard"}
 
@@ -128,6 +145,16 @@ class DashboardSkill(BaseSkill):
             return {"answer":
                     "请先在钉钉发送要作为看板的文档链接（AI表格/在线表格），"
                     "我识别后就可以按它做每日看板。",
+                    "source": "dashboard"}
+        # v1.11.6：创建前权限预检——概要模式探测可读性，不可读的剔除并提示，
+        # 避免「订阅建好但每天推送失败」
+        cands, blocked = cls._precheck_doc_candidates(cands)
+        if not cands:
+            reasons = "；".join(
+                f"《{b['name']}》{b['reason']}" for b in blocked[:3])
+            return {"answer":
+                    f"这些文档当前无法读取，无法做看板数据源：{reasons}。\n"
+                    "请确认文档已分享给机器人/您本人，且应用已开通文档读取权限。",
                     "source": "dashboard"}
         staff_id = cls._staff_id_of(user_id)
         pending = {
@@ -180,6 +207,17 @@ class DashboardSkill(BaseSkill):
             sub_cmd.clear_pending(user_id)
             note = cls._push_sample(sub)
             return {"answer": f"✅ 已为您开通每日看板推送！{note}", "source": "dashboard"}
+
+        if intent == "delete":
+            # v1.11.6：删除订阅（确认后彻底移除）
+            for sid in (pending.get("sub_ids") or []):
+                try:
+                    store.delete(sid)
+                except Exception:
+                    pass
+            sub_cmd.clear_pending(user_id)
+            return {"answer": "✅ 已删除您的看板订阅。需要的话说「帮我推个看板」重新开通。",
+                    "source": "dashboard"}
 
         sub = store.get(pending.get("sub_id") or 0)
         if not sub:
@@ -263,6 +301,61 @@ class DashboardSkill(BaseSkill):
         for s in subs:
             store.set_enabled(s.id, False)
         return "已停止您的每日看板推送。想恢复说「重新开通看板」，或直接告诉我调整。"
+
+    @classmethod
+    def _resume_subscription(cls, user_id: str) -> str:
+        """恢复订阅（v1.11.6）：重新启用已停用订阅，不新建重复订阅"""
+        store = get_subscription_store()
+        subs = store.list_for_owner(user_id)
+        paused = [s for s in subs if not s.enabled]
+        if not paused:
+            if not subs:
+                return "您还没有订阅看板。说「帮我推个看板」即可开通。"
+            return "您的看板订阅都在运行中，无需恢复。"
+        for s in paused:
+            store.set_enabled(s.id, True)
+        return f"✅ 已恢复 {len(paused)} 条看板订阅，将按原配置每日推送。"
+
+    @classmethod
+    def _precheck_doc_candidates(cls, cands: list) -> tuple[list, list]:
+        """创建前权限预检（v1.11.6）：概要模式探测文档可读性
+
+        Returns:
+            (usable, blocked) — usable: 可读候选；blocked: [{"name", "reason"}]
+        - 明确返回 ok=False（权限/类型不支持/无内容）→ 剔除并记录原因
+        - 探测抛权限错（403）→ 剔除
+        - 其他异常（网络瞬断/限流）不确定不可读 → 保守放行，避免误杀
+        """
+        if not cands:
+            return [], []
+        try:
+            from dingtalk_doc_client import (DingTalkDocPermissionError,
+                                             get_doc_client)
+            client = get_doc_client()
+        except Exception:
+            return list(cands), []
+        usable, blocked = [], []
+        for c in cands:
+            try:
+                result = client.read_document(
+                    c.url, operator_id=c.operator_union or "",
+                    staff_id="", summary=True)
+                if result.get("ok"):
+                    usable.append(c)
+                else:
+                    blocked.append({
+                        "name": c.name or f"文档{c.node_id[:8]}",
+                        "reason": str(result.get("message", "读取失败"))[:80],
+                    })
+            except DingTalkDocPermissionError:
+                blocked.append({
+                    "name": c.name or f"文档{c.node_id[:8]}",
+                    "reason": "权限不足（应用未授权或文档未分享）",
+                })
+            except Exception as e:
+                logger.warning(f"看板数据源预检异常（放行）{c.node_id[:8]}: {e}")
+                usable.append(c)
+        return usable, blocked
 
     @staticmethod
     def _staff_id_of(user_id: str) -> str:

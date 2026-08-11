@@ -82,6 +82,26 @@ class ParseIntentTests(unittest.TestCase):
             r = sc.parse_subscription_command(q)
             self.assertEqual(r["intent"], "stop", f"{q} → {r}")
 
+    def test_resume(self):
+        """v1.11.6：恢复订阅——「重新开通看板」是恢复不是新建（防重复订阅）"""
+        for text in ("恢复看板", "重新开通看板", "重新打开看板", "启用看板",
+                     "重新开通我的每日看板"):
+            r = sc.parse_subscription_command(text)
+            self.assertEqual(r["intent"], "resume", text)
+
+    def test_delete(self):
+        """v1.11.6：删除订阅——「删除看板订阅」不得误判成 query 查看设置"""
+        for text in ("删除看板", "删掉看板", "删除看板订阅", "解绑看板",
+                     "把看板删除"):
+            r = sc.parse_subscription_command(text)
+            self.assertEqual(r["intent"], "delete", f"{text} → {r}")
+
+    def test_delete_not_swallowed_by_query(self):
+        """回归：v1.11.6 前「删除看板订阅」命中 _QUERY_RE 的「看板.*订阅」误判成 query"""
+        r = sc.parse_subscription_command("删除看板订阅")
+        self.assertIsNotNone(r)
+        self.assertEqual(r["intent"], "delete")
+
     def test_query(self):
         r = sc.parse_subscription_command("我的看板几点推送")
         self.assertEqual(r["intent"], "query")

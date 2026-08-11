@@ -224,7 +224,8 @@ class ExecuteSubscriptionTests(unittest.TestCase):
     def test_no_sources_skips(self):
         sub_id = self._store.create(_sub(data_sources=["missing"]))
         sub = self._store.get(sub_id)
-        with mock.patch("dashboard.service.collect_and_parse") as m_coll:
+        with mock.patch("dashboard.service.collect_and_parse") as m_coll, \
+             mock.patch("dingtalk_notifier.DingTalkNotifier"):  # v1.11.6 失败告警
             result = _execute_subscription(sub)
         self.assertFalse(result["ok"])
         self.assertEqual(result["reason"], "no_sources")
@@ -238,13 +239,107 @@ class ExecuteSubscriptionTests(unittest.TestCase):
              mock.patch("dashboard.service.collect_and_parse",
                         return_value=(_parsed(), [])), \
              mock.patch("dashboard.service.assemble", return_value="# 看板"), \
-             mock.patch("dashboard.service.push", return_value=(False, "权限不足")):
+             mock.patch("dashboard.service.push", return_value=(False, "权限不足")), \
+             mock.patch("dingtalk_notifier.DingTalkNotifier"):  # v1.11.6 失败告警
             result = _execute_subscription(sub)
         self.assertFalse(result["ok"])
         self.assertIn("权限不足", result["reason"])
         got = self._store.get(sub_id)
         self.assertIsNone(got.last_snapshot)   # 失败不更新快照，下次可重试
         self.assertEqual(got.last_pushed_at, "")
+
+
+class FailureAlertTests(unittest.TestCase):
+    """失败告警（v1.11.6）：执行失败推送给创建人 + 管理员；正常静默不误告警"""
+
+    def setUp(self):
+        import tempfile
+        from dashboard.subscription_store import SubscriptionStore
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self._db_path = path
+        self._store = SubscriptionStore(db_path=path)
+        self.patch_store = mock.patch(
+            "dashboard.subscription_store.get_subscription_store",
+            return_value=self._store)
+        self.patch_store.start()
+        self.addCleanup(self.patch_store.stop)
+        self.addCleanup(self._cleanup_db)
+
+    def _cleanup_db(self):
+        self._store.close()
+        for suffix in ("", "-wal", "-shm"):
+            p = self._db_path + suffix
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+
+    def _fake_sources(self):
+        from dashboard.config_model import SourceConfig
+        return [SourceConfig(key="project_status", name="研发项目现况表",
+                             kind="notable", base_id="b1", table_id="s1")]
+
+    def test_push_failure_notifies_owner(self):
+        sub_id = self._store.create(_sub(alert_mode="always"))
+        sub = self._store.get(sub_id)
+        with mock.patch("dashboard.service.resolve_subscription_sources",
+                        return_value=self._fake_sources()), \
+             mock.patch("dashboard.service.collect_and_parse",
+                        return_value=(_parsed(), [])), \
+             mock.patch("dashboard.service.assemble", return_value="# 看板"), \
+             mock.patch("dashboard.service.push", return_value=(False, "权限不足")), \
+             mock.patch("dingtalk_notifier.DingTalkNotifier") as m_ntf:
+            result = _execute_subscription(sub)
+        self.assertFalse(result["ok"])
+        m_ntf.return_value.send_markdown_to_users.assert_called_once()
+        recipients = m_ntf.return_value.send_markdown_to_users.call_args[0][0]
+        self.assertIn("staff001", recipients)   # 告警含订阅创建人
+
+    def test_no_sources_notifies_owner(self):
+        sub_id = self._store.create(_sub(data_sources=["missing"]))
+        sub = self._store.get(sub_id)
+        with mock.patch("dashboard.service.collect_and_parse") as m_coll, \
+             mock.patch("dingtalk_notifier.DingTalkNotifier") as m_ntf:
+            result = _execute_subscription(sub)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["reason"], "no_sources")
+        m_ntf.return_value.send_markdown_to_users.assert_called_once()
+
+    def test_no_changes_does_not_alert(self):
+        """changes_only 无变化静默是正常行为，不告警"""
+        sub_id = self._store.create(_sub(alert_mode="changes_only"))
+        sub = self._store.get(sub_id)
+        sub.last_snapshot = [{
+            "source_key": "project_status", "table_name": "33周", "total": 1,
+            "status_counts": {"滞后": 1},
+            "attention": [{"status": "滞后", "title": "项目A"}],
+            "normal": [],
+        }]
+        with mock.patch("dashboard.service.resolve_subscription_sources",
+                        return_value=self._fake_sources()), \
+             mock.patch("dashboard.service.collect_and_parse",
+                        return_value=(_parsed(), [])), \
+             mock.patch("dashboard.service.push"), \
+             mock.patch("dingtalk_notifier.DingTalkNotifier") as m_ntf:
+            result = _execute_subscription(sub)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["reason"], "no_changes")
+        m_ntf.return_value.send_markdown_to_users.assert_not_called()
+
+    def test_off_does_not_alert(self):
+        sub_id = self._store.create(_sub(alert_mode="off"))
+        sub = self._store.get(sub_id)
+        with mock.patch("dashboard.service.resolve_subscription_sources",
+                        return_value=self._fake_sources()), \
+             mock.patch("dashboard.service.collect_and_parse",
+                        return_value=(_parsed(), [])), \
+             mock.patch("dashboard.service.push"), \
+             mock.patch("dingtalk_notifier.DingTalkNotifier") as m_ntf:
+            result = _execute_subscription(sub)
+        self.assertFalse(result["ok"])
+        m_ntf.return_value.send_markdown_to_users.assert_not_called()
 
 
 class DocSubscriptionExecuteTests(unittest.TestCase):

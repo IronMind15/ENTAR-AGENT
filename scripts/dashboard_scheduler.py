@@ -12,6 +12,7 @@ LLM 组装 → 规则兜底 → 推送 → 更新快照 + last_pushed_at。
 import datetime
 import logging
 import os
+import re
 import sys
 
 _PARENT = os.path.dirname(os.path.abspath(__file__))  # scripts/
@@ -25,6 +26,45 @@ logger = logging.getLogger("dashboard_scheduler")
 _scheduler: BackgroundScheduler | None = None
 
 _TS_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+def _admin_staff_ids() -> list[str]:
+    """失败告警管理员名单（CONTACT_ADMIN_STAFF_IDS，逗号/空格/分号分隔）"""
+    try:
+        from config import CONTACT_ADMIN_STAFF_IDS
+        ids = re.split(r"[,;，；\s]+", (CONTACT_ADMIN_STAFF_IDS or "").strip())
+        return [i for i in ids if i]
+    except Exception:
+        return []
+
+
+def _notify_failure(sub, reason: str):
+    """订阅执行失败告警（v1.11.6）：推送给创建人 + 管理员。
+
+    静默失败（用户每天等不到看板却无人知）是最痛点——失败不丢日志，
+    但主动消息才能让订阅人/管理员及时处理（文档被取消分享、权限被收等）。
+    告警自身失败不影响主流程。
+    """
+    try:
+        recipients = []
+        if sub.owner_staff_id:
+            recipients.append(sub.owner_staff_id)
+        recipients.extend(_admin_staff_ids())
+        recipients = list(dict.fromkeys(r for r in recipients if r))
+        if not recipients:
+            return
+        from dingtalk_notifier import DingTalkNotifier
+        text = (
+            f"⚠️ **每日看板推送失败**\n\n"
+            f"订阅：{sub.title or '恩特能源每日项目看板'}\n"
+            f"原因：{reason}\n\n"
+            "请检查数据源文档是否仍可访问（分享/权限），或联系管理员。"
+        )
+        DingTalkNotifier().send_markdown_to_users(
+            recipients, "看板推送失败提醒", text)
+        logger.info(f"[看板] 订阅 {sub.id} 失败告警已发送（{len(recipients)} 人）")
+    except Exception as e:
+        logger.warning(f"[看板] 订阅 {sub.id} 失败告警发送失败: {e}")
 
 
 def is_due(now: datetime.datetime, sub) -> bool:
@@ -63,12 +103,15 @@ def _execute_subscription(sub) -> dict:
     sources = service.resolve_subscription_sources(sub)
     if not sources:
         logger.warning(f"[看板] 订阅 {sub.id} 无可用数据源，跳过")
+        _notify_failure(sub, "数据源不可用（无可用数据源）")
         return {"ok": False, "reason": "no_sources"}
 
     parsed, errors = service.collect_and_parse(
         sources, operator_id=sub.owner_union_id, staff_id=sub.owner_staff_id)
     if not parsed:
-        logger.warning(f"[看板] 订阅 {sub.id} 采集为空：{'；'.join(errors[:2])}")
+        detail = "；".join(errors[:2]) or "采集结果为空"
+        logger.warning(f"[看板] 订阅 {sub.id} 采集为空：{detail}")
+        _notify_failure(sub, f"采集为空：{detail}")
         return {"ok": False, "reason": "no_data"}
 
     snap = make_snapshot(parsed)
@@ -96,6 +139,7 @@ def _execute_subscription(sub) -> dict:
     ok, msg = service.push(sub.recipients, sub.title, text)
     if not ok:
         logger.warning(f"[看板] 订阅 {sub.id} 推送失败：{msg}")
+        _notify_failure(sub, f"推送失败：{msg}")
         return {"ok": False, "reason": msg}
 
     get_subscription_store().set_snapshot(
@@ -123,6 +167,7 @@ def _tick():
                 executed += 1
         except Exception as e:
             logger.exception(f"[看板] 订阅 {sub.id} 执行异常: {e}")
+            _notify_failure(sub, f"执行异常：{e}")
     if executed:
         logger.info(f"[看板] 本轮 tick 推送 {executed} 条订阅")
 

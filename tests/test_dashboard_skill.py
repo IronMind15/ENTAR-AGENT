@@ -255,6 +255,13 @@ class HandleDocCreateTests(unittest.TestCase):
         self.patch_cands.start()
         self.addCleanup(self.patch_cands.stop)
         self.addCleanup(self._cleanup)
+        # v1.11.6：权限预检统一放行（专项测试 PrecheckTests 单独覆盖），
+        # 避免 doc_create 触发真实文档读取 API
+        self.patch_precheck = mock.patch.object(
+            DashboardSkill, "_precheck_doc_candidates",
+            side_effect=lambda cands: (cands, []))
+        self.patch_precheck.start()
+        self.addCleanup(self.patch_precheck.stop)
 
     def _cleanup(self):
         self._store.close()
@@ -333,6 +340,215 @@ class HandleDocCreateTests(unittest.TestCase):
         from dashboard.subscription_commands import get_pending
         p = get_pending("u1")
         self.assertEqual(sorted(p["data_sources"]), ["doc_1", "doc_2", "doc_3"])
+
+
+class DocCreatePrecheckTests(unittest.TestCase):
+    """创建前权限预检在 _handle_doc_create 的整合（v1.11.6）"""
+
+    def setUp(self):
+        self.patch_pending = mock.patch("dashboard.subscription_commands._pending", {})
+        self.patch_pending.start()
+        self.addCleanup(self.patch_pending.stop)
+        import tempfile
+        from dashboard.doc_candidates import DocCandidate, DocCandidateStore
+        fd2, path2 = tempfile.mkstemp(suffix=".db")
+        os.close(fd2)
+        self._cand_path = path2
+        self._cands = DocCandidateStore(db_path=path2)
+        self.patch_cands = mock.patch("dashboard.doc_candidates.get_candidate_store",
+                                      return_value=self._cands)
+        self.patch_cands.start()
+        self.addCleanup(self.patch_cands.stop)
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self):
+        self._cands.close()
+        for suffix in ("", "-wal", "-shm"):
+            p = self._cand_path + suffix
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+
+    def _seed(self):
+        from dashboard.doc_candidates import DocCandidate
+        self._cands.add(DocCandidate(
+            user_id="u1", url="u1", node_id="n1", kind="notable",
+            operator_union="u1", enabled=True, name="研发项目现况表"))
+
+    @mock.patch("skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
+    def test_all_blocked_prompts_permission(self, mock_staff):
+        """全部文档不可读 → 明确提示权限问题，不建订阅"""
+        self._seed()
+        with mock.patch.object(
+                DashboardSkill, "_precheck_doc_candidates",
+                return_value=([], [{"name": "研发项目现况表", "reason": "无权限"}])):
+            r = DashboardSkill._handle_doc_create("u1")
+        self.assertIn("无法读取", r["answer"])
+        from dashboard.subscription_commands import get_pending
+        self.assertIsNone(get_pending("u1"))   # 未设 pending，不进入确认
+
+    @mock.patch("skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
+    def test_partial_blocked_keeps_readable(self, mock_staff):
+        """部分文档不可读 → 可读的继续，不可读的剔除"""
+        from dashboard.doc_candidates import DocCandidate
+        self._seed()
+        self._cands.add(DocCandidate(
+            user_id="u1", url="u2", node_id="n2", kind="notable",
+            operator_union="u1", enabled=True, name="整机测试问题"))
+        with mock.patch.object(
+                DashboardSkill, "_precheck_doc_candidates",
+                side_effect=lambda cands: (
+                    [c for c in cands if c.node_id == "n1"],
+                    [{"name": "整机测试问题", "reason": "无权限"}])):
+            r = DashboardSkill._handle_doc_create("u1")
+        self.assertIn("研发项目现况表", r["answer"])
+        self.assertNotIn("整机测试问题", r["answer"])
+        from dashboard.subscription_commands import get_pending
+        p = get_pending("u1")
+        self.assertEqual(p["data_sources"], ["doc_1"])
+
+
+class HandleResumeDeleteTests(unittest.TestCase):
+    """恢复/删除订阅（v1.11.6）"""
+
+    def setUp(self):
+        import tempfile
+        from dashboard.subscription_store import Subscription, SubscriptionStore
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self._db_path = path
+        self._store = SubscriptionStore(db_path=path)
+        self.patch_store = mock.patch(
+            "skills.dashboard.get_subscription_store",
+            return_value=self._store)
+        self.patch_store.start()
+        self.addCleanup(self.patch_store.stop)
+        self.addCleanup(self._cleanup_db)
+
+    def _cleanup_db(self):
+        self._store.close()
+        for suffix in ("", "-wal", "-shm"):
+            p = self._db_path + suffix
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+
+    def _sub(self, **kw):
+        from dashboard.subscription_store import Subscription
+        base = Subscription(owner_user_id="u1", owner_staff_id="staff001",
+                            owner_union_id="u1", data_sources=["project_status"],
+                            recipients=["staff001"])
+        for k, v in kw.items():
+            setattr(base, k, v)
+        return base
+
+    def test_resume_reenables_paused(self):
+        """恢复：重新启用已停用订阅，不新建重复"""
+        self._store.create(self._sub(enabled=False))
+        r = DashboardSkill.handle("恢复看板", user_id="u1")
+        self.assertIn("已恢复", r["answer"])
+        subs = self._store.list_for_owner("u1")
+        self.assertEqual(len(subs), 1)       # 不新建
+        self.assertTrue(subs[0].enabled)     # 已启用
+
+    def test_reopen_phrase_resumes_not_duplicates(self):
+        """回归：v1.11.5 前「重新开通看板」新建重复订阅，现在应恢复"""
+        self._store.create(self._sub(enabled=False))
+        r = DashboardSkill.handle("重新开通看板", user_id="u1")
+        self.assertIn("已恢复", r["answer"])
+        subs = self._store.list_for_owner("u1")
+        self.assertEqual(len(subs), 1)
+        self.assertTrue(subs[0].enabled)
+
+    def test_resume_nothing_paused(self):
+        self._store.create(self._sub())
+        r = DashboardSkill.handle("恢复看板", user_id="u1")
+        self.assertIn("无需恢复", r["answer"])
+
+    def test_resume_without_subscription(self):
+        r = DashboardSkill.handle("恢复看板", user_id="nobody")
+        self.assertIn("还没有订阅", r["answer"])
+
+    def test_delete_confirmation_then_removes(self):
+        """删除：先反问确认，确认后彻底移除"""
+        self._store.create(self._sub())
+        r = DashboardSkill.handle("删除看板", user_id="u1")
+        self.assertIn("确认", r["answer"])
+        self.assertEqual(len(self._store.list_for_owner("u1")), 1)  # 未确认不删
+        r2 = DashboardSkill.handle("确认", user_id="u1")
+        self.assertIn("已删除", r2["answer"])
+        self.assertEqual(self._store.list_for_owner("u1"), [])
+
+    def test_delete_without_subscription(self):
+        r = DashboardSkill.handle("删除看板", user_id="nobody")
+        self.assertIn("还没有订阅", r["answer"])
+
+
+class HandleSetRecipientSelfTests(unittest.TestCase):
+    """「只推给我自己」→ 明确提示默认即自己（v1.11.5 解析 + v1.11.6 消费）"""
+
+    def test_set_recipient_self(self):
+        r = DashboardSkill.handle("看板只推给我自己", user_id="u1")
+        self.assertIn("默认就是只推送给您自己", r["answer"])
+
+
+class PrecheckTests(unittest.TestCase):
+    """_precheck_doc_candidates 逻辑：ok=False 剔除、权限错剔除、其他异常放行"""
+
+    @staticmethod
+    def _cand(node_id="n1", name="文档A"):
+        from dashboard.doc_candidates import DocCandidate
+        return DocCandidate(user_id="u1", url=f"u/{node_id}", node_id=node_id,
+                            kind="notable", operator_union="u1", enabled=True,
+                            name=name)
+
+    def test_all_readable(self):
+        cands = [self._cand(), self._cand("n2", "文档B")]
+        client = mock.Mock()
+        client.read_document.return_value = {"ok": True}
+        with mock.patch("dingtalk_doc_client.get_doc_client", return_value=client):
+            usable, blocked = DashboardSkill._precheck_doc_candidates(cands)
+        self.assertEqual(len(usable), 2)
+        self.assertEqual(blocked, [])
+
+    def test_ok_false_blocked(self):
+        cands = [self._cand(), self._cand("n2", "文档B")]
+        client = mock.Mock()
+        client.read_document.side_effect = [
+            {"ok": True},
+            {"ok": False, "message": "无权限"},
+        ]
+        with mock.patch("dingtalk_doc_client.get_doc_client", return_value=client):
+            usable, blocked = DashboardSkill._precheck_doc_candidates(cands)
+        self.assertEqual(len(usable), 1)
+        self.assertEqual(usable[0].node_id, "n1")
+        self.assertEqual(len(blocked), 1)
+        self.assertIn("无权限", blocked[0]["reason"])
+
+    def test_permission_error_blocked(self):
+        from dingtalk_doc_client import DingTalkDocPermissionError
+        cands = [self._cand()]
+        client = mock.Mock()
+        client.read_document.side_effect = DingTalkDocPermissionError("no perm")
+        with mock.patch("dingtalk_doc_client.get_doc_client", return_value=client):
+            usable, blocked = DashboardSkill._precheck_doc_candidates(cands)
+        self.assertEqual(usable, [])
+        self.assertEqual(len(blocked), 1)
+        self.assertIn("权限", blocked[0]["reason"])
+
+    def test_other_exception_passes_through(self):
+        """网络瞬断等异常不确定不可读 → 保守放行，不误杀"""
+        cands = [self._cand()]
+        client = mock.Mock()
+        client.read_document.side_effect = TimeoutError("timeout")
+        with mock.patch("dingtalk_doc_client.get_doc_client", return_value=client):
+            usable, blocked = DashboardSkill._precheck_doc_candidates(cands)
+        self.assertEqual(len(usable), 1)
+        self.assertEqual(blocked, [])
 
 
 if __name__ == "__main__":
