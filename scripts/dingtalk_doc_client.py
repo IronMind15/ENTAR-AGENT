@@ -71,6 +71,12 @@ _WORKBOOK_RECORD_PATHS = [
 # ── 普通在线文档（doc）读取（v1.11.1，需 Storage.File.Read 权限）──
 _DOC_BLOCKS_PATH = "/v1.0/doc/suites/documents/{node}/blocks"
 
+# ── 概要 vs 全读模式（v1.11.3：识别只读概要秒回，指令时全读）──
+SUMMARY_RECORD_LIMIT = 10        # 概要模式：notable/workbook 只读首屏 N 条
+_DOC_SUMMARY_BLOCKS = 20         # 概要模式：doc 只取前 N 个内容块
+_DOC_FULL_BLOCKS = 5000          # 全读模式：doc 内容块上限（blocks 接口无分页字段）
+_KIND_CACHE_TTL = 30 * 60        # detect_kind 类型缓存 TTL（秒）
+
 
 class DingTalkDocPermissionError(RuntimeError):
     """应用未开通钉钉文档/表格读取权限，或操作人无文档访问权时抛出。"""
@@ -97,6 +103,9 @@ class DingTalkDocClient:
         self._token = ""
         self._token_expires_at = 0.0
         self._token_lock = threading.Lock()
+        # detect_kind 类型探测结果缓存（实例级：get_doc_client 单例共享，
+        # 缓解 N 文档识别时每链接 3-4 次探测 API；实例级保证测试隔离）
+        self._kind_cache: dict[str, tuple[str, float]] = {}
         # staff_id → unionid 兜底缓存
         self._union_cache: dict[str, str] = {}
 
@@ -272,8 +281,12 @@ class DingTalkDocClient:
 
     def read_notable_records(self, base_id: str, sheet_id: str,
                              operator_id: str = "",
-                             max_records: int = 100) -> list[dict]:
+                             max_records: int = 100,
+                             limit: int | None = None) -> list[dict]:
         """读取 AI表格工作表全部记录（分页 maxRecords + nextToken 续取）。
+
+        Args:
+            limit: 非 None 时只读前 N 条即返回（概要模式，不继续翻页）
 
         Returns:
             记录列表，每条含 fields/cells 等原始字段
@@ -293,6 +306,8 @@ class DingTalkDocClient:
             batch = (data.get("records") or data.get("result", {}).get("records")
                      or data.get("items") or data.get("value") or [])
             records.extend(batch)
+            if limit is not None and len(records) >= limit:
+                return records[:limit]
             has_more = bool(data.get("hasMore")
                             or data.get("result", {}).get("hasMore"))
             next_token = (data.get("nextToken") or data.get("result", {}).get("nextToken")
@@ -390,20 +405,46 @@ class DingTalkDocClient:
 
     def read_workbook_records(self, base_id: str, sheet_id: str,
                               operator_id: str = "",
-                              max_records: int = 100) -> list[dict]:
-        """读取在线表格工作表记录（分页，同 notable 语义）"""
+                              max_records: int = 100,
+                              limit: int | None = None) -> list[dict]:
+        """读取在线表格工作表记录（分页 nextToken 续取，同 notable 语义）。
+
+        Args:
+            limit: 非 None 时只读前 N 条即返回（概要模式，不继续翻页）
+        """
         last_err: Exception | None = None
         for path_tpl in _WORKBOOK_RECORD_PATHS:
             path = path_tpl.format(base=base_id, sheet=sheet_id)
+            records: list[dict] = []
+            next_token = ""
+            ok = False
             try:
-                data = self._request("POST", path, operator_id=operator_id,
-                                     body={"maxRecords": max_records})
+                while True:
+                    body = {"maxRecords": max_records}
+                    if next_token:
+                        body["nextToken"] = next_token
+                    data = self._request("POST", path, operator_id=operator_id,
+                                         body=body)
+                    ok = True
+                    batch = (data.get("records") or data.get("result", {}).get("records")
+                             or data.get("items") or data.get("value") or [])
+                    records.extend(batch)
+                    if limit is not None and len(records) >= limit:
+                        return records[:limit]
+                    has_more = bool(data.get("hasMore")
+                                    or data.get("result", {}).get("hasMore"))
+                    next_token = (data.get("nextToken")
+                                  or data.get("result", {}).get("nextToken")
+                                  or data.get("nextPageToken") or "")
+                    if not has_more or not next_token:
+                        break
+                    if len(records) > 10000:  # 安全上限，防异常游标死循环
+                        logger.warning("在线表格记录数超 10000，已截断")
+                        break
             except Exception as e:
                 last_err = e
                 continue
-            records = (data.get("records") or data.get("result", {}).get("records")
-                       or data.get("items") or data.get("value") or [])
-            if records or not last_err:
+            if ok:
                 return records
         raise RuntimeError(
             f"在线表格读取暂不可用"
@@ -514,12 +555,33 @@ class DingTalkDocClient:
                     })
         return records
 
+    @staticmethod
+    def _doc_title(blocks: list[dict]) -> str:
+        """doc 标题兜底：取首个非空段落截断 20 字（blocks 接口无标题元数据）。"""
+        for b in blocks or []:
+            if b.get("blockType") == "paragraph":
+                text = (b.get("paragraph") or {}).get("text", "").strip()
+                if text:
+                    return text[:20]
+        return "钉钉文档"
+
     # ── 类型探测与统一入口 ───────────────────────────────────
     def detect_kind(self, node_id: str, operator_id: str = "") -> str:
         """探测文档类型：先按 notable（AI表格）试探，报类型不符再回退。
 
+        带 TTL 缓存（_KIND_CACHE_TTL=30min），缓解 N 文档识别时每链接 3-4 次探测 API。
+
         返回：'notable' | 'workbook' | 'doc' | 'unknown'
         """
+        cached = self._kind_cache.get(node_id)
+        if cached and time.time() - cached[1] < _KIND_CACHE_TTL:
+            return cached[0]
+        kind = self._detect_kind_uncached(node_id, operator_id)
+        self._kind_cache[node_id] = (kind, time.time())
+        return kind
+
+    def _detect_kind_uncached(self, node_id: str, operator_id: str = "") -> str:
+        """detect_kind 无缓存本体（探测 API 实际调用处）"""
         # 1. 有 sheet 参数 → 大概率 AI表格
         # 2. 先尝试列 sheets（notable 特有接口）
         try:
@@ -559,12 +621,19 @@ class DingTalkDocClient:
         return "unknown"
 
     def read_document(self, url: str, operator_id: str = "",
-                      staff_id: str = "", max_records: int = 100) -> dict:
+                      staff_id: str = "", max_records: int = 100,
+                      summary: bool = False) -> dict:
         """统一入口：解析链接 → 解析操作人 → 探测类型 → 读取。
+
+        Args:
+            summary: True=概要模式（识别用：notable/workbook 只读首屏
+                SUMMARY_RECORD_LIMIT 条、doc 只取前 _DOC_SUMMARY_BLOCKS 块，秒回）；
+                False=全读模式（指令用：workbook 翻页全量、doc 上限
+                _DOC_FULL_BLOCKS 块）
 
         Returns:
             {"ok": bool, "kind": str, "node_id": str, "sheet_id": str,
-             "records": [...], "message": str}
+             "records": [...], "name": str, "message": str}
         """
         parsed = self.parse_doc_url(url)
         if not parsed:
@@ -572,13 +641,15 @@ class DingTalkDocClient:
         node_id = parsed["node_id"]
         sheet_id = parsed["sheet_id"]
         operator = self.resolve_operator_id(operator_id, staff_id)
+        limit = SUMMARY_RECORD_LIMIT if summary else None
 
         # 优先：URL 带 sheetId（AI表格分享特征）→ 直接按 notable 读取，
         # 绕开 list_sheets（该接口对部分 AI表格返回 400）
         if sheet_id:
             try:
                 records = self.read_notable_records(
-                    node_id, sheet_id, operator, max_records=max_records)
+                    node_id, sheet_id, operator, max_records=max_records,
+                    limit=limit)
                 field_names = self.read_notable_field_names(
                     node_id, sheet_id, operator)
                 sheet_name = self._notable_sheet_name(
@@ -587,6 +658,7 @@ class DingTalkDocClient:
                     "ok": True, "kind": "notable", "node_id": node_id,
                     "sheet_id": sheet_id, "records": records,
                     "field_names": field_names, "sheet_name": sheet_name,
+                    "name": sheet_name,
                     "message": f"读取 AI表格成功，共 {len(records)} 条记录",
                 }
             except DingTalkDocPermissionError:
@@ -605,8 +677,11 @@ class DingTalkDocClient:
                             "message": "AI表格无可用工作表"}
                 target_sheet = sheets[0]["sheetId"]
             records = self.read_notable_records(
-                node_id, target_sheet, operator, max_records=max_records)
+                node_id, target_sheet, operator, max_records=max_records,
+                limit=limit)
             field_names = self.read_notable_field_names(
+                node_id, target_sheet, operator)
+            sheet_name = self._notable_sheet_name(
                 node_id, target_sheet, operator)
             return {
                 "ok": True,
@@ -615,19 +690,24 @@ class DingTalkDocClient:
                 "sheet_id": target_sheet,
                 "records": records,
                 "field_names": field_names,  # {field_id: 中文名}，失败为 {}
+                "sheet_name": sheet_name,
+                "name": sheet_name,
                 "message": f"读取 AI表格成功，共 {len(records)} 条记录",
             }
         if kind == "workbook":
             try:
                 target_sheet = sheet_id
+                sheet_name = ""
                 if not target_sheet:
                     sheets = self.list_workbook_sheets(node_id, operator)
                     if not sheets:
                         return {"ok": False, "kind": "workbook", "node_id": node_id,
                                 "message": "在线表格无可用工作表"}
                     target_sheet = sheets[0]["sheetId"]
+                    sheet_name = sheets[0].get("name", "")
                 records = self.read_workbook_records(
-                    node_id, target_sheet, operator, max_records=max_records)
+                    node_id, target_sheet, operator, max_records=max_records,
+                    limit=limit)
                 return {
                     "ok": True,
                     "kind": "workbook",
@@ -635,6 +715,8 @@ class DingTalkDocClient:
                     "sheet_id": target_sheet,
                     "records": records,
                     "field_names": {},
+                    "sheet_name": sheet_name,
+                    "name": sheet_name,
                     "message": f"读取在线表格成功，共 {len(records)} 条记录",
                 }
             except DingTalkDocPermissionError:
@@ -646,19 +728,23 @@ class DingTalkDocClient:
                 }
         if kind == "doc":
             try:
-                doc = self.read_doc_content(node_id, operator)
+                doc = self.read_doc_content(
+                    node_id, operator,
+                    max_blocks=_DOC_SUMMARY_BLOCKS if summary else _DOC_FULL_BLOCKS)
                 if not doc.get("ok"):
                     return {
                         "ok": False, "kind": "doc", "node_id": node_id,
                         "message": f"普通文档读取失败（{doc.get('message', '')}），可先『帮我学习』入库",
                     }
                 records = self._doc_blocks_to_records(doc.get("blocks") or [])
+                doc_name = self._doc_title(doc.get("blocks") or [])
                 return {
                     "ok": True, "kind": "doc", "node_id": node_id, "sheet_id": "",
                     "records": records,
                     "field_names": {},
                     "markdown": doc.get("markdown", ""),
-                    "sheet_name": "",
+                    "sheet_name": doc_name,
+                    "name": doc_name,
                     "message": f"读取普通文档成功，共 {len(records)} 个内容块",
                 }
             except DingTalkDocPermissionError:

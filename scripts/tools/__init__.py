@@ -52,6 +52,22 @@ def get_current_staff_id() -> str:
     return _current_staff_id.get()
 
 
+# 当前请求发起者的用户 ID（user_id，文档候选表 owner 键，v1.11.3）。
+# 与 staff_id 不同：user_id 是内部会话用户标识（memory/candidate 主键）。
+_current_user_id: contextvars.ContextVar[str] = \
+    contextvars.ContextVar("tool_user_id", default="")
+
+
+def set_current_user_id(user_id: str) -> None:
+    """设置当前请求发起者的用户 ID（入口调用）"""
+    _current_user_id.set(user_id or "")
+
+
+def get_current_user_id() -> str:
+    """获取当前请求发起者的用户 ID（工具执行时调用）"""
+    return _current_user_id.get()
+
+
 # ===== 注册中心 =====
 # {(name, definition, handler)}
 _tool_registry: dict[str, tuple[dict, Callable[[dict], str]]] = {}
@@ -123,3 +139,4 @@ from . import find_employee          # noqa: E402, F811 — 钉钉通讯录员�
 from . import describe_image         # noqa: E402, F811 — 图片识别（千问视觉，v1.10.0）
 from . import query_dashboard        # noqa: E402, F811 — 看板实时查询（v1.11.0）
 from . import push_dashboard         # noqa: E402, F811 — 看板主动推送（v1.11.0）
+from . import summarize_doc          # noqa: E402, F811 — 钉钉文档总结（v1.11.3）

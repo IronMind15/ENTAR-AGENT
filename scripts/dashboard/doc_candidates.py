@@ -10,6 +10,7 @@
 import json
 import logging
 import os
+import re
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -195,6 +196,42 @@ class DocCandidateStore:
                 "UPDATE dashboard_doc_candidates SET learned=1 WHERE id=?",
                 (cand_id,))
             self._get_conn().commit()
+
+    def find_by_node_id(self, user_id: str, node_id: str) -> Optional[DocCandidate]:
+        """按文档 node_id 查该用户最新候选（含已学习，供总结工具定位）"""
+        with self._lock:
+            row = self._get_conn().execute(
+                "SELECT * FROM dashboard_doc_candidates WHERE user_id=? AND node_id=? "
+                "ORDER BY id DESC LIMIT 1", (user_id, node_id)).fetchone()
+        return self._row_to_cand(row) if row else None
+
+    def find_by_url(self, user_id: str, url: str) -> Optional[DocCandidate]:
+        """按文档 url 查该用户候选（先精确匹配 url，再按 node_id 兜底，容 URL 变体）"""
+        with self._lock:
+            conn = self._get_conn()
+            row = conn.execute(
+                "SELECT * FROM dashboard_doc_candidates WHERE user_id=? AND url=? "
+                "ORDER BY id DESC LIMIT 1", (user_id, url)).fetchone()
+            if row:
+                return self._row_to_cand(row)
+            m = re.search(r"/i/nodes/([A-Za-z0-9_-]+)", url or "")
+            if m:
+                row = conn.execute(
+                    "SELECT * FROM dashboard_doc_candidates WHERE user_id=? AND node_id=? "
+                    "ORDER BY id DESC LIMIT 1", (user_id, m.group(1))).fetchone()
+                if row:
+                    return self._row_to_cand(row)
+        return None
+
+    def find_by_name(self, user_id: str, name: str) -> Optional[DocCandidate]:
+        """按文档名查该用户候选（LLM 可能传文档名而非 node_id/url，v1.11.3）"""
+        if not name:
+            return None
+        with self._lock:
+            row = self._get_conn().execute(
+                "SELECT * FROM dashboard_doc_candidates WHERE user_id=? AND name=? "
+                "ORDER BY id DESC LIMIT 1", (user_id, name)).fetchone()
+        return self._row_to_cand(row) if row else None
 
     # ── 动态看板数据源（v1.11.0）──────────────────────────
     def list_dashboard_ready(self, user_id: str) -> list[DocCandidate]:

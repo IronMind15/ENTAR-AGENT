@@ -3,6 +3,45 @@
 > 📌 **本文档是项目唯一的版本记录（单一事实源）**——README.md、PROGRESS.md 的版本历史均指向本文件，发版时只在这里追加记录。
 > 相关：待办清单见 [TODO.md](TODO.md)，进度看板见 [PROGRESS.md](PROGRESS.md)。
 
+## v1.11.3（2026-08-11）
+
+**📑 文档概要回复（去上限）+ LLM 指令联动（总结成推送）+ 需求探索清单**——用户 3 个需求一次落地：①发文档链接不再有 5 个上限，回复改为「文档名（类型）· 概要 · 共 N 条记录」——识别时只读概要秒回（notable/workbook 首屏 10 条、doc 20 块），需要时（总结/学习/看板）全读（workbook 补 nextToken 翻页、doc 上限放宽到 5000 块）；②发文档后接着说「帮我总结成推送」→ LLM 识别指令调新增 `summarize_doc` 工具，总结后推回用户本人——卡片消息（richText/interactiveCard）识别后写入会话记忆是打通前提（此前 LLM 看不到刚发的文档）；③`detect_kind` 类型探测加实例级 TTL 缓存（30 分钟），N 文档识别每链接 3-4 次探测 API 的重复调用显著减少。另产出公司内部需求探索清单（9 组，docs/20260811-需求探索清单.md）。全量回归 **590 项全绿**（此前 564 项）。
+
+### 功能
+
+- **去链接上限 + 概要回复**（`dingtalk_bot.py` `_handle_dingtalk_doc_link`）：`for url in urls[:5]` → `urls[:_MAX_DOC_URLS]`（50 仅防异常超长输入）；识别改传 `summary=True`；回复格式 `📑 {名字}（{类型}）· 概要 · 共 N 条记录` + `_doc_summary`（notable/workbook 前 3 条预览、doc 取 markdown 前 150 字）
+- **概要 vs 全读双模式**（`dingtalk_doc_client.py`）：`read_document(summary=False)` 默认全读保持现行为；`summary=True` 时 notable/workbook 传 `SUMMARY_RECORD_LIMIT=10`（首屏不翻页）、doc 传 `_DOC_SUMMARY_BLOCKS=20`；全读时 workbook 补 nextToken 翻页（镜像 notable 循环，多路径兼容 hasMore/nextToken/nextPageToken，安全上限 10000）、doc 上限 `_DOC_FULL_BLOCKS=5000`
+- **补文档名**（`dingtalk_doc_client.py`）：notable 分支补 `sheet_name`（`_notable_sheet_name`）、workbook 分支取首表 name、doc 用 `_doc_title` 首个非空段落截断 20 字兜底「钉钉文档」；返回统一带 `name` 字段，bot 回复与候选登记均填真名
+- **detect_kind TTL 缓存**（`dingtalk_doc_client.py`）：实例级 `_kind_cache`（get_doc_client 单例共享，30 分钟过期），缓解 N 文档识别时每链接 3-4 次探测 API；实例级保证测试隔离
+- **卡片消息写 memory**（`dingtalk_bot.py`）：`_handle_rich_text_message` / `_handle_interactive_card_message` 识别文档后写 `memory.add(user_id, user/assistant, ...)`——LLM 才能看到刚发的文档（此前卡片路径直接 return 不写记忆，是「总结成推送」识别不出的根因）
+- **新增 `summarize_doc` 工具**（`scripts/tools/summarize_doc.py`，第 10 个工具）：参数 `{doc_ref, push_to_self}`；定位候选（`find_by_node_id`/`find_by_url`/`find_by_name`，新增于 `doc_candidates.py`）→ 全读 → 转 Markdown（doc 走保真 markdown，其余 `_records_to_markdown`）→ `call_deepseek` 总结（截 8000 字，失败兜底原文前 500 字）→ `push_to_self=true` 时 `DingTalkNotifier` 主动推回本人（推后工具只回简短确认防双发）
+- **用户上下文注入**：`tools/__init__.py` 加 `_current_user_id` contextvar + `set/get_current_user_id`；`dingtalk_bot._process_text` 顶部在 `set_current_staff_id` 旁加 `set_current_user_id(user_id)`
+- **需求探索清单**：新增 `docs/20260811-需求探索清单.md`——9 组（会议工作流/经验库/识图/看板/权限/检索/钉钉生态/运维/第三步）+ 汇总表（复用资产/优先级/工作量/依赖）+ 建议实施顺序；TODO.md 加索引行
+
+### 测试
+
+- 新增 26 项：`test_dingtalk_doc` 追加 `SummaryModeTests`（summary=True 传 limit、全读不传、doc 概要 20 块、doc 全读 600 块不截断、detect_kind 缓存命中不重调 API）、`WorkbookPaginationTests`（两页翻页合并、limit 提前返回、安全上限截断死循环）、`BotSummaryModeTests`（bot 传 summary=True、回复含名字、候选带真名、富文本/交互卡片写 memory）；多链接聚合测试改为 6 份断言不再截断；`test_doc_candidates` 追加 `FindByTests`（find_by_node_id/url/name，含跨用户隔离与 URL 变体兜底）；新建 `test_summarize_doc_tool`（10 项：定位/兜底/无候选/无用户/读失败/LLM 失败兜底/doc markdown/推送/推送失败）
+- 全量回归 **590 项通过**（此前 564 项）
+
+### 已知限制
+
+- 同一消息「文档链接 + 帮我总结成推送」会被文档识别拦截（`_handle_doc_link_with_kanban` 只合并看板意图），需「先发文档、再发指令」两步；同消息合并留待后续
+- doc 全读放宽到 5000 块后单次响应变大，真实长文档耗时需实测观察
+- workbook 翻页字段名按 notable 模板 + 多路径兼容，若接口字段不符会退化为首屏不崩
+
+### 修改文件
+
+| 文件 | 改动 |
+|------|------|
+| `scripts/dingtalk_doc_client.py` | 🆕 概要/全读双模式 + workbook 翻页 + `_doc_title` + detect_kind 缓存 + 三分支补文档名 |
+| `scripts/skills/dingtalk_bot.py` | 去 `urls[:5]` 上限 + 回复名字概要（`_doc_summary`）+ 卡片写 memory + 注入 `set_current_user_id` |
+| `scripts/tools/summarize_doc.py` | 🆕 文档总结工具（定位→全读→总结→可选推送本人） |
+| `scripts/tools/__init__.py` | 🆕 `_current_user_id` contextvar + 注册 summarize_doc |
+| `scripts/dashboard/doc_candidates.py` | 🆕 `find_by_node_id`/`find_by_url`/`find_by_name` 查询 |
+| `docs/20260811-需求探索清单.md` | 🆕 公司内部需求探索清单（9 组） |
+| `tests/`（3 个文件） | 新增 26 项（概要模式/翻页/缓存/卡片记忆/summarize_doc 工具） |
+| `TODO.md` | +需求探索清单索引行 |
+
 ## v1.11.2（2026-08-11）
 
 **🔧 实测修复包：发多个文档不再丢 + 卡片消息也能做看板 + 「帮我学习」说明加强**——用户实测反馈 3 个问题一次修齐：①一次发 4 个文档链接只识别 3 个（`urls[:3]` 硬截断，第 4 个静默丢失 → 放宽到 `urls[:5]`）；②interactiveCard 卡片消息走文档识别后直接 return、跳过技能路由，「做每日看板」意图被吞 → 抽 `_handle_doc_link_with_kanban` 合并文档摘要 + 看板创建确认，接入文本/富文本/卡片三处路由；③「帮我学习」提示太简单 → 详细说明入库是什么、进哪个库（企业知识库·标准文档库）、能干什么（自然语言检索示例），并主动区分「看板实时拉取、不进知识库」；入库成功提示也补充块数/记录数/查看入口。全量回归 **564 项全绿**（此前 561 项）。

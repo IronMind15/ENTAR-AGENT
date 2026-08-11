@@ -107,5 +107,58 @@ class DocCandidateStoreTests(unittest.TestCase):
         self.assertEqual(len(self.store.list_all_enabled()), 1)
 
 
+class FindByTests(unittest.TestCase):
+    """v1.11.3 find_by_*：总结工具按 node_id/url/name 定位候选"""
+
+    def setUp(self):
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self._db_path = path
+        self.store = DocCandidateStore(db_path=path)
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self):
+        self.store.close()
+        for suffix in ("", "-wal", "-shm"):
+            p = self._db_path + suffix
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+
+    def _cand(self, user_id="u1", node_id="n1", url="https://alidocs.dingtalk.com/i/nodes/n1",
+              name="33周汇总"):
+        return DocCandidate(user_id=user_id, url=url, node_id=node_id,
+                            kind="notable", operator_union="u1", name=name)
+
+    def test_find_by_node_id(self):
+        self.store.add(self._cand(node_id="n1"))
+        cand = self.store.find_by_node_id("u1", "n1")
+        self.assertIsNotNone(cand)
+        self.assertEqual(cand.node_id, "n1")
+        self.assertIsNone(self.store.find_by_node_id("u1", "nope"))
+        self.assertIsNone(self.store.find_by_node_id("u2", "n1"))  # 跨用户隔离
+
+    def test_find_by_url_exact(self):
+        self.store.add(self._cand(url="https://alidocs.dingtalk.com/i/nodes/n1"))
+        cand = self.store.find_by_url("u1", "https://alidocs.dingtalk.com/i/nodes/n1")
+        self.assertIsNotNone(cand)
+
+    def test_find_by_url_node_id_fallback(self):
+        """URL 变体（带参数）也能按 node_id 兜底命中"""
+        self.store.add(self._cand(url="https://alidocs.dingtalk.com/i/nodes/n1"))
+        cand = self.store.find_by_url(
+            "u1", "https://alidocs.dingtalk.com/i/nodes/n1?sheet=s1&view=grid")
+        self.assertIsNotNone(cand)
+        self.assertEqual(cand.node_id, "n1")
+
+    def test_find_by_name(self):
+        self.store.add(self._cand(name="33周汇总"))
+        cand = self.store.find_by_name("u1", "33周汇总")
+        self.assertIsNotNone(cand)
+        self.assertIsNone(self.store.find_by_name("u1", "不存在的表"))
+
+
 if __name__ == "__main__":
     unittest.main()

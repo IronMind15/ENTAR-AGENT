@@ -14,6 +14,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from dingtalk_doc_client import (  # noqa: E402
     DingTalkDocClient, DingTalkDocPermissionError, _ALIDOCS_NODE_RE,
+    _DOC_SUMMARY_BLOCKS, _DOC_FULL_BLOCKS, SUMMARY_RECORD_LIMIT,
 )
 
 
@@ -156,7 +157,9 @@ class BotDocLinkTests(unittest.TestCase):
             answer = handler._handle_dingtalk_doc_link(
                 "https://alidocs.dingtalk.com/i/nodes/n1", "u1", "s1")
         self.assertIsNotNone(answer)
-        self.assertIn("已识别钉钉文档", answer)
+        # v1.11.3：回复改为「名字（类型）· 概要」格式
+        self.assertIn("概要", answer)
+        self.assertIn("AI表格", answer)
         self.assertIn("帮我学习", answer)
         # 交互原则：只主动问学习，不推销推送/订阅
         self.assertNotIn("每日推送", answer)
@@ -185,24 +188,21 @@ class BotDocLinkTests(unittest.TestCase):
         self.assertIn("暂无法读取", answer)
 
     def test_multi_links_aggregated(self):
-        """多条链接逐条读取 + 聚合摘要（v1.11.2：4 条全部处理，不再截断到 3）"""
+        """多条链接逐条读取 + 聚合摘要（v1.11.3：不限 5 个上限，发多少识别多少）"""
         handler = self._make_handler()
         fakes = [{"ok": True, "kind": "notable", "node_id": f"n{i}",
                   "records": [{"fields": {"名称": f"名{i}"}}], "message": "ok"}
-                 for i in range(1, 5)]
+                 for i in range(1, 7)]  # 6 份验证已去 5 个上限
         with patch("dingtalk_doc_client.get_doc_client") as mock_get:
             mock_get.return_value.resolve_operator_id.return_value = "union1"
             mock_get.return_value.read_document.side_effect = fakes
             answer = handler._handle_dingtalk_doc_link(
-                "这四份：https://alidocs.dingtalk.com/i/nodes/n1 "
-                "https://alidocs.dingtalk.com/i/nodes/n2 "
-                "https://alidocs.dingtalk.com/i/nodes/n3 "
-                "https://alidocs.dingtalk.com/i/nodes/n4",
+                "六份：" + " ".join(
+                    f"https://alidocs.dingtalk.com/i/nodes/n{i}" for i in range(1, 7)),
                 "u1", "s1")
-        self.assertIn("已识别钉钉文档", answer)
-        for i in range(1, 5):
-            self.assertIn(f"n{i}", answer)
-        self.assertEqual(mock_get.return_value.read_document.call_count, 4)
+        for i in range(1, 7):
+            self.assertIn(f"名{i}", answer)  # 每份概要都出现
+        self.assertEqual(mock_get.return_value.read_document.call_count, 6)
 
     def test_registers_candidate_for_learn(self):
         """读取成功 → 登记候选，供「帮我学习」入库"""
@@ -247,7 +247,7 @@ class BotDocLinkTests(unittest.TestCase):
             answer = handler._handle_doc_link_with_kanban(
                 "帮我把这几个文件做成每日看板 https://alidocs.dingtalk.com/i/nodes/n1",
                 "u1", "s1")
-        self.assertIn("已识别钉钉文档", answer)
+        self.assertIn("概要", answer)
         self.assertIn("做每日看板，请确认", answer)
 
     def test_doc_link_without_kanban_no_merge(self):
@@ -261,7 +261,7 @@ class BotDocLinkTests(unittest.TestCase):
             mock_get.return_value.read_document.return_value = fake
             answer = handler._handle_doc_link_with_kanban(
                 "看看这份 https://alidocs.dingtalk.com/i/nodes/n1", "u1", "s1")
-        self.assertIn("已识别钉钉文档", answer)
+        self.assertIn("概要", answer)
         m_create.assert_not_called()
 
     def test_interactive_card_with_kanban_merges(self):
@@ -282,7 +282,7 @@ class BotDocLinkTests(unittest.TestCase):
             handler._handle_interactive_card_message(content, bot_msg, "u1", "s1", "s")
         call = handler.reply_markdown.call_args
         call_text = call.kwargs.get("text") if call.kwargs else call[0][1]
-        self.assertIn("已识别钉钉文档", call_text)
+        self.assertIn("概要", call_text)
         self.assertIn("做每日看板，请确认", call_text)
 
 
@@ -659,7 +659,7 @@ class BotDocLinkKindDocTests(unittest.TestCase):
             mock_get.return_value.read_document.return_value = fake
             answer = handler._handle_dingtalk_doc_link(
                 "https://alidocs.dingtalk.com/i/nodes/n1", "u1", "s1")
-        self.assertIn("已识别钉钉文档", answer)
+        self.assertIn("概要", answer)
         self.assertIn("文档", answer)  # kind 映射 doc→文档
         self.assertIn("帮我学习", answer)
         cand = self._cand.get_pending("u1")
@@ -667,6 +667,237 @@ class BotDocLinkKindDocTests(unittest.TestCase):
         self.assertEqual(cand.kind, "doc")
         self.assertTrue(cand.enabled)  # v1.11.1：doc 也可做看板源
         self.assertIn("doc", self._cand.list_dashboard_ready("u1")[0].kind)
+
+
+class SummaryModeTests(unittest.TestCase):
+    """v1.11.3 概要模式：read_document(summary=True) 只读首屏 limit 条"""
+
+    def setUp(self):
+        from unittest import mock as _mock
+        self.client = DingTalkDocClient(
+            client_id="cid", client_secret="csecret", session=_mock.Mock())
+
+    def test_notable_summary_passes_limit_and_name(self):
+        calls = {}
+
+        def fake_read(base, sheet, operator_id="", max_records=100, limit=None):
+            calls["limit"] = limit
+            return [{"fields": {"a": i}} for i in range(5)]
+
+        with patch.object(self.client, "detect_kind", return_value="notable"), \
+             patch.object(self.client, "list_sheets",
+                          return_value=[{"sheetId": "s1", "name": "表1"}]), \
+             patch.object(self.client, "read_notable_records",
+                          side_effect=fake_read), \
+             patch.object(self.client, "read_notable_field_names",
+                          return_value={}), \
+             patch.object(self.client, "_notable_sheet_name",
+                          return_value="表1"):
+            result = self.client.read_document(
+                "https://alidocs.dingtalk.com/i/nodes/n1", operator_id="op",
+                summary=True)
+        self.assertTrue(result["ok"])
+        self.assertEqual(calls["limit"], SUMMARY_RECORD_LIMIT)
+        self.assertEqual(result["name"], "表1")
+
+    def test_notable_full_read_no_limit(self):
+        calls = {}
+
+        def fake_read(base, sheet, operator_id="", max_records=100, limit=None):
+            calls["limit"] = limit
+            return []
+
+        with patch.object(self.client, "detect_kind", return_value="notable"), \
+             patch.object(self.client, "list_sheets",
+                          return_value=[{"sheetId": "s1", "name": "表1"}]), \
+             patch.object(self.client, "read_notable_records",
+                          side_effect=fake_read), \
+             patch.object(self.client, "read_notable_field_names",
+                          return_value={}), \
+             patch.object(self.client, "_notable_sheet_name",
+                          return_value="表1"):
+            self.client.read_document(
+                "https://alidocs.dingtalk.com/i/nodes/n1", operator_id="op",
+                summary=False)
+        self.assertIsNone(calls["limit"])
+
+    def test_doc_summary_uses_small_blocks(self):
+        calls = {}
+
+        def fake_read_doc(node, operator_id="", max_blocks=500):
+            calls["max_blocks"] = max_blocks
+            return {"ok": True, "markdown": "x", "blocks": [
+                {"blockType": "paragraph", "paragraph": {"text": "标题行"}}]}
+
+        with patch.object(self.client, "detect_kind", return_value="doc"), \
+             patch.object(self.client, "read_doc_content",
+                          side_effect=fake_read_doc):
+            result = self.client.read_document(
+                "https://alidocs.dingtalk.com/i/nodes/n1", operator_id="op",
+                summary=True)
+        self.assertEqual(calls["max_blocks"], _DOC_SUMMARY_BLOCKS)
+        self.assertEqual(result["name"], "标题行")  # doc 标题取首段
+
+    def test_doc_full_read_many_blocks(self):
+        """v1.11.3 全读模式：doc 上限放宽到 _DOC_FULL_BLOCKS，600 块不再截断"""
+        data = [{"blockType": "paragraph", "paragraph": {"text": f"p{i}"}}
+                for i in range(600)]
+        with patch.object(self.client, "_request",
+                          return_value={"result": {"data": data}}):
+            out = self.client.read_doc_content("node1",
+                                               max_blocks=_DOC_FULL_BLOCKS)
+        self.assertEqual(len(out["blocks"]), 600)
+
+    def test_detect_kind_cached(self):
+        """v1.11.3 detect_kind 实例级缓存：二次命中不重调探测 API"""
+        with patch.object(self.client, "_request", return_value={"records": []}), \
+             patch.object(self.client, "list_sheets",
+                          return_value=[{"sheetId": "s1", "name": "表"}]) as m:
+            self.assertEqual(self.client.detect_kind("n1", "op"), "notable")
+            self.assertEqual(self.client.detect_kind("n1", "op"), "notable")
+        self.assertEqual(m.call_count, 1)
+
+
+class WorkbookPaginationTests(unittest.TestCase):
+    """v1.11.3 workbook 翻页全读 + 概要 limit"""
+
+    def setUp(self):
+        from unittest import mock as _mock
+        self.client = DingTalkDocClient(
+            client_id="cid", client_secret="csecret", session=_mock.Mock())
+
+    def test_paginates_two_pages(self):
+        responses = [
+            {"records": [{"fields": {"a": 1}}, {"fields": {"a": 2}}],
+             "hasMore": True, "nextToken": "tok2"},
+            {"records": [{"fields": {"a": 3}}], "hasMore": False},
+        ]
+        with patch.object(self.client, "_request",
+                          side_effect=responses) as m:
+            records = self.client.read_workbook_records("b1", "s1", "op")
+        self.assertEqual(len(records), 3)
+        # 第二次请求带 nextToken 续取
+        self.assertEqual(m.call_args_list[1].kwargs["body"]["nextToken"], "tok2")
+
+    def test_limit_stops_early(self):
+        responses = [
+            {"records": [{"fields": {"a": 1}}, {"fields": {"a": 2}},
+                         {"fields": {"a": 3}}],
+             "hasMore": True, "nextToken": "t"},
+        ]
+        with patch.object(self.client, "_request",
+                          side_effect=responses) as m:
+            records = self.client.read_workbook_records("b1", "s1", "op",
+                                                        limit=2)
+        self.assertEqual(len(records), 2)
+        self.assertEqual(m.call_count, 1)  # 概要模式只读一次即返回
+
+    def test_safety_cap_stops_endless_cursor(self):
+        def endless(method, path, body=None, operator_id=""):
+            return {"records": [{"fields": {"a": 1}}],
+                    "hasMore": True, "nextToken": "x"}
+
+        with patch.object(self.client, "_request", side_effect=endless):
+            records = self.client.read_workbook_records("b1", "s1")
+        self.assertGreater(len(records), 10000)
+        self.assertLess(len(records), 10020)  # 安全上限截断，不无限循环
+
+
+class BotSummaryModeTests(unittest.TestCase):
+    """v1.11.3 bot 识别时传 summary=True + 回复含名字概要"""
+
+    def setUp(self):
+        from dashboard.doc_candidates import DocCandidateStore
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self._db_path = path
+        self._cand = DocCandidateStore(db_path=path)
+        self._patch_cand = patch("dashboard.doc_candidates.get_candidate_store",
+                                 return_value=self._cand)
+        self._patch_cand.start()
+        self.addCleanup(self._patch_cand.stop)
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self):
+        self._cand.close()
+        for suffix in ("", "-wal", "-shm"):
+            p = self._db_path + suffix
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+
+    def _make_handler(self):
+        from skills import dingtalk_bot
+        return object.__new__(dingtalk_bot.ErrorQueryHandler)
+
+    def test_reading_uses_summary_mode(self):
+        handler = self._make_handler()
+        fake = {"ok": True, "kind": "notable", "node_id": "n1",
+                "records": [{"fields": {"名称": "A"}}], "message": "ok"}
+        with patch("dingtalk_doc_client.get_doc_client") as mock_get:
+            mock_get.return_value.resolve_operator_id.return_value = "union1"
+            mock_get.return_value.read_document.return_value = fake
+            handler._handle_dingtalk_doc_link(
+                "https://alidocs.dingtalk.com/i/nodes/n1", "u1", "s1")
+        kwargs = mock_get.return_value.read_document.call_args[1]
+        self.assertTrue(kwargs.get("summary"))
+
+    def test_reply_contains_doc_name(self):
+        handler = self._make_handler()
+        fake = {"ok": True, "kind": "notable", "node_id": "n1", "name": "33周汇总",
+                "records": [{"fields": {"名称": "项目A"}}], "message": "ok"}
+        with patch("dingtalk_doc_client.get_doc_client") as mock_get:
+            mock_get.return_value.resolve_operator_id.return_value = "union1"
+            mock_get.return_value.read_document.return_value = fake
+            answer = handler._handle_dingtalk_doc_link(
+                "https://alidocs.dingtalk.com/i/nodes/n1", "u1", "s1")
+        self.assertIn("33周汇总", answer)
+        self.assertIn("AI表格", answer)
+        # 登记候选也带上真名（顺带收益）
+        cand = self._cand.get_pending("u1")
+        self.assertEqual(cand.name, "33周汇总")
+
+    def test_rich_text_writes_memory(self):
+        """v1.11.3：富文本卡片识别后写会话记忆，LLM 才能看到文档"""
+        from unittest import mock as _mock
+        handler = self._make_handler()
+        handler.reply_markdown = _mock.MagicMock()
+        handler._rich_text_plain = _mock.MagicMock(
+            return_value="https://alidocs.dingtalk.com/i/nodes/n1")
+        fake = {"ok": True, "kind": "notable", "node_id": "n1",
+                "records": [{"fields": {"名称": "A"}}], "message": "ok"}
+        bot_msg = _mock.MagicMock()
+        with patch("dingtalk_doc_client.get_doc_client") as mock_get, \
+             patch("skills.memory.add") as m_add:
+            mock_get.return_value.resolve_operator_id.return_value = "union1"
+            mock_get.return_value.read_document.return_value = fake
+            handler._handle_rich_text_message(bot_msg, "u1", "s1", "s")
+        calls = [c[0] for c in m_add.call_args_list]
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0][0], "u1")
+        self.assertEqual(calls[0][1], "user")
+        self.assertEqual(calls[1][1], "assistant")
+        self.assertIn("概要", calls[1][2])  # 助理记忆含文档识别回复
+
+    def test_interactive_card_writes_memory(self):
+        from unittest import mock as _mock
+        handler = self._make_handler()
+        handler.reply_markdown = _mock.MagicMock()
+        fake = {"ok": True, "kind": "notable", "node_id": "n1",
+                "records": [{"fields": {"名称": "A"}}], "message": "ok"}
+        content = {"text": "https://alidocs.dingtalk.com/i/nodes/n1"}
+        bot_msg = _mock.MagicMock()
+        with patch("dingtalk_doc_client.get_doc_client") as mock_get, \
+             patch("skills.memory.add") as m_add:
+            mock_get.return_value.resolve_operator_id.return_value = "union1"
+            mock_get.return_value.read_document.return_value = fake
+            handler._handle_interactive_card_message(content, bot_msg, "u1", "s1", "s")
+        calls = [c[0] for c in m_add.call_args_list]
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0][1], "user")
+        self.assertEqual(calls[1][1], "assistant")
 
 
 if __name__ == "__main__":

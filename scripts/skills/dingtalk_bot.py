@@ -142,6 +142,10 @@ def _extract_alidocs_urls(text: str) -> list[str]:
     return urls
 
 
+# 一次最多识别文档数（v1.11.3：去 5 个上限，仅防异常超长输入，正常不截断）
+_MAX_DOC_URLS = 50
+
+
 def _short_url(url: str, n: int = 50) -> str:
     return url if len(url) <= n else url[:n] + "…"
 
@@ -418,10 +422,12 @@ class ErrorQueryHandler(ChatbotHandler):
         Args:
             on_chunk: 可选 callback(text, status)，用于 AI 卡片流式输出
         """
-        # 注入当前发起者 staff_id 到工具上下文（find_employee 敏感字段权限判断用）
-        # asyncio.to_thread 会拷贝当前 context，本线程内工具执行能读到
-        from tools import set_current_staff_id
+        # 注入当前发起者 staff_id + user_id 到工具上下文（find_employee 敏感字段权限、
+        # summarize_doc 候选归属判断用）。asyncio.to_thread 会拷贝当前 context，
+        # 本线程内工具执行能读到
+        from tools import set_current_staff_id, set_current_user_id
         set_current_staff_id(staff_id)
+        set_current_user_id(user_id)
 
         # 审核口令与普通技能路由
         if text in ("查看我的审核ID", "我的审核ID", "查看我的钉钉ID"):
@@ -588,10 +594,12 @@ class ErrorQueryHandler(ChatbotHandler):
         replies = []
         learned_hint = False
         last_records = []
-        for url in urls[:5]:  # 最多处理 5 个链接（v1.11.2：原 3 个导致发 4 个丢 1 个）
+        # v1.11.3：不再截断到 5 个——识别只读概要（SUMMARY_RECORD_LIMIT 条/20 块）字少，
+        # 发多少识别多少；_MAX_DOC_URLS=50 仅防异常超长输入
+        for url in urls[:_MAX_DOC_URLS]:
             try:
                 result = client.read_document(url, operator_id=operator,
-                                              staff_id=staff_id)
+                                              staff_id=staff_id, summary=True)
             except Exception as e:
                 logger.warning(f"钉钉文档读取失败: {e}")
                 replies.append(f"❌ {_short_url(url)}：读取失败 {e}")
@@ -605,10 +613,10 @@ class ErrorQueryHandler(ChatbotHandler):
             kind_name = {"notable": "AI表格", "workbook": "在线表格", "doc": "文档"}.get(kind, kind)
             node_id = result.get("node_id", "")
             self._register_doc_candidate(user_id, url, result, operator_union=operator)
-            preview = self._doc_preview(records)
+            summary = self._doc_summary(result)
             replies.append(
-                f"📑 已识别钉钉文档（{kind_name}）· 节点 {node_id} · {len(records)} 条记录"
-                + (f"\n{preview}" if preview else ""))
+                f"📑 {result.get('name') or kind_name}（{kind_name}）· 概要 · 共 {len(records)} 条记录"
+                + (f"\n{summary}" if summary else ""))
             learned_hint = True
             last_records = records
 
@@ -680,6 +688,15 @@ class ErrorQueryHandler(ChatbotHandler):
                 lines.append(f"  {i}. {str(cells)[:100]}")
         return "\n".join(lines)
 
+    def _doc_summary(self, result: dict) -> str:
+        """文档概要（v1.11.3）：notable/workbook 预览前几条字段；doc 取 markdown 前 150 字"""
+        if result.get("kind") == "doc":
+            md = (result.get("markdown") or "").strip()
+            if md:
+                return md[:150] + ("…" if len(md) > 150 else "")
+            return ""
+        return self._doc_preview(result.get("records") or [])
+
     @staticmethod
     def _register_doc_candidate(user_id: str, url: str, result: dict,
                                 operator_union: str = ""):
@@ -729,6 +746,15 @@ class ErrorQueryHandler(ChatbotHandler):
                 text=answer,
                 incoming_message=bot_msg,
             )
+            # v1.11.3：卡片消息写入会话记忆，LLM 才能看到刚发的文档
+            # （含名字+类型+node_id），从而识别后续「总结成推送」指令。
+            # 处理器在线程池运行，同步写 SQLite 不阻塞事件循环。
+            try:
+                from skills import memory
+                memory.add(user_id, "user", text)
+                memory.add(user_id, "assistant", answer)
+            except Exception as mem_err:
+                logger.warning(f"记录富文本卡片记忆失败: {mem_err}")
             return AckMessage.STATUS_OK, "ok"
         logger.info("  富文本无文档链接，忽略")
         return AckMessage.STATUS_OK, "ok"
@@ -768,6 +794,13 @@ class ErrorQueryHandler(ChatbotHandler):
                 )
             except Exception as e:
                 logger.warning(f"  交互卡片回复失败（网络?）: {e}")
+            # v1.11.3：卡片消息写入会话记忆，LLM 才能看到刚发的文档
+            try:
+                from skills import memory
+                memory.add(user_id, "user", text)
+                memory.add(user_id, "assistant", answer)
+            except Exception as mem_err:
+                logger.warning(f"记录交互卡片记忆失败: {mem_err}")
             return AckMessage.STATUS_OK, "ok"
         logger.info("  交互卡片无文档链接，忽略")
         return AckMessage.STATUS_OK, "ok"
