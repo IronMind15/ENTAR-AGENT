@@ -85,6 +85,23 @@ def _render_source_block(r: dict, idx: int) -> list[str]:
     return lines
 
 
+def _today_points(results: list[dict]) -> str:
+    """规则兜底「📌 今日要点」：关注项摘要 / 整体正常兜底（v1.11.4）
+
+    让 LLM 组装失败时的规则兜底也不简略，创建示例看板信息更全面。
+    """
+    parts = []
+    for r in results:
+        att = r.get("attention_items", [])
+        if att:
+            titles = "、".join(_title_field(x) for x in att[:3])
+            parts.append(f"{r['name']}关注{len(att)}项（{titles}）")
+    if parts:
+        return "📌 今日要点：" + "；".join(parts)
+    total = sum(r.get("total", 0) for r in results)
+    return f"📌 今日要点：整体正常，共 {total} 条记录"
+
+
 def assemble_markdown(results: list[dict], title: str = "恩特能源每日项目看板",
                       date_str: str = "") -> str:
     """规则模板组装：板块按配置顺序，关注置顶，总字符数 ≤5000"""
@@ -92,6 +109,8 @@ def assemble_markdown(results: list[dict], title: str = "恩特能源每日项�
     if date_str:
         lines.append(f"> 数据日期：{date_str}")
         lines.append("")
+    lines.append(_today_points(results))
+    lines.append("")
     for i, r in enumerate(results, 1):
         if i > 1:
             lines.append("---")
@@ -143,7 +162,9 @@ def _build_llm_prompt(results: list[dict], title: str, date_str: str) -> str:
         "2. 关注项（滞后/故障/待验证等）置顶；每条用 `1. 标题（状态）` 开头，"
         "其余字段缩进两格 `  字段：值`；\n"
         "3. 状态统计写一行 `状态1数量 / 状态2数量`；\n"
-        "4. 总字符数 ≤5000；不要使用 Markdown 表格（钉钉不支持 `|---|`）；\n"
+        "4. 总字符数 ≤5000；\n"
+        "5. 严禁使用 Markdown 表格（如 `| 列 | 列 |`、`|---|`），钉钉 markdown "
+        "不支持表格语法，会整条失败；用编号列表和缩进代替；\n"
         "不要输出任何解释，直接输出 Markdown 正文。\n"
         f"数据：{json.dumps(data, ensure_ascii=False)}"
     )

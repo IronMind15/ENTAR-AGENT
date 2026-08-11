@@ -3,6 +3,44 @@
 > 📌 **本文档是项目唯一的版本记录（单一事实源）**——README.md、PROGRESS.md 的版本历史均指向本文件，发版时只在这里追加记录。
 > 相关：待办清单见 [TODO.md](TODO.md)，进度看板见 [PROGRESS.md](PROGRESS.md)。
 
+## v1.11.4（2026-08-11）
+
+**📊 看板实测修复：每日必推 + 本次文档做数据源 + 创建时完整看板 + 输出格式增强**——用户实测 v1.11.3 看板后 4 个问题一次修复：①「每日有更新才推送」非每日必推 → `alert_mode` 默认改 `always`（每天必推），顶部注入变化标注（新增 `change_banner`：有变化 `📌 今日变化：板块：总数 2→3；新增关注1`、无变化 `📌 今日无变化`），`changes_only`/`off` 保留为选项；②发 4 个文件出现 6 条大标题 → 根因是 `_handle_doc_create` 取「全部历史 enabled 候选」（本次 4 个 + 昨天登记同文档 2 条），改为 bot 收集**本次**识别候选 id 透传，历史候选不再混入；③创建时示例看板简略（LLM 组装失败退回简略规则兜底）→ 规则兜底新增「📌 今日要点」段（关注项摘要 / 整体正常兜底）+ LLM prompt 强化严禁表格语法；④确认文案同步「每天固定推送（附今日变化）」。现有 5 个订阅 SQL 迁移为 `always`。全量回归 **604 项全绿**（此前 590 项）。
+
+### 功能
+
+- **每日必推 + 变化标注**（`dashboard_scheduler.py` `_execute_subscription`）：`alert_mode` 默认 `always`，无变化也必推；顶部注入 `change_banner` 变化标注（有变化列变更详情、无变化显式说明），`changes_only` 无变化静默 / `off` 跳过保留
+- **新增 `change_banner`**（`dashboard/alerts.py`）：复用 `diff_summary`（去噪快照对比），`source_key` 经 `name_by_key` 映射成板块名，缺省回退 key
+- **默认值改 `always`**（`config.py` `DASHBOARD_ALERT_MODE`、`config_model.py`、`subscription_store.py` DDL、`skills/dashboard.py` pending 共 4 处同步）
+- **本次文档做数据源**（`dingtalk_bot.py` + `skills/dashboard.py`）：`_register_doc_candidate` 返回候选 id；`_handle_dingtalk_doc_link` 返回 `(answer, cand_ids)` 元组；`_handle_doc_link_with_kanban` 拆包后调 `DashboardSkill._handle_doc_create(user_id, source_candidate_ids=cand_ids)` 只取本次候选（过滤 enabled + notable/workbook/doc），无本次候选时兜底全部可看板候选
+- **规则兜底「📌 今日要点」**（`dashboard/assembler.py`）：`assemble_markdown` 在数据日期后、首个 `##` 前插入——有关注项 `今日要点：{板块}关注{M}项（{前3标题}）`、无关注项 `今日要点：整体正常，共 N 条记录`
+- **LLM prompt 强化**（`assembler.py` `_build_llm_prompt`）：明确规则 5「严禁 Markdown 表格语法（钉钉不支持会整条失败）+ 总字符 ≤5000 + 直接输出正文」，降低「LLM 看板未过校验→规则兜底」概率
+- **确认文案同步**（`subscription_commands.py` `render_confirmation`）：`🔔 提醒模式：每天固定推送（附今日变化）`（默认 always）/ `仅数据有变化时推送`（changes_only）
+
+### 测试
+
+- 新增 52 项：`test_dashboard_alerts` 追加 `ChangeBannerTests`（无变化/变化详情/source_key 回退/name 映射/新增板块/首次快照）；`test_dashboard_scheduler` 追加 always 无变化必推含「今日无变化」banner、always 有变化注入「今日变化」+ 板块名、off 模式跳过；`test_dashboard_assembler` 追加今日要点存在（关注项摘要 + 无关注整体正常兜底）；`test_dashboard_skill` 追加 `_handle_doc_create(source_candidate_ids=...)` 只取本次候选（历史候选不混入）+ 缺省兜底全部；`test_subscription_commands` 追加默认/change_only 确认文案；`test_dingtalk_doc` 全量改元组拆包
+- 全量回归 **604 项通过**（此前 590 项）
+
+### 已知限制
+
+- 修复前已创建的订阅（如测试期 id=5，混入 6 个数据源）保持原样，需重说「按这几个文档做每日看板」重建
+- `change_banner` 变化标注与 LLM 输出的「📌 今日要点」并存——banner 在最顶、要点在其下，语义不冲突
+
+### 修改文件
+
+| 文件 | 改动 |
+|------|------|
+| `scripts/dashboard/alerts.py` | 🆕 `change_banner`（每日必推顶部变化标注） |
+| `scripts/dashboard_scheduler.py` | always 每日必推 + banner 注入；changes_only/off 保留 |
+| `scripts/config.py` | `DASHBOARD_ALERT_MODE` 默认 `always` |
+| `scripts/dashboard/config_model.py` | `alert_mode` 默认/校验 `always` |
+| `scripts/dashboard/subscription_store.py` | DDL 默认 `'always'` |
+| `scripts/skills/dashboard.py` | `_handle_doc_create(source_candidate_ids)` 只取本次候选；pending `alert_mode="always"` |
+| `scripts/skills/dingtalk_bot.py` | `_register_doc_candidate` 返回 id；`_handle_dingtalk_doc_link` 返回 `(answer, cand_ids)` |
+| `scripts/dashboard/assembler.py` | 规则兜底「今日要点」+ LLM prompt 强化严禁表格 |
+| `scripts/dashboard/subscription_commands.py` | 确认文案「每天固定推送（附今日变化）」 |
+
 ## v1.11.3（2026-08-11）
 
 **📑 文档概要回复（去上限）+ LLM 指令联动（总结成推送）+ 需求探索清单**——用户 3 个需求一次落地：①发文档链接不再有 5 个上限，回复改为「文档名（类型）· 概要 · 共 N 条记录」——识别时只读概要秒回（notable/workbook 首屏 10 条、doc 20 块），需要时（总结/学习/看板）全读（workbook 补 nextToken 翻页、doc 上限放宽到 5000 块）；②发文档后接着说「帮我总结成推送」→ LLM 识别指令调新增 `summarize_doc` 工具，总结后推回用户本人——卡片消息（richText/interactiveCard）识别后写入会话记忆是打通前提（此前 LLM 看不到刚发的文档）；③`detect_kind` 类型探测加实例级 TTL 缓存（30 分钟），N 文档识别每链接 3-4 次探测 API 的重复调用显著减少。另产出公司内部需求探索清单（9 组，docs/20260811-需求探索清单.md）。全量回归 **590 项全绿**（此前 564 项）。

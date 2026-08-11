@@ -110,7 +110,7 @@ class HandleCreateTests(unittest.TestCase):
         self.assertEqual(sub.push_hour, 9)
         self.assertEqual(sub.push_minute, 0)
         self.assertEqual(sub.weekdays, "")
-        self.assertEqual(sub.alert_mode, "changes_only")
+        self.assertEqual(sub.alert_mode, "always")
         self.assertEqual(sub.data_sources, ["project_status", "test_issues"])
 
     def test_confirm_without_pending(self):
@@ -300,6 +300,39 @@ class HandleDocCreateTests(unittest.TestCase):
         r = DashboardSkill.handle("按这几个文档做每日看板", user_id="u1")
         self.assertIn("发送", r["answer"])
         self.assertIn("文档链接", r["answer"])
+
+    @mock.patch("skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
+    def test_doc_create_source_candidate_ids_only_takes_specified(self, mock_staff):
+        """v1.11.4：传入本次候选 id 时，历史候选不得混入"""
+        from dashboard.doc_candidates import DocCandidate
+        self._seed_candidates()
+        # 历史候选（昨天登记的同一文档，非本次发送）——不应进入本次看板
+        self._cands.add(DocCandidate(
+            user_id="u1", url="u_old", node_id="n1", kind="notable",
+            operator_union="u1", enabled=True, name="旧登记同文档"))
+        # 只传本次识别的候选 id 1、2
+        r = DashboardSkill._handle_doc_create("u1", source_candidate_ids=[1, 2])
+        self.assertIn("研发项目现况表", r["answer"])
+        self.assertIn("整机测试问题", r["answer"])
+        self.assertNotIn("旧登记同文档", r["answer"])
+        from dashboard.subscription_commands import get_pending
+        p = get_pending("u1")
+        self.assertEqual(sorted(p["data_sources"]), ["doc_1", "doc_2"])
+        self.assertEqual(p["alert_mode"], "always")
+
+    @mock.patch("skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
+    def test_doc_create_without_candidate_ids_falls_back_all(self, mock_staff):
+        """缺省 source_candidate_ids → 兜底取全部可看板候选"""
+        from dashboard.doc_candidates import DocCandidate
+        self._seed_candidates()
+        self._cands.add(DocCandidate(
+            user_id="u1", url="u3", node_id="n3", kind="notable",
+            operator_union="u1", enabled=True, name="历史登记"))
+        r = DashboardSkill._handle_doc_create("u1")
+        self.assertIn("历史登记", r["answer"])
+        from dashboard.subscription_commands import get_pending
+        p = get_pending("u1")
+        self.assertEqual(sorted(p["data_sources"]), ["doc_1", "doc_2", "doc_3"])
 
 
 if __name__ == "__main__":

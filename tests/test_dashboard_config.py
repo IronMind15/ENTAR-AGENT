@@ -119,9 +119,9 @@ class LoadPushConfigTests(unittest.TestCase):
     @mock.patch("config.DASHBOARD_TITLE", "x")
     @mock.patch("config.DASHBOARD_WEEKDAYS", "")
     def test_alert_mode_normalized(self):
-        """非法 alert_mode 归一为 changes_only"""
+        """非法 alert_mode 归一为 always"""
         cfg = cm.load_push_config()
-        self.assertEqual(cfg.alert_mode, "changes_only")
+        self.assertEqual(cfg.alert_mode, "always")
 
 
 if __name__ == "__main__":

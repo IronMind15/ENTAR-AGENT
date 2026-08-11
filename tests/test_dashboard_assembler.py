@@ -58,6 +58,31 @@ class AssembleMarkdownTests(unittest.TestCase):
     def test_date_line(self):
         self.assertIn("> 数据日期：2026-08-10", self.text)
 
+    def test_today_points_present(self):
+        """规则兜底也有「📌 今日要点」段（v1.11.4），创建示例看板不简略"""
+        self.assertIn("📌 今日要点：", self.text)
+        self.assertIn("研发项目现况表关注4项", self.text)
+        self.assertIn("整机下线测试问题关注25项", self.text)
+
+    def test_today_points_no_attention_normal(self):
+        """无关注项 → 整体正常兜底"""
+        from dashboard.parser import parse_source_records
+        sources = {s.key: s for s in load_sources()}
+        proj = parse_source_records(
+            sources["project_status"],
+            [{"fields": {
+                "01ZM8y7": [{"name": "项目1"}],
+                "7qnPz0F": {"name": "样机测试"},
+                "YQnOvE5": {"name": "正常"},
+                "FjrTLFt": "PCS-500",
+                "aepzDFy": "进展",
+                "uWD6X8E": "无风险",
+            }}],
+            table_name="33周",
+        )
+        text = assemble_markdown([proj], date_str="2026-08-10")
+        self.assertIn("📌 今日要点：整体正常，共 1 条记录", text)
+
     def test_source_blocks_in_order(self):
         self.assertIn("## 一、研发项目现况表", self.text)
         self.assertIn("## 二、整机下线测试问题", self.text)

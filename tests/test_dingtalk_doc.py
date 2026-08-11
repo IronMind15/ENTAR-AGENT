@@ -154,7 +154,7 @@ class BotDocLinkTests(unittest.TestCase):
         with patch("dingtalk_doc_client.get_doc_client") as mock_get:
             mock_get.return_value.resolve_operator_id.return_value = "union1"
             mock_get.return_value.read_document.return_value = fake
-            answer = handler._handle_dingtalk_doc_link(
+            answer, _ = handler._handle_dingtalk_doc_link(
                 "https://alidocs.dingtalk.com/i/nodes/n1", "u1", "s1")
         self.assertIsNotNone(answer)
         # v1.11.3：回复改为「名字（类型）· 概要」格式
@@ -172,7 +172,7 @@ class BotDocLinkTests(unittest.TestCase):
         with patch("dingtalk_doc_client.get_doc_client") as mock_get:
             mock_get.return_value.resolve_operator_id.return_value = "union1"
             mock_get.return_value.read_document.side_effect = RuntimeError("无权限")
-            answer = handler._handle_dingtalk_doc_link(
+            answer, _ = handler._handle_dingtalk_doc_link(
                 "https://alidocs.dingtalk.com/i/nodes/n1", "u1", "s1")
         self.assertIn("读取失败", answer)
 
@@ -183,7 +183,7 @@ class BotDocLinkTests(unittest.TestCase):
         with patch("dingtalk_doc_client.get_doc_client") as mock_get:
             mock_get.return_value.resolve_operator_id.return_value = "union1"
             mock_get.return_value.read_document.return_value = fake
-            answer = handler._handle_dingtalk_doc_link(
+            answer, _ = handler._handle_dingtalk_doc_link(
                 "https://alidocs.dingtalk.com/i/nodes/n1", "u1", "s1")
         self.assertIn("暂无法读取", answer)
 
@@ -196,7 +196,7 @@ class BotDocLinkTests(unittest.TestCase):
         with patch("dingtalk_doc_client.get_doc_client") as mock_get:
             mock_get.return_value.resolve_operator_id.return_value = "union1"
             mock_get.return_value.read_document.side_effect = fakes
-            answer = handler._handle_dingtalk_doc_link(
+            answer, _ = handler._handle_dingtalk_doc_link(
                 "六份：" + " ".join(
                     f"https://alidocs.dingtalk.com/i/nodes/n{i}" for i in range(1, 7)),
                 "u1", "s1")
@@ -227,7 +227,7 @@ class BotDocLinkTests(unittest.TestCase):
         with patch("dingtalk_doc_client.get_doc_client") as mock_get:
             mock_get.return_value.resolve_operator_id.return_value = "union1"
             mock_get.return_value.read_document.return_value = fake
-            answer = handler._handle_dingtalk_doc_link(
+            answer, _ = handler._handle_dingtalk_doc_link(
                 "这是测试记录表 https://alidocs.dingtalk.com/i/nodes/n1 你看下",
                 "u1", "s1")
         self.assertIsNotNone(answer)
@@ -657,7 +657,7 @@ class BotDocLinkKindDocTests(unittest.TestCase):
         with patch("dingtalk_doc_client.get_doc_client") as mock_get:
             mock_get.return_value.resolve_operator_id.return_value = "union1"
             mock_get.return_value.read_document.return_value = fake
-            answer = handler._handle_dingtalk_doc_link(
+            answer, _ = handler._handle_dingtalk_doc_link(
                 "https://alidocs.dingtalk.com/i/nodes/n1", "u1", "s1")
         self.assertIn("概要", answer)
         self.assertIn("文档", answer)  # kind 映射 doc→文档
@@ -851,7 +851,7 @@ class BotSummaryModeTests(unittest.TestCase):
         with patch("dingtalk_doc_client.get_doc_client") as mock_get:
             mock_get.return_value.resolve_operator_id.return_value = "union1"
             mock_get.return_value.read_document.return_value = fake
-            answer = handler._handle_dingtalk_doc_link(
+            answer, _ = handler._handle_dingtalk_doc_link(
                 "https://alidocs.dingtalk.com/i/nodes/n1", "u1", "s1")
         self.assertIn("33周汇总", answer)
         self.assertIn("AI表格", answer)

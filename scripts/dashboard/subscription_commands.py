@@ -214,7 +214,7 @@ def render_confirmation(pending: dict, current=None) -> str:
         lines.append(f"📋 数据板块：{_format_sources(sources)}")
         lines.append(f"⏰ 推送时间：{format_weekdays(pending.get('weekdays', ''))} "
                      f"{pending.get('push_hour', 9):02d}:{pending.get('push_minute', 0):02d}")
-        lines.append(f"🔔 提醒模式：{'仅数据有变化时推送' if pending.get('alert_mode', 'changes_only') == 'changes_only' else '每天固定推送'}")
+        lines.append(f"🔔 提醒模式：{'仅数据有变化时推送' if pending.get('alert_mode', 'always') == 'changes_only' else '每天固定推送（附今日变化）'}")
         lines.append(f"👤 接收人：您自己")
         lines.append("")
         lines.append("回复「确认」即可订阅；或直接告诉我调整（如「改到10点」「每周一和周五」「也推给张工」）。")
@@ -226,7 +226,7 @@ def render_confirmation(pending: dict, current=None) -> str:
         lines.append(f"📋 数据板块：{_format_sources(sources)}")
         lines.append(f"⏰ 推送时间：{format_weekdays(pending.get('weekdays', ''))} "
                      f"{pending.get('push_hour', 9):02d}:{pending.get('push_minute', 0):02d}")
-        lines.append(f"🔔 提醒模式：{'仅数据有变化时推送' if pending.get('alert_mode', 'changes_only') == 'changes_only' else '每天固定推送'}")
+        lines.append(f"🔔 提醒模式：{'仅数据有变化时推送' if pending.get('alert_mode', 'always') == 'changes_only' else '每天固定推送（附今日变化）'}")
         lines.append(f"👤 接收人：您自己")
         lines.append("")
         lines.append("回复「确认」即可订阅；或直接告诉我调整（如「改到10点」「每周一和周五」「也推给张工」）。")

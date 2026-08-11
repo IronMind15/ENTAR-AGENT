@@ -151,6 +151,57 @@ class ExecuteSubscriptionTests(unittest.TestCase):
             result = _execute_subscription(sub)
         self.assertTrue(result["ok"])
 
+    def test_always_no_change_still_pushes_with_banner(self):
+        """always：无变化也必推，顶部注入「📌 今日无变化」（v1.11.4）"""
+        sub_id = self._store.create(_sub(alert_mode="always"))
+        sub = self._store.get(sub_id)
+        sub.last_snapshot = [{
+            "source_key": "project_status", "table_name": "33周", "total": 1,
+            "status_counts": {"滞后": 1},
+            "attention": [{"status": "滞后", "title": "项目A"}],
+            "normal": [],
+        }]
+        with mock.patch("dashboard.service.collect_and_parse",
+                        return_value=(_parsed(), [])), \
+             mock.patch("dashboard.service.assemble", return_value="# 看板"), \
+             mock.patch("dashboard.service.push",
+                        return_value=(True, "")) as m_push:
+            result = _execute_subscription(sub)
+        self.assertTrue(result["ok"])
+        sent_text = m_push.call_args[0][2]  # push(recipients, title, text)
+        self.assertTrue(sent_text.startswith("📌 今日无变化"))
+
+    def test_always_change_injects_change_banner(self):
+        """always：有变化顶部注入「📌 今日变化」+ 板块名（v1.11.4）"""
+        sub_id = self._store.create(_sub(alert_mode="always"))
+        sub = self._store.get(sub_id)
+        sub.last_snapshot = [{
+            "source_key": "project_status", "table_name": "33周", "total": 9,
+            "status_counts": {}, "attention": [], "normal": [],
+        }]
+        with mock.patch("dashboard.service.collect_and_parse",
+                        return_value=(_parsed(), [])), \
+             mock.patch("dashboard.service.assemble", return_value="# 看板"), \
+             mock.patch("dashboard.service.push",
+                        return_value=(True, "")) as m_push:
+            result = _execute_subscription(sub)
+        self.assertTrue(result["ok"])
+        sent_text = m_push.call_args[0][2]
+        self.assertTrue(sent_text.startswith("📌 今日变化："))
+        self.assertIn("研发项目现况表", sent_text)
+        self.assertIn("总数 9→1", sent_text)
+
+    def test_off_mode_skips(self):
+        sub_id = self._store.create(_sub(alert_mode="off"))
+        sub = self._store.get(sub_id)
+        with mock.patch("dashboard.service.collect_and_parse",
+                        return_value=(_parsed(), [])), \
+             mock.patch("dashboard.service.push") as m_push:
+            result = _execute_subscription(sub)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["reason"], "off")
+        m_push.assert_not_called()
+
     def test_no_sources_skips(self):
         sub_id = self._store.create(_sub(data_sources=["missing"]))
         sub = self._store.get(sub_id)

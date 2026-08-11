@@ -10,7 +10,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from dashboard.alerts import (  # noqa: E402
-    diff_summary, has_changes, make_snapshot,
+    change_banner, diff_summary, has_changes, make_snapshot,
 )
 
 
@@ -120,6 +120,42 @@ class DiffSummaryTests(unittest.TestCase):
             {"项目名称": "项目A", "状态": "滞后", "本周进展": "今天进展"}])])
         self.assertFalse(has_changes(a, b))
         self.assertEqual(diff_summary(a, b), [])
+
+
+class ChangeBannerTests(unittest.TestCase):
+    """每日必推顶部变化标注（v1.11.4）"""
+
+    def test_no_change_banner(self):
+        a = make_snapshot([_res()])
+        b = make_snapshot([_res()])
+        self.assertEqual(change_banner(a, b), "📌 今日无变化")
+
+    def test_change_banner_with_detail(self):
+        a = make_snapshot([_res()])
+        b = make_snapshot([_res(total=3)])
+        banner = change_banner(a, b)
+        self.assertTrue(banner.startswith("📌 今日变化："))
+        self.assertIn("s1", banner)             # name_by_key 缺省回退 source_key
+        self.assertIn("总数 2→3", banner)
+
+    def test_change_banner_name_mapping(self):
+        """name_by_key 把 source_key 映射成板块名"""
+        a = make_snapshot([_res()])
+        b = make_snapshot([_res(total=3)])
+        banner = change_banner(a, b, name_by_key={"s1": "研发项目现况表"})
+        self.assertIn("研发项目现况表", banner)
+        self.assertNotIn("s1：", banner)
+
+    def test_change_banner_new_block(self):
+        a = make_snapshot([_res()])
+        b = make_snapshot([_res(), _res(source_key="s2")])
+        banner = change_banner(a, b, name_by_key={"s2": "整机测试问题"})
+        self.assertIn("整机测试问题：新增板块", banner)
+
+    def test_first_snapshot_is_change(self):
+        b = make_snapshot([_res()])
+        banner = change_banner(None, b)
+        self.assertTrue(banner.startswith("📌 今日变化："))
 
 
 if __name__ == "__main__":

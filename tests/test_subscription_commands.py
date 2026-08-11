@@ -165,6 +165,22 @@ class RenderConfirmationTests(unittest.TestCase):
         self.assertIn("09:00", text)
         self.assertIn("确认", text)
 
+    def test_default_alert_mode_daily_push_text(self):
+        """默认 always → 确认文案「每天固定推送（附今日变化）」（v1.11.4）"""
+        pending = {"intent": "create", "data_sources": ["s1"],
+                   "push_hour": 9, "push_minute": 0, "weekdays": "",
+                   "alert_mode": "always"}
+        text = sc.render_confirmation(pending)
+        self.assertIn("每天固定推送（附今日变化）", text)
+        self.assertNotIn("仅数据有变化时推送", text)
+
+    def test_changes_only_confirmation_text(self):
+        pending = {"intent": "doc_create", "data_sources": ["doc_1"],
+                   "push_hour": 9, "push_minute": 0, "weekdays": "",
+                   "alert_mode": "changes_only"}
+        text = sc.render_confirmation(pending)
+        self.assertIn("仅数据有变化时推送", text)
+
     def test_stop_confirmation(self):
         text = sc.render_confirmation({"intent": "stop"})
         self.assertIn("停止", text)

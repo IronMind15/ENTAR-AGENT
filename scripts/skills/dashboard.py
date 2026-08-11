@@ -105,11 +105,22 @@ class DashboardSkill(BaseSkill):
 
     # ===== 辅助 =====
     @classmethod
-    def _handle_doc_create(cls, user_id: str) -> dict:
-        """「按这几个文档做每日看板」：取该用户可看板文档候选 → 反问确认"""
+    def _handle_doc_create(cls, user_id: str,
+                           source_candidate_ids: list[int] | None = None) -> dict:
+        """「按这几个文档做每日看板」：取文档候选 → 反问确认
+
+        v1.11.4：`source_candidate_ids` 为本次消息识别的候选 id 时只取这些
+        （避免历史候选混入）；缺省时兜底取全部可看板候选（如纯「帮我推个看板」）。
+        """
         try:
             from dashboard.doc_candidates import get_candidate_store
-            cands = get_candidate_store().list_dashboard_ready(user_id)
+            store = get_candidate_store()
+            if source_candidate_ids:
+                cands = [store.get(cid) for cid in source_candidate_ids]
+                cands = [c for c in cands if c and c.enabled
+                         and c.kind in ("notable", "workbook", "doc")]
+            else:
+                cands = store.list_dashboard_ready(user_id)
         except Exception as e:
             logger.warning(f"取文档候选失败: {e}")
             cands = []
@@ -123,7 +134,7 @@ class DashboardSkill(BaseSkill):
             "intent": "doc_create",
             "data_sources": [f"doc_{c.id}" for c in cands],
             "push_hour": 9, "push_minute": 0,
-            "weekdays": "", "alert_mode": "changes_only",
+            "weekdays": "", "alert_mode": "always",
             "title": "恩特能源每日项目看板",
             "owner_user_id": user_id,
             "owner_staff_id": staff_id,
@@ -140,7 +151,7 @@ class DashboardSkill(BaseSkill):
             "intent": "create",
             "data_sources": sources or [],
             "push_hour": 9, "push_minute": 0,
-            "weekdays": "", "alert_mode": "changes_only",
+            "weekdays": "", "alert_mode": "always",
             "title": "恩特能源每日项目看板",
             "owner_user_id": user_id,
             "owner_staff_id": staff_id,
@@ -161,7 +172,7 @@ class DashboardSkill(BaseSkill):
                 push_hour=pending.get("push_hour", 9),
                 push_minute=pending.get("push_minute", 0),
                 weekdays=pending.get("weekdays", ""),
-                alert_mode=pending.get("alert_mode", "changes_only"),
+                alert_mode=pending.get("alert_mode", "always"),
                 recipients=pending.get("recipients") or [],
                 title=pending.get("title", "恩特能源每日项目看板"),
             )

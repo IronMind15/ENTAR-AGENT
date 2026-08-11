@@ -573,6 +573,10 @@ class ErrorQueryHandler(ChatbotHandler):
         消息以 alidocs 链接形式到达 → 逐个解析读取内容，聚合回复摘要；
         同时登记候选（user+url 唯一），供「帮我学习」入库。
         按交互原则只提示「帮我学习」入库，不推销推送。
+
+        v1.11.4：返回 (回复文本, 本次登记候选 id 列表)——候选 id 供
+        「做每日看板」只取本次识别的文档（不再混入历史候选）。
+        无 URL / 导入失败返回 None。
         """
         try:
             from dingtalk_doc_client import get_doc_client
@@ -594,6 +598,7 @@ class ErrorQueryHandler(ChatbotHandler):
         replies = []
         learned_hint = False
         last_records = []
+        cand_ids = []
         # v1.11.3：不再截断到 5 个——识别只读概要（SUMMARY_RECORD_LIMIT 条/20 块）字少，
         # 发多少识别多少；_MAX_DOC_URLS=50 仅防异常超长输入
         for url in urls[:_MAX_DOC_URLS]:
@@ -612,7 +617,10 @@ class ErrorQueryHandler(ChatbotHandler):
             kind = result.get("kind", "")
             kind_name = {"notable": "AI表格", "workbook": "在线表格", "doc": "文档"}.get(kind, kind)
             node_id = result.get("node_id", "")
-            self._register_doc_candidate(user_id, url, result, operator_union=operator)
+            cand_id = self._register_doc_candidate(
+                user_id, url, result, operator_union=operator)
+            if cand_id:
+                cand_ids.append(cand_id)
             summary = self._doc_summary(result)
             replies.append(
                 f"📑 {result.get('name') or kind_name}（{kind_name}）· 概要 · 共 {len(records)} 条记录"
@@ -621,7 +629,7 @@ class ErrorQueryHandler(ChatbotHandler):
             last_records = records
 
         if not replies:
-            return "📑 已识别钉钉文档链接。"
+            return ("📑 已识别钉钉文档链接。", cand_ids)
         msg = "\n\n".join(replies)
         if learned_hint:
             # v1.11.2：入库提示详细说明——入库是什么、进哪个库、有什么好处
@@ -632,7 +640,7 @@ class ErrorQueryHandler(ChatbotHandler):
                 "· 看板不受影响——看板每天实时拉取文档最新数据，不进知识库\n"
                 "回复「帮我学习」直接入库。"
             )
-        return msg
+        return (msg, cand_ids)
 
     def _handle_doc_link_with_kanban(self, text: str, user_id: str,
                                      staff_id: str):
@@ -644,15 +652,18 @@ class ErrorQueryHandler(ChatbotHandler):
 
         解决 v1.11.1 遗留：interactiveCard/富文本消息直接走文档识别、
         跳过技能路由，导致「做看板」意图被吞。
+        v1.11.4：把本次识别的候选 id 传给看板创建，数据源只取本次文档。
         """
-        doc_answer = self._handle_dingtalk_doc_link(text, user_id, staff_id)
-        if doc_answer is None:
+        doc_result = self._handle_dingtalk_doc_link(text, user_id, staff_id)
+        if doc_result is None:
             return None
+        doc_answer, cand_ids = doc_result
         try:
             from dashboard.subscription_commands import parse_doc_dashboard_intent
             if parse_doc_dashboard_intent(text) is not None:
                 from skills.dashboard import DashboardSkill
-                kb = DashboardSkill._handle_doc_create(user_id)
+                kb = DashboardSkill._handle_doc_create(
+                    user_id, source_candidate_ids=cand_ids)
                 if kb and kb.get("answer"):
                     return doc_answer + "\n\n" + kb["answer"]
         except Exception as e:
@@ -699,12 +710,13 @@ class ErrorQueryHandler(ChatbotHandler):
 
     @staticmethod
     def _register_doc_candidate(user_id: str, url: str, result: dict,
-                                operator_union: str = ""):
-        """登记「帮我学习」候选 / 动态看板数据源（同 user+url 覆盖）
+                                operator_union: str = "") -> int:
+        """登记「帮我学习」候选 / 动态看板数据源（同 user+url 覆盖），返回候选 id。
 
         v1.11.0：kind∈{notable,workbook} 置 enabled=1（可做看板源），
         字段中文名（field_names）转 field_map JSON 存下，供动态源展示。
         operator_union 用解析出的真 unionId（sender_id 可能带 `$:` 包装）。
+        v1.11.4：返回候选 id（供「做每日看板」只取本次识别的文档）。
         """
         try:
             from dashboard.doc_candidates import DocCandidate, get_candidate_store
@@ -715,7 +727,7 @@ class ErrorQueryHandler(ChatbotHandler):
                 for fid, name in field_names.items()
             }
             store = get_candidate_store()
-            store.add(DocCandidate(
+            cand_id = store.add(DocCandidate(
                 user_id=user_id, url=url,
                 node_id=result.get("node_id", ""),
                 sheet_id=result.get("sheet_id", ""),
@@ -727,8 +739,10 @@ class ErrorQueryHandler(ChatbotHandler):
                 enabled=kind in ("notable", "workbook", "doc"),
                 field_map=json.dumps(field_map, ensure_ascii=False),
             ))
+            return cand_id or 0
         except Exception as e:
             logger.warning(f"登记文档候选失败: {e}")
+            return 0
 
     def _handle_rich_text_message(self, bot_msg, user_id, staff_id, sender):
         """处理富文本/文档卡片消息（v1.11.0）：提取 alidocs 链接走文档识别

@@ -63,7 +63,7 @@ class Subscription:
     push_hour: int = 9
     push_minute: int = 0
     weekdays: str = ""               # ""=每天；"1,5"=周一、周五（0-6）
-    alert_mode: str = "changes_only" # always | changes_only | off
+    alert_mode: str = "always" # always（每日必推） | changes_only | off
     recipients: list = field(default_factory=list)     # batchSend staff_id，含 owner
     title: str = "恩特能源每日项目看板"
     last_snapshot: Optional[list] = None   # alerts.make_snapshot 输出
@@ -115,7 +115,7 @@ class SubscriptionStore:
                 push_hour      INTEGER DEFAULT 9,
                 push_minute    INTEGER DEFAULT 0,
                 weekdays       TEXT DEFAULT '',
-                alert_mode     TEXT DEFAULT 'changes_only',
+                alert_mode     TEXT DEFAULT 'always',
                 recipients     TEXT DEFAULT '[]',
                 title          TEXT DEFAULT '恩特能源每日项目看板',
                 last_snapshot  TEXT DEFAULT 'null',

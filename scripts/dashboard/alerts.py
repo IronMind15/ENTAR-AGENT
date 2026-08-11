@@ -86,3 +86,21 @@ def diff_summary(old_snap: list[dict] | None, new_snap: list[dict]) -> list[dict
         if key not in new_map:
             out.append({"source_key": key, "detail": "板块消失"})
     return out
+
+
+def change_banner(old_snap: list[dict] | None, new_snap: list[dict],
+                  name_by_key: dict | None = None) -> str:
+    """每日必推顶部变化标注（v1.11.4）
+
+    有变化：`📌 今日变化：板块名：总数 2→3；新增关注1`
+    无变化：`📌 今日无变化`
+    name_by_key: {source_key: 板块名}，缺省时用 source_key 原样。
+    """
+    diff = diff_summary(old_snap, new_snap)
+    if not diff:
+        return "📌 今日无变化"
+    parts = []
+    for d in diff:
+        name = (name_by_key or {}).get(d["source_key"], d["source_key"])
+        parts.append(f"{name}：{d['detail']}")
+    return "📌 今日变化：" + "；".join(parts)

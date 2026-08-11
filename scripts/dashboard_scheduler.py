@@ -51,9 +51,13 @@ def is_due(now: datetime.datetime, sub) -> bool:
 
 
 def _execute_subscription(sub) -> dict:
-    """执行一次订阅推送，返回 {"ok": bool, "reason": str}"""
+    """执行一次订阅推送，返回 {"ok": bool, "reason": str}
+
+    v1.11.4：alert_mode 默认 always（每天必推）；顶部注入「📌 今日变化/今日无变化」。
+    changes_only 保留：无变化静默。
+    """
     from dashboard import service
-    from dashboard.alerts import has_changes, make_snapshot
+    from dashboard.alerts import change_banner, has_changes, make_snapshot
     from dashboard.subscription_store import get_subscription_store
 
     sources = service.resolve_subscription_sources(sub)
@@ -68,8 +72,9 @@ def _execute_subscription(sub) -> dict:
         return {"ok": False, "reason": "no_data"}
 
     snap = make_snapshot(parsed)
+    changed = has_changes(sub.last_snapshot, snap)
 
-    if sub.alert_mode == "changes_only" and not has_changes(sub.last_snapshot, snap):
+    if sub.alert_mode == "changes_only" and not changed:
         logger.info(f"[看板] 订阅 {sub.id} 数据无变化，静默（changes_only）")
         return {"ok": False, "reason": "no_changes"}
     if sub.alert_mode == "off":
@@ -82,6 +87,11 @@ def _execute_subscription(sub) -> dict:
                                 llm_func=call_deepseek)
     except Exception:
         text = service.assemble(parsed, title=sub.title, date_str=service.today_str())
+
+    # 每日必推：顶部注入变化标注（有变化列变更、无变化显式说明）
+    if sub.alert_mode == "always":
+        name_by_key = {s.key: s.name for s in sources}
+        text = change_banner(sub.last_snapshot, snap, name_by_key) + "\n\n" + text
 
     ok, msg = service.push(sub.recipients, sub.title, text)
     if not ok:

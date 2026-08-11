@@ -54,7 +54,7 @@ class PushConfig:
     """推送配置（标量，来自 config.py / local_config.py）"""
     push_hour: int = 9
     push_minute: int = 0
-    alert_mode: str = "changes_only"    # always | changes_only | off
+    alert_mode: str = "always"    # always（每日必推）| changes_only | off
     title: str = "恩特能源每日项目看板"
     weekdays: str = ""                  # ""=每天；"1,5"=周一、周五（0-6）
 
@@ -169,13 +169,13 @@ def load_push_config() -> PushConfig:
     try:
         alert_mode = DASHBOARD_ALERT_MODE
     except Exception:
-        alert_mode = "changes_only"
+        alert_mode = "always"
     try:
         title = DASHBOARD_TITLE
     except Exception:
         title = "恩特能源每日项目看板"
     if alert_mode not in ("always", "changes_only", "off"):
-        alert_mode = "changes_only"
+        alert_mode = "always"
     return PushConfig(
         push_hour=push_hour, push_minute=push_minute,
         alert_mode=alert_mode, title=title, weekdays=weekdays,

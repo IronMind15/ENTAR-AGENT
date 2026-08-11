@@ -114,6 +114,6 @@ LONG_TERM_ITEM_MAX_CONTENT: int = 200    # 单条长期记忆注入截断长度�
 # 本文件只承载推送标量；用户可在 local_config.py 覆盖（环境变量优先）。
 DASHBOARD_PUSH_HOUR: str = _get_config("DASHBOARD_PUSH_HOUR") or "9"
 DASHBOARD_PUSH_MINUTE: str = _get_config("DASHBOARD_PUSH_MINUTE") or "0"
-DASHBOARD_ALERT_MODE: str = _get_config("DASHBOARD_ALERT_MODE") or "changes_only"
+DASHBOARD_ALERT_MODE: str = _get_config("DASHBOARD_ALERT_MODE") or "always"
 DASHBOARD_TITLE: str = _get_config("DASHBOARD_TITLE") or "恩特能源每日项目看板"
 DASHBOARD_WEEKDAYS: str = _get_config("DASHBOARD_WEEKDAYS") or ""
