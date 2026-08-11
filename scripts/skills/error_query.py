@@ -30,7 +30,7 @@ _HTTP_CLIENT = httpx.Client(timeout=15, trust_env=False)
 from config import DEEPSEEK_API_KEY
 from skills import BaseSkill, register
 from doc_mgr.storage import get_store
-from skills.enhanced_search import enhanced_query
+from skills.enhanced_search import enhanced_query, parse_query_results
 
 logger = logging.getLogger("error_query")
 
@@ -382,18 +382,7 @@ def search_kb(query: str) -> list[dict]:
         logger.error(f"增强检索失败: {e}")
         return []
 
-    if not results or not results.get("documents") or not results["documents"][0]:
-        return []
-
-    items = []
-    for i in range(len(results["documents"][0])):
-        meta = dict(results["metadatas"][0][i])
-        if results.get("distances"):
-            meta["_score"] = round(float(results["distances"][0][i]), 4)
-        meta["_match_type"] = "semantic"
-        items.append(meta)
-
-    return items
+    return parse_query_results(results)
 
 
 def extract_fault_code(query: str) -> str | None:

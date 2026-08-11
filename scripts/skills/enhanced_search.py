@@ -276,3 +276,32 @@ def enhanced_query(collection: str, query_text: str, n_results: int = 5,
         "metadatas": [out_metas],
         "distances": [out_dists],
     }
+
+
+def parse_query_results(results: dict, content_chars: int = 2000,
+                        include_content: bool = True) -> list[dict]:
+    """解析 Chroma/enhanced_query 返回为统一 metadata 列表（故障/标准/经验三库共用）
+
+    与 chromadb.query 兼容：documents/metadatas/distances 为双层嵌套结构。
+    每条输出：
+      - 原始 metadata（dict 拷贝）
+      - _score：distance 越小越相关（精确匹配为 0.0）
+      - _match_type="semantic"
+      - _content：截断的文档文本（供 LLM 工具参考，可关闭）
+
+    三个查询模块（error_query / standards_query / experience_query）原先各写
+    一份几乎逐字的解析循环，v1.11.6 统一到此函数，避免重复与漂移。
+    """
+    if not results or not results.get("documents") or not results["documents"][0]:
+        return []
+
+    items = []
+    for i in range(len(results["documents"][0])):
+        meta = dict(results["metadatas"][0][i])
+        if results.get("distances"):
+            meta["_score"] = round(float(results["distances"][0][i]), 4)
+        meta["_match_type"] = "semantic"
+        if include_content:
+            meta["_content"] = results["documents"][0][i][:content_chars]
+        items.append(meta)
+    return items

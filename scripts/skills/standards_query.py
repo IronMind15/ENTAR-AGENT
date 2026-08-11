@@ -18,7 +18,8 @@ if sys.platform == "win32":
 
 from center_config import get_center_name
 from doc_mgr.storage import get_store
-from skills.enhanced_search import enhanced_query
+from skills import BaseSkill, register
+from skills.enhanced_search import enhanced_query, parse_query_results
 
 logger = logging.getLogger("standards_query")
 
@@ -159,33 +160,8 @@ def _semantic_search(query: str, centers: list[str] | None = None) -> list[dict]
 
 
 def _parse_query_results(results: dict) -> list[dict]:
-    """解析 Chroma query 返回结果为统一格式"""
-    if not results or not results.get("documents") or not results["documents"][0]:
-        return []
-
-    items = []
-    for i in range(len(results["documents"][0])):
-        meta = dict(results["metadatas"][0][i])
-        if results.get("distances"):
-            meta["_score"] = round(float(results["distances"][0][i]), 4)
-        meta["_match_type"] = "semantic"
-        meta["_content"] = results["documents"][0][i][:2000]
-        items.append(meta)
-    return items
-
-    if not results or not results.get("documents") or not results["documents"][0]:
-        return []
-
-    items = []
-    for i in range(len(results["documents"][0])):
-        meta = dict(results["metadatas"][0][i])
-        if results.get("distances"):
-            meta["_score"] = round(float(results["distances"][0][i]), 4)
-        meta["_match_type"] = "semantic"
-        meta["_content"] = results["documents"][0][i][:2000]  # 前2000字符供 LLM 参考
-        items.append(meta)
-
-    return items
+    """解析 Chroma query 返回结果为统一格式（委托 enhanced_search 公共实现）"""
+    return parse_query_results(results)
 
 
 def format_standard_result(meta: dict) -> str:
@@ -283,3 +259,60 @@ def extract_standard_id(query: str) -> str | None:
 def exact_match_by_std_id(std_id: str) -> dict | None:
     """精确匹配标准编号（供 agent.py 快速通道使用）"""
     return _exact_match_by_std_id(std_id)
+
+
+# ===== 技能类注册（v1.11.6 统一快速通道实现位置） =====
+
+def _handle_impl(query: str) -> dict:
+    """标准查询处理入口（技能 handle）
+
+    与故障码技能对称的两级策略：
+      1. 精确标准编号匹配（GB/T 34133-2023 等）→ 单条格式化秒回，不调 LLM
+      2. 未命中 → 本地语义搜索兜底（不调 LLM，复用 search_kb 两级逻辑）
+    """
+    q = (query or "").strip()
+    if not q:
+        return {"answer": "请输入标准编号或标准名称关键词", "source": "standards"}
+
+    results = search_kb(q)
+    if not results:
+        return {"answer":
+                f"暂未找到与「{q}」相关的标准内容。\n\n"
+                "可尝试标准编号（如 GB/T 34133-2023）或更换关键词；\n"
+                "如需补充标准，请上传 PDF 后回复『帮我学习』入库。",
+                "source": "standards"}
+
+    if results[0].get("_match_type") == "exact":
+        return {"answer": format_exact_result(results[0]),
+                "source": "标准编号快速匹配"}
+
+    formatted = format_standard_results(results, q)
+    if formatted:
+        return {"answer": formatted, "source": "标准语义搜索"}
+    return {"answer": "暂未找到相关标准内容，可换个问法。", "source": "standards"}
+
+
+@register
+class StandardsQuerySkill(BaseSkill):
+    """标准查询技能：标准编号精确匹配 + 语义搜索秒回（v1.11.6 统一快速通道）
+
+    priority=70：低于故障码(100)/PCB(90)/看板(80)——标准号当初放 agent 内部
+    兜底正是为避免含标准号的看板/PCB 场景被抢（切斯特顿栅栏）；高于 agent(50)
+    兜底，纯标准查询不再调 LLM。
+    """
+    name = "标准查询"
+    description = "精确匹配标准编号 + 标准语义搜索，秒回结果"
+    priority = 70
+
+    @classmethod
+    def match(cls, query: str) -> bool:
+        """含标准编号（GB/IEC/EN 等）才匹配"""
+        return bool(STANDARD_ID_PATTERN.search((query or "").strip()))
+
+    @classmethod
+    def handle(cls, query: str, **kwargs) -> dict:
+        return _handle_impl(query)
+
+
+# 向后兼容：保持模块级 handle 函数（旧代码 from skills.standards_query import handle）
+handle = _handle_impl

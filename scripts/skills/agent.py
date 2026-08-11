@@ -283,9 +283,7 @@ def _call_deepseek_stream(
                                 if idx not in final_tool_calls and on_chunk:
                                     fn_name = tc.get("function", {}).get("name", "")
                                     _TOOL_DISPLAY = {
-                                        "search_knowledge_base": "🔍 搜索故障知识库...",
-                                        "search_standards": "🔍 搜索标准文档...",
-                                        "search_experience_kb": "🔍 搜索经验库...",
+                                        "search_knowledge_base": "🔍 搜索知识库...",
                                         "calc_pcb_trace": "🔧 PCB 走线计算...",
                                         "calc_copper_busbar": "🔧 铜排载流计算...",
                                         "find_employee": "👥 查询同事信息...",

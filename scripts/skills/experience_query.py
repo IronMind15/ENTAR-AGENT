@@ -19,7 +19,7 @@ if sys.platform == "win32":
     sys.stdin.reconfigure(encoding="utf-8")
     sys.stdout.reconfigure(encoding="utf-8")
 
-from skills.enhanced_search import enhanced_query
+from skills.enhanced_search import enhanced_query, parse_query_results
 
 logger = logging.getLogger("experience_query")
 
@@ -65,19 +65,8 @@ def search_kb(query: str, department: str = "", centers: list[str] | None = None
 
 
 def _parse_query_results(results: dict) -> list[dict]:
-    """解析 Chroma query 返回结果为统一格式"""
-    if not results or not results.get("documents") or not results["documents"][0]:
-        return []
-
-    items = []
-    for i in range(len(results["documents"][0])):
-        meta = dict(results["metadatas"][0][i])
-        if results.get("distances"):
-            meta["_score"] = round(float(results["distances"][0][i]), 4)
-        meta["_match_type"] = "semantic"
-        meta["_content"] = results["documents"][0][i][:2000]  # 前2000字符供 LLM 参考
-        items.append(meta)
-    return items
+    """解析 Chroma query 返回结果为统一格式（委托 enhanced_search 公共实现）"""
+    return parse_query_results(results)
 
 
 def format_experience_result(meta: dict) -> str:
