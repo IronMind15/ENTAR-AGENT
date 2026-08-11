@@ -7,7 +7,7 @@ import logging
 import os
 import sys
 import threading
-from logging.handlers import RotatingFileHandler
+from logging.handlers import TimedRotatingFileHandler
 sys.path.insert(0, os.path.dirname(__file__))
 
 # 钉钉 SDK（dingtalk_stream）内部用 requests 且默认 trust_env=True 跟随系统代理。
@@ -35,11 +35,11 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
     handlers=[
         logging.StreamHandler(),                                              # 控制台
-        RotatingFileHandler(
+        TimedRotatingFileHandler(
             os.path.join(_LOG_DIR, "entark.log"),
             encoding="utf-8",
-            maxBytes=5 * 1024 * 1024,   # 5MB 轮转
-            backupCount=3,
+            when="midnight",   # 每天 0 点按天轮转
+            backupCount=7,     # 保留最近 7 天，更早自动删除
         ),
     ],
 )

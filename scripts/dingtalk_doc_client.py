@@ -68,6 +68,9 @@ _WORKBOOK_RECORD_PATHS = [
     "/v1.0/workbook/bases/{base}/sheets/{sheet}/records/list",
 ]
 
+# ── 普通在线文档（doc）读取（v1.11.1，需 Storage.File.Read 权限）──
+_DOC_BLOCKS_PATH = "/v1.0/doc/suites/documents/{node}/blocks"
+
 
 class DingTalkDocPermissionError(RuntimeError):
     """应用未开通钉钉文档/表格读取权限，或操作人无文档访问权时抛出。"""
@@ -406,6 +409,111 @@ class DingTalkDocClient:
             f"在线表格读取暂不可用"
             + (f"（{last_err}）" if last_err else "，请先『帮我学习』入库"))
 
+    # ── 读取普通在线文档（doc）────────────────────────────────
+    def read_doc_content(self, node_id: str, operator_id: str = "",
+                         max_blocks: int = 500) -> dict:
+        """读取普通在线文档（doc）正文 → blocks 逐块转 Markdown。
+
+        Args:
+            node_id: 文档节点 ID
+            operator_id: 操作人 unionId
+            max_blocks: 内容块安全上限（钉钉一次性返回，无分页字段）
+
+        Returns:
+            {"ok": bool, "markdown": str, "blocks": list, "message": str}
+        """
+        try:
+            data = self._request(
+                "GET",
+                _DOC_BLOCKS_PATH.format(node=node_id),
+                operator_id=operator_id,
+            )
+        except DingTalkDocPermissionError:
+            raise
+        except Exception as e:
+            return {"ok": False, "markdown": "", "blocks": [],
+                    "message": str(e)[:200]}
+
+        blocks = (data.get("result") or {}).get("data") or []
+        if not blocks:
+            return {"ok": False, "markdown": "", "blocks": [],
+                    "message": "文档无内容（0 个内容块）"}
+        blocks = blocks[:max_blocks]
+        md = self._blocks_to_markdown(blocks)
+        return {
+            "ok": True, "markdown": md, "blocks": blocks,
+            "message": f"读取普通文档成功，{len(blocks)} 个内容块",
+        }
+
+    @staticmethod
+    def _blocks_to_markdown(blocks: list[dict]) -> str:
+        """blocks → Markdown 全文：段落原文，表格转 Markdown 表格。
+
+        实测结构：
+          {"blockType": "paragraph", "paragraph": {"text": "..."}}
+          {"blockType": "table", "table": {"cells": [[行], [行], ...]}}
+        """
+        parts: list[str] = []
+        for b in blocks:
+            btype = b.get("blockType")
+            if btype == "paragraph":
+                text = (b.get("paragraph") or {}).get("text", "")
+                if text and text.strip():
+                    parts.append(text.strip())
+                    parts.append("")
+            elif btype == "table":
+                cells = (b.get("table") or {}).get("cells") or []
+                if cells:
+                    parts.append(DingTalkDocClient._table_to_markdown(cells))
+                    parts.append("")
+        return "\n".join(parts).strip()
+
+    @staticmethod
+    def _table_to_markdown(cells: list[list]) -> str:
+        """二维 cells → Markdown 表格（单元格换行转 <br>，保持单行）。"""
+        if not cells:
+            return ""
+        max_cols = max((len(r) for r in cells), default=0)
+        if max_cols == 0:
+            return ""
+
+        def _row(r: list) -> str:
+            padded = list(r) + [""] * (max_cols - len(r))
+            cleaned = [
+                str(v or "").replace("\n", "<br>").replace("|", "\\|").strip()
+                for v in padded
+            ]
+            return "| " + " | ".join(cleaned) + " |"
+
+        lines = [_row(cells[0])]
+        lines.append("| " + " | ".join(["---"] * max_cols) + " |")
+        lines.extend(_row(r) for r in cells[1:])
+        return "\n".join(lines)
+
+    def _doc_blocks_to_records(self, blocks: list[dict]) -> list[dict]:
+        """blocks → 逐块 dict 列表（供 bot 预览 / records_count / 看板采集）。
+
+        每个 block 一条：段落 → {"类型": "段落", "内容": text}；
+        表格 → {"类型": "表格N", "内容": markdown 表格}。
+        """
+        records: list[dict] = []
+        table_idx = 0
+        for b in blocks:
+            btype = b.get("blockType")
+            if btype == "paragraph":
+                text = (b.get("paragraph") or {}).get("text", "")
+                if text and text.strip():
+                    records.append({"类型": "段落", "内容": text.strip()})
+            elif btype == "table":
+                cells = (b.get("table") or {}).get("cells") or []
+                if cells:
+                    table_idx += 1
+                    records.append({
+                        "类型": f"表格{table_idx}",
+                        "内容": self._table_to_markdown(cells),
+                    })
+        return records
+
     # ── 类型探测与统一入口 ───────────────────────────────────
     def detect_kind(self, node_id: str, operator_id: str = "") -> str:
         """探测文档类型：先按 notable（AI表格）试探，报类型不符再回退。
@@ -436,7 +544,17 @@ class DingTalkDocClient:
             raise
         except Exception as e:
             logger.info(f"workbook 探测不符: {str(e)[:120]}")
-        # 3. 兜底：无强证据时返回 unknown，由调用方决定
+        # 3. 回退试探 doc（普通在线文档，需 Storage.File.Read 权限）
+        try:
+            doc = self.read_doc_content(node_id, operator_id)
+            if doc.get("ok"):
+                logger.info(f"doc 探测命中：{len(doc.get('blocks') or [])} 个内容块")
+                return "doc"
+        except DingTalkDocPermissionError:
+            raise
+        except Exception as e:
+            logger.info(f"doc 探测不符: {str(e)[:120]}")
+        # 4. 兜底：无强证据时返回 unknown，由调用方决定
         logger.info(f"文档类型探测结果: unknown（node={node_id[:12]}）")
         return "unknown"
 
@@ -525,6 +643,30 @@ class DingTalkDocClient:
                 return {
                     "ok": False, "kind": "workbook", "node_id": node_id,
                     "message": f"在线表格读取暂不可用，可先『帮我学习』入库（{str(e)[:100]}）",
+                }
+        if kind == "doc":
+            try:
+                doc = self.read_doc_content(node_id, operator)
+                if not doc.get("ok"):
+                    return {
+                        "ok": False, "kind": "doc", "node_id": node_id,
+                        "message": f"普通文档读取失败（{doc.get('message', '')}），可先『帮我学习』入库",
+                    }
+                records = self._doc_blocks_to_records(doc.get("blocks") or [])
+                return {
+                    "ok": True, "kind": "doc", "node_id": node_id, "sheet_id": "",
+                    "records": records,
+                    "field_names": {},
+                    "markdown": doc.get("markdown", ""),
+                    "sheet_name": "",
+                    "message": f"读取普通文档成功，共 {len(records)} 个内容块",
+                }
+            except DingTalkDocPermissionError:
+                raise
+            except Exception as e:
+                return {
+                    "ok": False, "kind": "doc", "node_id": node_id,
+                    "message": f"普通文档读取暂不可用，可先『帮我学习』入库（{str(e)[:100]}）",
                 }
         return {
             "ok": False,

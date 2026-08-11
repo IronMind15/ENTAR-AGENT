@@ -3,6 +3,69 @@
 > 📌 **本文档是项目唯一的版本记录（单一事实源）**——README.md、PROGRESS.md 的版本历史均指向本文件，发版时只在这里追加记录。
 > 相关：待办清单见 [TODO.md](TODO.md)，进度看板见 [PROGRESS.md](PROGRESS.md)。
 
+## v1.11.2（2026-08-11）
+
+**🔧 实测修复包：发多个文档不再丢 + 卡片消息也能做看板 + 「帮我学习」说明加强**——用户实测反馈 3 个问题一次修齐：①一次发 4 个文档链接只识别 3 个（`urls[:3]` 硬截断，第 4 个静默丢失 → 放宽到 `urls[:5]`）；②interactiveCard 卡片消息走文档识别后直接 return、跳过技能路由，「做每日看板」意图被吞 → 抽 `_handle_doc_link_with_kanban` 合并文档摘要 + 看板创建确认，接入文本/富文本/卡片三处路由；③「帮我学习」提示太简单 → 详细说明入库是什么、进哪个库（企业知识库·标准文档库）、能干什么（自然语言检索示例），并主动区分「看板实时拉取、不进知识库」；入库成功提示也补充块数/记录数/查看入口。全量回归 **564 项全绿**（此前 561 项）。
+
+### 功能
+
+- **修复发 4 丢 1**（`dingtalk_bot.py` `_handle_dingtalk_doc_link`）：`for url in urls[:3]` → `urls[:5]`（够用且防消息过长）
+- **卡片/富文本做看板意图**（`dingtalk_bot.py`）：新增 `_handle_doc_link_with_kanban`（文档识别摘要非 None 且 `parse_doc_dashboard_intent` 命中 → 合并看板创建确认；异常降级只回文档摘要）；`_process_text` / `_handle_rich_text_message` / `_handle_interactive_card_message` 三处改走统一方法
+- **「帮我学习」说明加强**（`dingtalk_bot.py`）：
+  - 文档识别后提示改为三段式：入库进哪个库（企业知识库·标准文档库）→ 入库后效果（自然语言检索，如问「{首条关键词}」即可命中）→ 看板不受影响（实时拉取、不进知识库）
+  - 入库成功提示改为「✅ 已存入企业知识库（标准文档库）· 内容块 N 块 · 记录 M 条 · 回复「我的文件」查看管理」
+- **关键词示例**（`dingtalk_bot.py`）：新增 `_first_record_keyword` 从首条记录取非空字段值截断 8 字作检索示例，兜底「这份文档里的内容」
+
+### 测试
+
+- 新增 3 项：多链接聚合测试改为 4 条链接断言全部处理（`call_count=4`，验证 `urls[:5]`）；`_handle_doc_link_with_kanban` 含「做每日看板」→ 回复含文档摘要 + 看板确认、不含 → 不触发看板技能；interactiveCard 消息含「做每日看板」→ 回复合并摘要
+- 既有「不推销推送」断言适配新文案：`assertNotIn("看板")` 改为 `assertIn("看板")`（新文案主动说明看板区别，非推销）+ `assertNotIn("订阅")` 保留推销约束
+- 全量回归 **564 项通过**（此前 561 项）
+
+### 修改文件
+
+| 文件 | 改动 |
+|------|------|
+| `scripts/skills/dingtalk_bot.py` | `urls[:3]→[:5]` + 🆕 `_handle_doc_link_with_kanban`/`_first_record_keyword` + 三处路由改走统一方法 + 学习提示/入库成功文案加强 |
+| `tests/test_dingtalk_doc.py` | 多链接改 4 条断言 + 新增 3 项合并测试 + 1 处断言适配 |
+
+## v1.11.1（2026-08-11）
+
+**📄 钉钉文档类型自动识别（notable / workbook / doc 统一入口）+ doc 做看板数据源**——普通在线文档（doc）打通：入口不再区分类型，发任意钉钉文档链接（AI表格/在线表格/普通文档）都能自动识别读取。doc 走 `GET /v1.0/doc/suites/documents/{node}/blocks`（需 **Storage.File.Read** 权限），blocks 逐块转保真 Markdown（段落→正文、表格→Markdown 表格、单元格 `\n`→`<br>`）；「帮我学习」doc 直接按全文 Markdown 入库（跳过逐条拼装）；doc 同样可做每日看板数据源（文档表格格式不统一，采集全文由 LLM 提炼，不做字段解析）。全量回归 **561 项全绿**（此前 552 项）。
+
+### 功能
+
+- **doc 读取**（`dingtalk_doc_client.py`）：新增 `read_doc_content`（blocks 接口 + 500 块安全上限 + 403 权限错传播）、`_blocks_to_markdown`/`_table_to_markdown`（保真转换）、`_doc_blocks_to_records`（逐块 records 供预览/看板）
+- **三类型自动识别**（`dingtalk_doc_client.detect_kind`）：顺序探测 notable → workbook → doc，命中哪个用哪个；403 权限错一律传播不降级；doc 失败才落 unknown
+- **统一入口放行 doc**（`read_document` doc 分支）：返回 `{ok, kind:doc, records, markdown, field_names:{}}`，doc/unknown 不再 fall-through 到「暂不支持」
+- **doc 保真入库**（`dashboard/doc_learn.py`）：`kind=doc` 且有 markdown 时用 `engine.process_text(markdown)` 全文直入
+- **doc 做看板数据源**：bot `_register_doc_candidate` 放行（`enabled=kind in (notable,workbook,doc)`）；collector 加 doc 采集分支（无 table_id 概念，直接读全文 → 逐块 records）；`doc_candidates.list_dashboard_ready` + `service.load_all_available_sources` SQL 放行 doc
+- bot 回复 kind 映射已含 `doc→"文档"`（v1.11.0 已就绪），doc 链接回复「📑 已识别钉钉文档（文档）· …」+「帮我学习」提示
+
+### 测试
+
+- 新增 9 项：`test_dingtalk_doc` 追加 `BlocksToMarkdownTests`（段落/表格/`\n` 单元格/缺行补齐）、`ReadDocContentTests`（blocks 接口 + 空内容 + 权限传播 + 500 上限）、`DetectKindDocTests`（notable/workbook 失败回退 doc + 权限传播）、`ReadDocumentDocTests`（doc 分支 markdown + records + 降级）、`BotDocLinkKindDocTests`（doc 链接回复 + 登记看板源 enabled）；`test_doc_learn` 追加 doc markdown 全文入库断言；`test_dashboard_collector` 追加 doc 采集分支测试；`test_dashboard_service`/`test_doc_candidates` 原「doc 排除」断言改为「doc 纳入」
+- 全量回归 **561 项通过**（此前 552 项）
+
+### 已知限制
+
+- doc 读取需应用开通 **Storage.File.Read** 权限（未开通返回 403 并提示申请）
+- doc 看板数据源不做表格字段解析（格式不统一），采集全文由 LLM 提炼
+- doc blocks 接口无分页字段，一次性全返回，客户端按 500 块上限截断
+
+### 修改文件
+
+| 文件 | 改动 |
+|------|------|
+| `scripts/dingtalk_doc_client.py` | 🆕 `read_doc_content` + blocks→Markdown 转换 + `detect_kind` 三类型探测 + `read_document` doc 分支 |
+| `scripts/dashboard/doc_learn.py` | doc 走保真 Markdown 入库 |
+| `scripts/skills/dingtalk_bot.py` | `_register_doc_candidate` 放行 doc 做看板源 |
+| `scripts/dashboard/collector.py` | 🆕 doc 采集分支（读全文 → 逐块 records） |
+| `scripts/dashboard/doc_candidates.py` `service.py` | `list_dashboard_ready` / `load_all_available_sources` 放行 doc |
+| `tests/test_dingtalk_doc.py` `test_doc_learn.py` `test_dashboard_collector.py` `test_dashboard_service.py` `test_doc_candidates.py` | 新增 9 项 + 3 处「doc 排除」断言改为纳入 |
+
+---
+
 ## v1.11.0（2026-08-10）
 
 **📊 每日项目看板 — 发钉钉文档动态做看板（全动态数据源）+ 定时主动推送 + 上传文件自动推荐入库**——用户发钉钉文档（AI表格/在线表格）给小助手 → 识别登记 → 说「按这几个文档做每日看板」→ 反问确认（时间/频率/接收人）→ 每天定时拉这几个文档**最新数据**组装推送（`changes_only` 无变化静默）；数据源**全动态**不再手配 field_map（新增 `list_fields` 自动取字段中文名，接口不可用降级 field_id）；上传文件后小助手**主动推荐入库**、回复「入库/确认」即学。看板数据**不入 Chroma、每次实时拉取**（与知识库物理隔离）。全量回归 **552 项全绿**（此前 496 项）。

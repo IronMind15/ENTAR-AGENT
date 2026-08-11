@@ -91,7 +91,8 @@ class DocCandidateStoreTests(unittest.TestCase):
         self.store.add(self._cand(node_id="n4", kind="notable",
                                   enabled=False, url="u4"))
         ready = self.store.list_dashboard_ready("u1")
-        self.assertEqual({c.node_id for c in ready}, {"n1", "n2"})
+        # v1.11.1：doc 也纳入看板源
+        self.assertEqual({c.node_id for c in ready}, {"n1", "n2", "n3"})
 
     def test_set_enabled(self):
         cid = self.store.add(self._cand())

@@ -13,7 +13,7 @@
 
 恩特能源（天津恩特能源科技有限公司，Tianjin Entar Energy Technology Co., Ltd.，品牌 ENTAR）AI Agent 项目。目标是搭建面向中小企业的 AI Agent 全生命周期管理平台。
 
-### 当前进度：三步走计划 — 第一步稳定化 + 第二步经验知识库启动（v1.11.0）
+### 当前进度：三步走计划 — 第一步稳定化 + 第二步经验知识库启动（v1.11.2）
 
 **第一步：智能查询 + 标准文档检索 + 通用聊天 + 多技能（故障/标准/PCB 计算）——核心能力已完成，正在做真实环境验收与安全收尾**
 - 基于 RAG（检索增强生成）架构的内部工具
@@ -31,6 +31,8 @@
 - ✅ 上传文件直接学习（v1.10.2）：上传后回复「帮我学习」直接入库（取消主管审核）；目录存 `data/uploads/{主部门}/{员工}/{日期}/`；「我的文件」查看、「删除学习/重新学习」管理、`ENTARBOSS` 管理员模式可任意删改；审核代码保留注释可恢复
 - ✅ PDF 检测路由（v1.10.3）：文字层检测（纯文字版/扫描版/混合版），纯文字版 PDF 走本地 PyMuPDF 免费高保真提取（省 MinerU 每日 1000 页额度），扫描/混合版走 MinerU 保质量；`PDF_ROUTING` 配置开关（auto 默认 / mineru 旧行为）一键切回；`compare_pdf_parsers.py` 双路径对比脚本（--no-mineru 干跑省额度）
 - ✅ 每日项目看板（v1.11.0）：发钉钉文档动态做看板（全动态数据源）——发文档（AI表格/在线表格）识别登记 → 「按这几个文档做每日看板」反问确认 → 每天定时拉最新数据组装推送；`list_fields` 自动取字段中文名（不可用降级 field_id）；changes_only 静默；看板数据不入 Chroma 每次实时拉取；钉钉文档多链接识别 + 「帮我学习」文本直入入库（engine.process_text）
+- ✅ 钉钉文档类型自动识别（v1.11.1）：入口统一允许所有类型——发任意钉钉文档链接（AI表格 notable / 在线表格 workbook / 普通文档 doc）自动探测类型后按类型读取；doc 走 `GET /v1.0/doc/suites/documents/{node}/blocks`（需 **Storage.File.Read** 权限），blocks 逐块转保真 Markdown（段落→正文、表格→Markdown 表格、单元格 `\n`→`<br>`）；「帮我学习」doc 按全文 Markdown 入库；doc 也可做看板数据源（格式不统一，采集全文由 LLM 提炼）
+- ✅ 实测修复包（v1.11.2）：一次发多个文档链接不再丢（`urls[:5]` 放宽）；卡片/富文本消息也能识别「做每日看板」意图（`_handle_doc_link_with_kanban` 合并文档摘要 + 看板创建确认，接入文本/富文本/卡片三处路由）；「帮我学习」说明加强——入库进哪个库（企业知识库·标准文档库）、怎么检索（自然语言命中示例）、看板不受影响（实时拉取不进库），入库成功提示补块数/记录数/「我的文件」入口
 - ✅ 上传文件自动推荐入库（v1.11.0）：保存后回执主动推荐「要不要入库？回复『入库/确认』」→ 按路径入库（learn_file_path）；图片不支持不推荐
 - ✅ SQLite 用户、对话和权限存储（v1.2.4）
 - ✅ Web 同步管理、强制重学和任务进度追踪（v1.2.5）
@@ -219,7 +221,8 @@ FastAPI (main.py) → Agent 循环（agent.py）
 | Markdown 切块 | MarkdownChunker | 按标题层级（# ## ###）智能切块，中文标准章节号提取 |
 | OCR 引擎 | MinerU VLM（大模型视觉识别） | 扫描 PDF → Markdown，替代传统 OCR 路线 |
 | PDF 检测路由 | classify_pdf_type + validate_local_text（v1.10.3） | 文字层覆盖率检测：纯文字版走本地 PyMuPDF（免费高保真，省 MinerU 每日 1000 页额度）、扫描/混合版走 MinerU 保质量；`PDF_ROUTING` 开关（auto 默认/mineru 旧行为）；`compare_pdf_parsers.py` 双路径对比脚本 |
-| 每日项目看板 | dashboard 子系统 + dashboard_scheduler（v1.11.0） | 发钉钉文档动态做看板（全动态数据源）：发文档（notable/workbook）登记候选即数据源（合成 key `doc_<id>`），`list_fields` 自动取字段中文名（不可用降级 field_id）；「按这几个文档做每日看板」反问确认；订阅存 user_store.db 新表（owner 双身份 staff_id+union_id）；changes_only 去噪快照静默；看板数据不入 Chroma 每次实时拉取；LLM 组装失败规则兜底 |
+| 每日项目看板 | dashboard 子系统 + dashboard_scheduler（v1.11.0） | 发钉钉文档动态做看板（全动态数据源）：发文档（notable/workbook/**doc**）登记候选即数据源（合成 key `doc_<id>`），`list_fields` 自动取字段中文名（不可用降级 field_id）；「按这几个文档做每日看板」反问确认；订阅存 user_store.db 新表（owner 双身份 staff_id+union_id）；changes_only 去噪快照静默；看板数据不入 Chroma 每次实时拉取；LLM 组装失败规则兜底 |
+| 钉钉文档类型识别 | dingtalk_doc_client（v1.11.1）+ bot（v1.11.2） | `detect_kind` 三类型自动探测（notable→workbook→doc，403 权限错传播）；doc 走 `GET /v1.0/doc/suites/documents/{node}/blocks`（需 Storage.File.Read），blocks 逐块转保真 Markdown；`read_document` 统一入口三种类型都有读取分支；bot `_handle_doc_link_with_kanban` 合并文档识别 + 看板意图（多链接 `urls[:5]`、卡片/富文本/文本三路由） |
 | 向量数据库 | Chroma | 本地持久化，支持精确 + 语义搜索 |
 | Embedding | BAAI/bge-small-zh-v1.5 | 国产中文嵌入，30MB，CPU 运行 |
 | LLM | DeepSeek API (deepseek-v4-flash) | 关键词提取 + 聊天托底 |

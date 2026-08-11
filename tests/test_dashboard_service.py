@@ -139,12 +139,14 @@ class LoadAllAvailableSourcesTests(unittest.TestCase):
             sources = load_all_available_sources()
         self.assertEqual({s.key for s in sources}, {"project_status", "doc_1"})
 
-    def test_doc_kind_excluded(self):
+    def test_doc_kind_included(self):
+        # v1.11.1：doc 也纳入看板数据源
         self._store.add(DocCandidate(user_id="u1", url="u", node_id="n3",
                                      kind="doc", enabled=True))
         with mock.patch("dashboard.config_model.load_sources", return_value=[]):
             sources = load_all_available_sources()
-        self.assertEqual(sources, [])
+        self.assertEqual({s.key for s in sources}, {"doc_1"})
+        self.assertEqual(sources[0].kind, "doc")
 
 
 if __name__ == "__main__":

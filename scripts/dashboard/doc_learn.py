@@ -47,7 +47,12 @@ def learn_dingtalk_doc(user_id: str, client=None) -> dict:
         return {"has_candidate": True, "ok": False,
                 "message": "文档无内容（0 条记录）", "chunk_count": 0, "records": 0}
 
-    md = _records_to_markdown(records)
+    # v1.11.1：普通文档（doc）走 blocks→Markdown 保真全文入库，
+    # 跳过逐条拼 Markdown（段落/表格格式不统一，保真更可靠）。
+    if result.get("kind") == "doc" and result.get("markdown"):
+        md = result["markdown"]
+    else:
+        md = _records_to_markdown(records)
     node_id = cand.node_id or result.get("node_id", "")
     file_name = f"钉钉文档_{node_id[:8]}.md"
 

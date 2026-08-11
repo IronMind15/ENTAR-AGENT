@@ -99,8 +99,31 @@ class CollectKindTests(unittest.TestCase):
     """文档类型限制"""
 
     def test_unknown_kind_returns_error(self):
-        result = Collector(MockDocClient()).collect(_source(kind="doc"))
+        # v1.11.1：doc 已是合法类型，用真未知类型（如 pdf）验证拒绝
+        result = Collector(MockDocClient()).collect(_source(kind="pdf"))
         self.assertIn("暂不支持", result["error"])
+
+    def test_doc_kind_reads_full_content(self):
+        """doc 数据源：不需要 table_id，直接读全文 → 逐块 records"""
+        client = MockDocClient()
+        client._doc_content = {"ok": True, "blocks": [
+            {"blockType": "paragraph", "paragraph": {"text": "要求：每日汇报"}},
+            {"blockType": "table", "table": {"cells": [["型号", "项目"], ["A1", "150kW"]]}},
+        ]}
+
+        def read_doc_content(base_id, operator_id=""):
+            client.last_operator = operator_id
+            return client._doc_content
+        client.read_doc_content = read_doc_content
+        client._doc_blocks_to_records = lambda blocks: [
+            {"类型": "段落", "内容": "要求：每日汇报"},
+            {"类型": "表格1", "内容": "| 型号 | 项目 |\n| --- | --- |\n| A1 | 150kW |"},
+        ]
+        result = Collector(client).collect(_source(kind="doc", table_mode="fixed",
+                                                  table_id=""))
+        self.assertEqual(result["error"], "")
+        self.assertEqual(len(result["records"]), 2)
+        self.assertEqual(result["records"][0]["内容"], "要求：每日汇报")
 
     def test_staff_id_fallback_to_union_id(self):
         """无显式 operator_id 时用 staff_id → unionId 兜底（定时/工具场景）"""

@@ -58,11 +58,27 @@ class Collector:
             # 身份：动态源自带登记人 unionId（跨用户订阅优先用文档归属人身份读）
             op = source.operator_id or self._resolve_operator(operator_id, staff_id)
             kind = source.kind or "notable"
-            if kind not in ("notable", "workbook"):
+            if kind not in ("notable", "workbook", "doc"):
                 return {
                     "source_key": source.key, "name": source.name,
                     "table_name": "", "records": [],
                     "error": f"暂不支持的文档类型: {kind}",
+                }
+            # v1.11.1：doc 无分表概念，直接读全文 → blocks 转 records
+            if kind == "doc":
+                doc = self.client.read_doc_content(source.base_id, op)
+                if not doc.get("ok"):
+                    return {
+                        "source_key": source.key, "name": source.name,
+                        "table_name": "", "records": [],
+                        "error": doc.get("message", "普通文档读取失败"),
+                    }
+                blocks = doc.get("blocks") or []
+                return {
+                    "source_key": source.key, "name": source.name,
+                    "table_name": "",
+                    "records": self.client._doc_blocks_to_records(blocks) or [],
+                    "error": "",
                 }
             if source.table_mode == "latest_week" and kind == "notable":
                 sheets = self.client.list_sheets(source.base_id, op)

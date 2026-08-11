@@ -158,9 +158,11 @@ class BotDocLinkTests(unittest.TestCase):
         self.assertIsNotNone(answer)
         self.assertIn("已识别钉钉文档", answer)
         self.assertIn("帮我学习", answer)
-        # 交互原则：只主动问学习，不推销推送
+        # 交互原则：只主动问学习，不推销推送/订阅
         self.assertNotIn("每日推送", answer)
-        self.assertNotIn("看板", answer)
+        self.assertNotIn("订阅", answer)
+        # v1.11.2：主动说明看板与知识库的区别（看板实时拉取、不进库），不算推销
+        self.assertIn("看板", answer)
 
     def test_doc_link_read_failure(self):
         handler = self._make_handler()
@@ -183,23 +185,24 @@ class BotDocLinkTests(unittest.TestCase):
         self.assertIn("暂无法读取", answer)
 
     def test_multi_links_aggregated(self):
-        """多条链接逐条读取 + 聚合摘要"""
+        """多条链接逐条读取 + 聚合摘要（v1.11.2：4 条全部处理，不再截断到 3）"""
         handler = self._make_handler()
-        fake1 = {"ok": True, "kind": "notable", "node_id": "n1",
-                 "records": [{"fields": {"名称": "A"}}], "message": "ok"}
-        fake2 = {"ok": True, "kind": "notable", "node_id": "n2",
-                 "records": [{"fields": {"名称": "B"}}], "message": "ok"}
+        fakes = [{"ok": True, "kind": "notable", "node_id": f"n{i}",
+                  "records": [{"fields": {"名称": f"名{i}"}}], "message": "ok"}
+                 for i in range(1, 5)]
         with patch("dingtalk_doc_client.get_doc_client") as mock_get:
             mock_get.return_value.resolve_operator_id.return_value = "union1"
-            mock_get.return_value.read_document.side_effect = [fake1, fake2]
+            mock_get.return_value.read_document.side_effect = fakes
             answer = handler._handle_dingtalk_doc_link(
-                "看这两份：https://alidocs.dingtalk.com/i/nodes/n1 "
-                "和 https://alidocs.dingtalk.com/i/nodes/n2",
+                "这四份：https://alidocs.dingtalk.com/i/nodes/n1 "
+                "https://alidocs.dingtalk.com/i/nodes/n2 "
+                "https://alidocs.dingtalk.com/i/nodes/n3 "
+                "https://alidocs.dingtalk.com/i/nodes/n4",
                 "u1", "s1")
         self.assertIn("已识别钉钉文档", answer)
-        self.assertIn("n1", answer)
-        self.assertIn("n2", answer)
-        self.assertEqual(mock_get.return_value.read_document.call_count, 2)
+        for i in range(1, 5):
+            self.assertIn(f"n{i}", answer)
+        self.assertEqual(mock_get.return_value.read_document.call_count, 4)
 
     def test_registers_candidate_for_learn(self):
         """读取成功 → 登记候选，供「帮我学习」入库"""
@@ -229,6 +232,58 @@ class BotDocLinkTests(unittest.TestCase):
                 "u1", "s1")
         self.assertIsNotNone(answer)
         self.assertIn("0 条记录", answer)
+
+    def test_doc_link_with_kanban_intent_merges(self):
+        """v1.11.2：文档链接 + 「做每日看板」意图 → 文档摘要 + 看板确认合并"""
+        handler = self._make_handler()
+        fake = {"ok": True, "kind": "notable", "node_id": "n1",
+                "records": [{"fields": {"名称": "A"}}], "message": "ok"}
+        with patch("dingtalk_doc_client.get_doc_client") as mock_get, \
+             patch("skills.dashboard.DashboardSkill._handle_doc_create",
+                   return_value={"answer": "好的，将按以下文档做每日看板，请确认："
+                                        "📋 数据板块：…\n回复「确认」即可订阅。"}):
+            mock_get.return_value.resolve_operator_id.return_value = "union1"
+            mock_get.return_value.read_document.return_value = fake
+            answer = handler._handle_doc_link_with_kanban(
+                "帮我把这几个文件做成每日看板 https://alidocs.dingtalk.com/i/nodes/n1",
+                "u1", "s1")
+        self.assertIn("已识别钉钉文档", answer)
+        self.assertIn("做每日看板，请确认", answer)
+
+    def test_doc_link_without_kanban_no_merge(self):
+        """v1.11.2：只发文档不涉及看板 → 只回文档摘要，不触发看板技能"""
+        handler = self._make_handler()
+        fake = {"ok": True, "kind": "notable", "node_id": "n1",
+                "records": [{"fields": {"名称": "A"}}], "message": "ok"}
+        with patch("dingtalk_doc_client.get_doc_client") as mock_get, \
+             patch("skills.dashboard.DashboardSkill._handle_doc_create") as m_create:
+            mock_get.return_value.resolve_operator_id.return_value = "union1"
+            mock_get.return_value.read_document.return_value = fake
+            answer = handler._handle_doc_link_with_kanban(
+                "看看这份 https://alidocs.dingtalk.com/i/nodes/n1", "u1", "s1")
+        self.assertIn("已识别钉钉文档", answer)
+        m_create.assert_not_called()
+
+    def test_interactive_card_with_kanban_merges(self):
+        """v1.11.2：interactiveCard 消息（文档卡片+做看板）→ 回复合并摘要"""
+        from unittest import mock as _mock
+        handler = self._make_handler()
+        handler.reply_markdown = _mock.MagicMock()
+        fake = {"ok": True, "kind": "notable", "node_id": "n1",
+                "records": [{"fields": {"名称": "A"}}], "message": "ok"}
+        content = {"text": "帮我把这几个文件做成每日看板，每天九点发日报 "
+                           "https://alidocs.dingtalk.com/i/nodes/n1"}
+        bot_msg = _mock.MagicMock()
+        with patch("dingtalk_doc_client.get_doc_client") as mock_get, \
+             patch("skills.dashboard.DashboardSkill._handle_doc_create",
+                   return_value={"answer": "好的，将按以下文档做每日看板，请确认：…"}):
+            mock_get.return_value.resolve_operator_id.return_value = "union1"
+            mock_get.return_value.read_document.return_value = fake
+            handler._handle_interactive_card_message(content, bot_msg, "u1", "s1", "s")
+        call = handler.reply_markdown.call_args
+        call_text = call.kwargs.get("text") if call.kwargs else call[0][1]
+        self.assertIn("已识别钉钉文档", call_text)
+        self.assertIn("做每日看板，请确认", call_text)
 
 
 class ListSheetsTests(unittest.TestCase):
@@ -386,6 +441,232 @@ class ReadDocumentFieldNamesTests(unittest.TestCase):
                 "https://alidocs.dingtalk.com/i/nodes/n1?sheet=s1", operator_id="op")
         self.assertTrue(result["ok"])
         self.assertEqual(result["field_names"], {})
+
+
+class BlocksToMarkdownTests(unittest.TestCase):
+    """v1.11.1 blocks → Markdown：段落原文、表格转 Markdown 表格、单元格 \n 转 <br>"""
+
+    def setUp(self):
+        from unittest import mock as _mock
+        self.client = DingTalkDocClient(
+            client_id="cid", client_secret="csecret", session=_mock.Mock())
+
+    def test_paragraph_and_table(self):
+        blocks = [
+            {"blockType": "paragraph",
+             "paragraph": {"text": "要求：每日汇总各项目进展"}},
+            {"blockType": "table", "table": {"cells": [
+                ["产品型号", "项目简称"],
+                ["ET-PCS150K12BM", "150kW A1+A2"],
+            ]}},
+            {"blockType": "paragraph",
+             "paragraph": {"text": "  "}},  # 空白段落应被跳过
+        ]
+        md = self.client._blocks_to_markdown(blocks)
+        self.assertIn("要求：每日汇总各项目进展", md)
+        self.assertIn("| 产品型号 | 项目简称 |", md)
+        self.assertIn("| ET-PCS150K12BM | 150kW A1+A2 |", md)
+        self.assertIn("| --- | --- |", md)
+        # 空段落不产生多余空行
+        self.assertNotIn("要求：每日汇总各项目进展\n\n\n", md)
+
+    def test_table_cell_newline_to_br(self):
+        cells = [["型号", "说明"], ["A1", "第一行\n第二行"]]
+        md = self.client._table_to_markdown(cells)
+        self.assertIn("第一行<br>第二行", md)
+
+    def test_ragged_rows_padded(self):
+        cells = [["a", "b", "c"], ["x", "y"]]
+        md = self.client._table_to_markdown(cells)
+        lines = md.split("\n")
+        self.assertEqual(lines[0].count("|"), 4)  # 3 列 → 4 个分隔符
+        self.assertIn("| x | y |  |", lines[2])
+
+    def test_empty_blocks_no_markdown(self):
+        self.assertEqual(self.client._blocks_to_markdown([]), "")
+        self.assertEqual(self.client._table_to_markdown([]), "")
+        self.assertEqual(self.client._table_to_markdown([[""] * 0]), "")
+
+
+class ReadDocContentTests(unittest.TestCase):
+    """v1.11.1 read_doc_content：/v1.0/doc/suites/documents/{node}/blocks"""
+
+    def setUp(self):
+        from unittest import mock as _mock
+        self.client = DingTalkDocClient(
+            client_id="cid", client_secret="csecret", session=_mock.Mock())
+
+    def test_success_returns_markdown_and_blocks(self):
+        fake = {"result": {"data": [
+            {"blockType": "paragraph", "paragraph": {"text": "标题行"}},
+            {"blockType": "table", "table": {"cells": [["a", "b"], ["1", "2"]]}},
+        ]}}
+        with patch.object(self.client, "_request", return_value=fake) as m:
+            out = self.client.read_doc_content("node1", "op1")
+        self.assertTrue(out["ok"])
+        self.assertEqual(len(out["blocks"]), 2)
+        self.assertIn("标题行", out["markdown"])
+        self.assertIn("| 1 | 2 |", out["markdown"])
+        self.assertIn("/suites/documents/node1/blocks", m.call_args[0][1])
+
+    def test_empty_blocks_returns_ok_false(self):
+        with patch.object(self.client, "_request", return_value={"result": {"data": []}}):
+            out = self.client.read_doc_content("node1")
+        self.assertFalse(out["ok"])
+        self.assertIn("无内容", out["message"])
+
+    def test_permission_error_propagates(self):
+        with patch.object(self.client, "_request",
+                          side_effect=DingTalkDocPermissionError("未开通 Storage.File.Read")):
+            with self.assertRaises(DingTalkDocPermissionError):
+                self.client.read_doc_content("node1", "op1")
+
+    def test_other_failure_returns_ok_false(self):
+        with patch.object(self.client, "_request",
+                          side_effect=RuntimeError("网络超时")):
+            out = self.client.read_doc_content("node1")
+        self.assertFalse(out["ok"])
+        self.assertIn("网络超时", out["message"])
+
+    def test_max_blocks_cap(self):
+        data = [{"blockType": "paragraph", "paragraph": {"text": f"p{i}"}}
+                for i in range(600)]
+        with patch.object(self.client, "_request",
+                          return_value={"result": {"data": data}}):
+            out = self.client.read_doc_content("node1", max_blocks=500)
+        self.assertEqual(len(out["blocks"]), 500)
+
+
+class DetectKindDocTests(unittest.TestCase):
+    """v1.11.1 类型探测：notable/workbook 失败后回退 doc"""
+
+    def setUp(self):
+        self.client = DingTalkDocClient(
+            client_id="cid", client_secret="csecret", api_base="https://x")
+
+    def test_falls_back_to_doc(self):
+        with patch.object(self.client, "list_sheets",
+                          side_effect=RuntimeError("notable 不符")), \
+             patch.object(self.client, "list_workbook_sheets",
+                          side_effect=RuntimeError("workbook 不符")), \
+             patch.object(self.client, "read_doc_content",
+                          return_value={"ok": True, "blocks": [{"blockType": "paragraph"}]}):
+            self.assertEqual(self.client.detect_kind("n1", "op"), "doc")
+
+    def test_doc_permission_error_propagates(self):
+        with patch.object(self.client, "list_sheets",
+                          side_effect=RuntimeError("notable 不符")), \
+             patch.object(self.client, "list_workbook_sheets",
+                          side_effect=RuntimeError("workbook 不符")), \
+             patch.object(self.client, "read_doc_content",
+                          side_effect=DingTalkDocPermissionError("无权限")):
+            with self.assertRaises(DingTalkDocPermissionError):
+                self.client.detect_kind("n1", "op")
+
+    def test_all_fail_unknown(self):
+        with patch.object(self.client, "list_sheets",
+                          side_effect=RuntimeError("a")), \
+             patch.object(self.client, "list_workbook_sheets",
+                          side_effect=RuntimeError("b")), \
+             patch.object(self.client, "read_doc_content",
+                          return_value={"ok": False, "blocks": []}):
+            self.assertEqual(self.client.detect_kind("n1", "op"), "unknown")
+
+
+class ReadDocumentDocTests(unittest.TestCase):
+    """v1.11.1 read_document doc 分支：kind=doc 返回 markdown + 逐块 records"""
+
+    def setUp(self):
+        from unittest import mock as _mock
+        self.client = DingTalkDocClient(
+            client_id="cid", client_secret="csecret", session=_mock.Mock())
+
+    def test_doc_branch_returns_markdown_and_records(self):
+        blocks = [
+            {"blockType": "paragraph", "paragraph": {"text": "周会记录"}},
+            {"blockType": "table", "table": {"cells": [["项", "状"], ["A", "滞后"]]}},
+        ]
+        doc_content = {"ok": True, "markdown": "周会记录\n\n| 项 | 状 |\n| --- | --- |\n| A | 滞后 |",
+                       "blocks": blocks, "message": "ok"}
+        with patch.object(self.client, "detect_kind", return_value="doc"), \
+             patch.object(self.client, "read_doc_content", return_value=doc_content):
+            result = self.client.read_document(
+                "https://alidocs.dingtalk.com/i/nodes/n1", operator_id="op")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["kind"], "doc")
+        self.assertIn("markdown", result)
+        self.assertIn("| 项 | 状 |", result["markdown"])
+        # 逐块 records：段落 + 表格1
+        self.assertEqual(len(result["records"]), 2)
+        self.assertEqual(result["records"][0]["类型"], "段落")
+        self.assertEqual(result["records"][1]["类型"], "表格1")
+
+    def test_doc_read_failure_degraded(self):
+        with patch.object(self.client, "detect_kind", return_value="doc"), \
+             patch.object(self.client, "read_doc_content",
+                          return_value={"ok": False, "message": "无内容"}):
+            result = self.client.read_document(
+                "https://alidocs.dingtalk.com/i/nodes/n1", operator_id="op")
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["kind"], "doc")
+        self.assertIn("无内容", result["message"])
+
+    def test_doc_permission_error_propagates(self):
+        with patch.object(self.client, "detect_kind", return_value="doc"), \
+             patch.object(self.client, "read_doc_content",
+                          side_effect=DingTalkDocPermissionError("无权限")):
+            with self.assertRaises(DingTalkDocPermissionError):
+                self.client.read_document(
+                    "https://alidocs.dingtalk.com/i/nodes/n1", operator_id="op")
+
+
+class BotDocLinkKindDocTests(unittest.TestCase):
+    """v1.11.1 bot 处理 kind=doc 链接：回复含「文档」+ 登记看板源"""
+
+    def setUp(self):
+        from dashboard.doc_candidates import DocCandidateStore
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self._db_path = path
+        self._cand = DocCandidateStore(db_path=path)
+        self._patch_cand = patch("dashboard.doc_candidates.get_candidate_store",
+                                 return_value=self._cand)
+        self._patch_cand.start()
+        self.addCleanup(self._patch_cand.stop)
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self):
+        self._cand.close()
+        for suffix in ("", "-wal", "-shm"):
+            p = self._db_path + suffix
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+
+    def _make_handler(self):
+        from skills import dingtalk_bot
+        return object.__new__(dingtalk_bot.ErrorQueryHandler)
+
+    def test_doc_kind_replies_and_registers_enabled(self):
+        handler = self._make_handler()
+        fake = {"ok": True, "kind": "doc", "node_id": "n1",
+                "records": [{"类型": "段落", "内容": "周会记录"}],
+                "markdown": "周会记录", "message": "ok"}
+        with patch("dingtalk_doc_client.get_doc_client") as mock_get:
+            mock_get.return_value.resolve_operator_id.return_value = "union1"
+            mock_get.return_value.read_document.return_value = fake
+            answer = handler._handle_dingtalk_doc_link(
+                "https://alidocs.dingtalk.com/i/nodes/n1", "u1", "s1")
+        self.assertIn("已识别钉钉文档", answer)
+        self.assertIn("文档", answer)  # kind 映射 doc→文档
+        self.assertIn("帮我学习", answer)
+        cand = self._cand.get_pending("u1")
+        self.assertIsNotNone(cand)
+        self.assertEqual(cand.kind, "doc")
+        self.assertTrue(cand.enabled)  # v1.11.1：doc 也可做看板源
+        self.assertIn("doc", self._cand.list_dashboard_ready("u1")[0].kind)
 
 
 if __name__ == "__main__":

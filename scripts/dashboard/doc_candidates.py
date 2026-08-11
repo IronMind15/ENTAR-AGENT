@@ -202,7 +202,7 @@ class DocCandidateStore:
         with self._lock:
             rows = self._get_conn().execute(
                 "SELECT * FROM dashboard_doc_candidates "
-                "WHERE user_id=? AND enabled=1 AND kind IN ('notable','workbook') "
+                "WHERE user_id=? AND enabled=1 AND kind IN ('notable','workbook','doc') "
                 "ORDER BY id DESC", (user_id,)).fetchall()
         return [self._row_to_cand(r) for r in rows]
 

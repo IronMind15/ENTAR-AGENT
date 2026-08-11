@@ -78,6 +78,25 @@ class LearnDingtalkDocTests(unittest.TestCase):
         self.assertIn("无权限", result["message"])
         self.assertIsNotNone(self._cand.get_pending("u1"))  # 保留，可重试
 
+    def test_doc_kind_learns_markdown_fulltext(self):
+        """v1.11.1：doc 走 blocks→Markdown 保真全文，跳过逐条拼装"""
+        self._add_candidate(kind="doc")
+        fake_client = mock.Mock()
+        fake_client.read_document.return_value = {
+            "ok": True, "kind": "doc", "node_id": "n1",
+            "records": [{"类型": "段落", "内容": "周会记录"}],
+            "markdown": "周会记录\n\n| 项 | 状 |\n| --- | --- |\n| A | 滞后 |",
+        }
+        with mock.patch("doc_mgr.engine.process_text",
+                        return_value=mock.Mock(status="done", chunk_count=2)) as m_pt:
+            result = learn_dingtalk_doc("u1", client=fake_client)
+        self.assertTrue(result["ok"])
+        content = m_pt.call_args[0][0]
+        # 入库的是保真 Markdown 全文，而非逐条拼装（无「## 记录 1」）
+        self.assertIn("| 项 | 状 |", content)
+        self.assertNotIn("## 记录", content)
+        self.assertIsNone(self._cand.get_pending("u1"))
+
     def test_process_failure_keeps_candidate(self):
         self._add_candidate()
         fake_client = mock.Mock()

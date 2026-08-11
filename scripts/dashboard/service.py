@@ -93,7 +93,7 @@ def load_all_available_sources() -> list:
     try:
         from .doc_candidates import get_candidate_store
         for cand in get_candidate_store().list_all_enabled():
-            if cand.kind in ("notable", "workbook"):
+            if cand.kind in ("notable", "workbook", "doc"):
                 sources.append(build_dynamic_source(cand))
     except Exception:
         pass

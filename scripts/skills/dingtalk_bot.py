@@ -172,9 +172,15 @@ def learn_dingtalk_doc_for_user(user_id: str) -> dict:
 
 
 def _format_doc_learn_result(result: dict) -> str:
-    """格式化「帮我学习」钉钉文档入库结果"""
+    """格式化「帮我学习」钉钉文档入库结果（v1.11.2：说明入库去向与用途）"""
     if result.get("ok"):
-        return f"✅ 文档已入库：{result.get('message')}"
+        return (
+            "✅ 已存入企业知识库（标准文档库）\n"
+            f"· 内容块：{result.get('chunk_count', '?')} 块\n"
+            f"· 记录：{result.get('records', 0)} 条\n"
+            "· 现在可用自然语言检索这份内容\n\n"
+            "📁 回复「我的文件」可查看管理"
+        )
     return f"❌ {result.get('message')}"
 
 
@@ -533,7 +539,8 @@ class ErrorQueryHandler(ChatbotHandler):
             return {"answer": answer, "source": "knowledge_learn"}
 
         # 6.5 钉钉在线文档识别（v1.11.0）：消息含 alidocs 文档链接 → 自动读取
-        doc_answer = self._handle_dingtalk_doc_link(text, user_id, staff_id)
+        # v1.11.2：文档识别 + 「做看板」意图合并（不再吞掉看板意图）
+        doc_answer = self._handle_doc_link_with_kanban(text, user_id, staff_id)
         if doc_answer is not None:
             logger.info(f"  → 钉钉文档识别: {text[:60]}")
             if on_chunk:
@@ -580,7 +587,8 @@ class ErrorQueryHandler(ChatbotHandler):
             operator = ""
         replies = []
         learned_hint = False
-        for url in urls[:3]:  # 最多处理 3 个链接
+        last_records = []
+        for url in urls[:5]:  # 最多处理 5 个链接（v1.11.2：原 3 个导致发 4 个丢 1 个）
             try:
                 result = client.read_document(url, operator_id=operator,
                                               staff_id=staff_id)
@@ -602,13 +610,62 @@ class ErrorQueryHandler(ChatbotHandler):
                 f"📑 已识别钉钉文档（{kind_name}）· 节点 {node_id} · {len(records)} 条记录"
                 + (f"\n{preview}" if preview else ""))
             learned_hint = True
+            last_records = records
 
         if not replies:
             return "📑 已识别钉钉文档链接。"
         msg = "\n\n".join(replies)
         if learned_hint:
-            msg += "\n\n👌 回复「帮我学习」可将内容入库知识库。"
+            # v1.11.2：入库提示详细说明——入库是什么、进哪个库、有什么好处
+            keyword = self._first_record_keyword(last_records)
+            msg += (
+                "\n\n📚 这份内容可存入企业知识库（标准文档库）：\n"
+                f"· 入库后可用自然语言检索，比如问「{keyword}」就能命中\n"
+                "· 看板不受影响——看板每天实时拉取文档最新数据，不进知识库\n"
+                "回复「帮我学习」直接入库。"
+            )
         return msg
+
+    def _handle_doc_link_with_kanban(self, text: str, user_id: str,
+                                     staff_id: str):
+        """文档识别 + 看板意图合并处理（v1.11.2）
+
+        消息同时含钉钉文档链接与「做每日看板」意图时（如「发链接 + 把这几
+        个文件做成每日看板，每天九点发日报」），文档识别摘要与看板创建确认
+        合并返回；否则只返回文档识别摘要。
+
+        解决 v1.11.1 遗留：interactiveCard/富文本消息直接走文档识别、
+        跳过技能路由，导致「做看板」意图被吞。
+        """
+        doc_answer = self._handle_dingtalk_doc_link(text, user_id, staff_id)
+        if doc_answer is None:
+            return None
+        try:
+            from dashboard.subscription_commands import parse_doc_dashboard_intent
+            if parse_doc_dashboard_intent(text) is not None:
+                from skills.dashboard import DashboardSkill
+                kb = DashboardSkill._handle_doc_create(user_id)
+                if kb and kb.get("answer"):
+                    return doc_answer + "\n\n" + kb["answer"]
+        except Exception as e:
+            logger.warning(f"合并看板意图失败: {e}")
+        return doc_answer
+
+    @staticmethod
+    def _first_record_keyword(records: list[dict]) -> str:
+        """从首条记录取第一个非空字段值作为检索示例（截断 8 字）"""
+        for rec in records or []:
+            cells = rec.get("cells") or rec.get("fields") or rec
+            if isinstance(cells, dict):
+                for v in cells.values():
+                    s = str(v or "").strip()
+                    if s:
+                        return s[:8]
+            else:
+                s = str(rec).strip()
+                if s:
+                    return s[:8]
+        return "这份文档里的内容"
 
     @staticmethod
     def _doc_preview(records: list[dict], limit: int = 3) -> str:
@@ -649,7 +706,8 @@ class ErrorQueryHandler(ChatbotHandler):
                 operator_union=operator_union or user_id,
                 records_count=len(result.get("records") or []),
                 name=result.get("sheet_name") or result.get("name") or "",
-                enabled=kind in ("notable", "workbook"),
+                # v1.11.1：doc 也做看板源（文档内容不齐，采集 Markdown 全文由 LLM 提炼）
+                enabled=kind in ("notable", "workbook", "doc"),
                 field_map=json.dumps(field_map, ensure_ascii=False),
             ))
         except Exception as e:
@@ -664,7 +722,7 @@ class ErrorQueryHandler(ChatbotHandler):
         """
         text = self._rich_text_plain(bot_msg)
         logger.info(f"  富文本内容: {text[:200]}")
-        answer = self._handle_dingtalk_doc_link(text, user_id, staff_id)
+        answer = self._handle_doc_link_with_kanban(text, user_id, staff_id)
         if answer is not None:
             self.reply_markdown(
                 title="恩特小助手 - 文档识别",
@@ -697,7 +755,7 @@ class ErrorQueryHandler(ChatbotHandler):
         text = self._card_content_plain(content)
         logger.info(f"  交互卡片内容: {text[:200]}")
         try:
-            answer = self._handle_dingtalk_doc_link(text, user_id, staff_id)
+            answer = self._handle_doc_link_with_kanban(text, user_id, staff_id)
         except Exception as e:
             logger.warning(f"  交互卡片文档识别异常: {e}")
             answer = None
