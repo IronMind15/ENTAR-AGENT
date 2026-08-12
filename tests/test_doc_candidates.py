@@ -106,6 +106,18 @@ class DocCandidateStoreTests(unittest.TestCase):
                                   enabled=False, url="u2"))
         self.assertEqual(len(self.store.list_all_enabled()), 1)
 
+    def test_list_all_enabled_user_scoped(self):
+        """v1.11.10：query 工具按用户取数据源，不能把别人的动态源带进来"""
+        self.store.add(self._cand(node_id="n1", kind="notable", url="u1"))
+        self.store.add(self._cand(node_id="n2", kind="notable", url="u2",
+                                  user_id="u2"))
+        self.assertEqual({c.node_id for c in self.store.list_all_enabled()},
+                         {"n1", "n2"})
+        self.assertEqual({c.node_id for c in self.store.list_all_enabled("u1")},
+                         {"n1"})
+        self.assertEqual({c.node_id for c in self.store.list_all_enabled("u2")},
+                         {"n2"})
+
 
 class FindByTests(unittest.TestCase):
     """v1.11.3 find_by_*：总结工具按 node_id/url/name 定位候选"""

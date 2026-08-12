@@ -159,6 +159,19 @@ class LoadAllAvailableSourcesTests(unittest.TestCase):
         self.assertEqual({s.key for s in sources}, {"doc_1"})
         self.assertEqual(sources[0].kind, "doc")
 
+    def test_load_all_sources_user_scoped(self):
+        """v1.11.10：query 按当前用户过滤动态源，不把别人的文档候选混入"""
+        self._store.add(DocCandidate(user_id="u1", url="u", node_id="n1",
+                                     kind="notable", enabled=True))
+        self._store.add(DocCandidate(user_id="u2", url="u2", node_id="n2",
+                                     kind="notable", enabled=True))
+        with mock.patch("dashboard.config_model.load_sources", return_value=[]):
+            scoped = load_all_available_sources(user_id="u1")
+        self.assertEqual({s.key for s in scoped}, {"doc_1"})
+        with mock.patch("dashboard.config_model.load_sources", return_value=[]):
+            all_ = load_all_available_sources()
+        self.assertEqual({s.key for s in all_}, {"doc_1", "doc_2"})
+
 
 if __name__ == "__main__":
     unittest.main()

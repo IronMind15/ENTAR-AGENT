@@ -99,12 +99,15 @@ def source_resolution_warnings(sub, resolved_sources: list) -> list[str]:
             + "、".join(missing[:5])]
 
 
-def load_all_available_sources() -> list:
-    """全部可用数据源：配置源 + 全量 enabled 动态源（供 query/push 工具）"""
+def load_all_available_sources(user_id: str = "") -> list:
+    """全部可用数据源：配置源 + enabled 动态源
+
+    v1.11.10：query 传 user_id 只取本人动态源（防跨用户串看板）；push 空=全量。
+    """
     sources = load_enabled_sources()
     try:
         from .doc_candidates import get_candidate_store
-        for cand in get_candidate_store().list_all_enabled():
+        for cand in get_candidate_store().list_all_enabled(user_id):
             if cand.kind in ("notable", "workbook", "doc"):
                 sources.append(build_dynamic_source(cand))
     except Exception:

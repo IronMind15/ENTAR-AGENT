@@ -737,7 +737,9 @@ class ErrorQueryHandler(ChatbotHandler):
         doc_answer, cand_ids = doc_result
         try:
             from dashboard.subscription_commands import parse_doc_dashboard_intent
-            if parse_doc_dashboard_intent(text) is not None:
+            # v1.11.10：带链接路径放宽文档引用词——杨妍发完链接补一句
+            # 「我想做一个每日看板」不再重复文档词，仍应识别创建意图。
+            if parse_doc_dashboard_intent(text, require_doc_ref=False) is not None:
                 from skills.dashboard import DashboardSkill
                 kb = DashboardSkill._handle_doc_create(
                     user_id, source_candidate_ids=cand_ids)

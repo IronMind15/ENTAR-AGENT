@@ -112,6 +112,29 @@ class ParseIntentTests(unittest.TestCase):
         self.assertEqual(r["user_id"], "u1")
         self.assertEqual(r["staff_id"], "s1")
 
+    def test_doc_create_without_doc_ref(self):
+        """v1.11.10：『我想做一个每日看板』无『文档/表格』引用词也应识别创建
+        （对应同事杨妍：发完文档链接后补一句创建意图，但没带引用词）。
+        bot 带链接路径 require_doc_ref=False 放宽。"""
+        r = sc.parse_doc_dashboard_intent(
+            "我想做一个每日看板，需要每天上午9点发给我", require_doc_ref=False)
+        self.assertIsNotNone(r)
+        self.assertEqual(r["intent"], "doc_create")
+
+    def test_doc_create_strict_by_default(self):
+        """v1.11.10：技能路径默认严格——『帮我推个看板』是普通订阅，
+        不能被动态文档看板（doc_create）误抢；带文档引用词的仍识别。"""
+        self.assertIsNone(sc.parse_doc_dashboard_intent("帮我推个看板"))
+        r = sc.parse_doc_dashboard_intent("按这几个文档做每日看板")
+        self.assertEqual(r["intent"], "doc_create")
+
+    def test_query_task_list(self):
+        """v1.11.10：『查看看板任务』是查询订阅状态，不是实时看板内容"""
+        for text in ("帮我查看一下看板任务都有哪些", "帮我查一下我的看板任务"):
+            r = sc.parse_subscription_command(text)
+            self.assertIsNotNone(r)
+            self.assertEqual(r["intent"], "query", text)
+
     def test_not_kanban_returns_none(self):
         self.assertIsNone(sc.parse_subscription_command("你好"))
         self.assertIsNone(sc.parse_subscription_command(""))

@@ -260,12 +260,22 @@ class DocCandidateStore:
                 (int(enabled), cand_id))
             self._get_conn().commit()
 
-    def list_all_enabled(self) -> list[DocCandidate]:
-        """全部 enabled 动态源候选（跨用户，供 query/push 工具）"""
+    def list_all_enabled(self, user_id: str = "") -> list[DocCandidate]:
+        """全部 enabled 动态源候选
+
+        v1.11.10：query 工具按用户隔离（user_id 非空只取本人动态源，防止
+        把同事的文档候选混进自己的看板）；push 跨用户全量（空=全部）。
+        """
         with self._lock:
-            rows = self._get_conn().execute(
-                "SELECT * FROM dashboard_doc_candidates WHERE enabled=1 "
-                "ORDER BY id DESC").fetchall()
+            if user_id:
+                rows = self._get_conn().execute(
+                    "SELECT * FROM dashboard_doc_candidates "
+                    "WHERE enabled=1 AND user_id=? ORDER BY id DESC",
+                    (user_id,)).fetchall()
+            else:
+                rows = self._get_conn().execute(
+                    "SELECT * FROM dashboard_doc_candidates WHERE enabled=1 "
+                    "ORDER BY id DESC").fetchall()
         return [self._row_to_cand(r) for r in rows]
 
 

@@ -607,5 +607,29 @@ class PrecheckTests(unittest.TestCase):
         self.assertEqual(blocked, [])
 
 
+class QueryDashboardToolContractTests(unittest.TestCase):
+    """v1.11.10：query_dashboard 工具描述契约——必须显式要求保留数据来源链接。
+
+    同事杨妍通过 Agent 实时查询看板时，LLM 转述丢掉了『## 数据来源』里的
+    [查看原文](url) 链接，而她本人（订阅推送路径）能看到链接。工具描述
+    是约束 LLM 转述行为的抓手，删掉这段要求会复发，故固化为契约测试。
+    """
+
+    def test_description_requires_preserving_source_links(self):
+        from tools.query_dashboard import DEFINITION
+        desc = DEFINITION["description"]
+        self.assertIn("数据来源", desc)
+        self.assertIn("查看原文", desc)
+        self.assertIn("原样保留", desc)
+
+    def test_execute_scopes_sources_to_current_user(self):
+        """问题 4 回归：query_dashboard 必须按当前用户取数据源，防跨用户串看板"""
+        from tools.query_dashboard import execute
+        import inspect
+        src = inspect.getsource(execute)
+        self.assertIn("get_current_user_id()", src)
+        self.assertIn("load_all_available_sources(user_id=", src)
+
+
 if __name__ == "__main__":
     unittest.main()

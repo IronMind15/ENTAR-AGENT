@@ -29,15 +29,16 @@ logger = logging.getLogger("dashboard.subscription_commands")
 _NEGATIVE_RE = re.compile(
     r"文档|方案|方法论|学习|入库|设计|功能说明|怎么用|怎么配|怎么设|怎么操作|"
     r"怎么看|怎么查|怎么样|什么情况|什么进展|是什么|介绍|"
-    r"看看|想看看|看一下|"
+    r"看看|想看看|(?<!查)看一下|"
     r"功能|关系|干嘛|为什么|为啥|这跟|有什么用|干嘛的|干嘛用|与.*有关")
 # 看板话题门槛：必须出现「看板」
 _HAS_KANBAN_RE = re.compile(r"看板")
 
-# 「按这几个文档做每日看板」：文档引用 + 动作 + 看板（注意 _NEGATIVE_RE 含「文档」，
-# 常规 is_kanban_topic 会拦下，本意图判定放最前单独处理）
+# 「按这几个文档做每日看板」：动态文档看板创建意图（注意 _NEGATIVE_RE 含「文档」，
+# 常规 is_kanban_topic 会拦下，本意图判定放最前单独处理）。
+# v1.11.10：默认仍要求文档引用词（区分「动态文档看板」与「普通订阅」）；
+# bot 带链接路径用 require_doc_ref=False 放宽——同事发完链接补一句创建意图不带文档词。
 _DOC_REF_RE = re.compile(r"文档|表格|文件|共享表")
-_DOC_ACTION_RE = re.compile(r"做|建|开通|开|设置|生成|推送|推|发")
 _LEARN_ONLY_RE = re.compile(r"学习|入库|帮我学")
 
 # 意图触发词（用 .* 连接「停掉」与「看板」，兼容口语插字：停掉前面的看板 / 把看板停掉）
@@ -46,7 +47,10 @@ _STOP_RE = re.compile(
     r"看板.*停掉|看板.*停用|看板.*停止|看板.*取消|看板.*关掉|"
     r"不要.*看板|别再.*看板|退订")
 # 查询类保守匹配（不含「时间」——"改看板时间到10点"是改时间不是查设置）
-_QUERY_RE = re.compile(r"看板.*(几点|什么时候|设置|在哪|是谁)|我的看板|看板状态|看板.*订阅|订阅.*看板")
+_QUERY_RE = re.compile(
+    r"看板.*(几点|什么时候|设置|在哪|是谁|订阅)|"
+    r"看板.*任务|任务.*看板|看板.*列表|"
+    r"我的看板|看板状态|订阅.*看板")
 _RECIPIENT_RE = re.compile(r"推给|发给|也推|推送给|加上|捎上")
 _ADD_RECIPIENT_RE = re.compile(r"推给|发给|也推|推送给|加上|捎上")
 _REMOVE_RECIPIENT_RE = re.compile(r"不要推给|不发给|去掉|移除|别推给")
@@ -91,18 +95,24 @@ _CN_WEEK = ("", "周一", "周二", "周三", "周四", "周五", "周六", "周
 
 
 def parse_doc_dashboard_intent(text: str,
-                               ctx: Optional[dict] = None) -> Optional[dict]:
+                               ctx: Optional[dict] = None,
+                               require_doc_ref: bool = True) -> Optional[dict]:
     """识别「按这几个文档做每日看板」→ 动态文档看板创建意图
 
     返回 {"intent": "doc_create", **ctx}；非该意图返回 None。
     注意：_NEGATIVE_RE 含「文档」会拦截常规 is_kanban_topic，本判定放最前。
+
+    v1.11.10：require_doc_ref=False 时不再强制「文档/表格/文件」引用词——
+    bot 带链接路径（本次文档已识别）只需判断创建意图，同事发完链接补一句
+    「我想做一个每日看板」不会重复文档词。技能路径保持默认严格，防止
+    「帮我推个看板」这类普通订阅被 doc_create 误抢。
     """
     t = (text or "").strip()
     if not t or "看板" not in t:
         return None
-    if not _DOC_REF_RE.search(t):
+    if require_doc_ref and not _DOC_REF_RE.search(t):
         return None
-    if not _DOC_ACTION_RE.search(t):
+    if not _CREATE_RE.search(t):
         return None
     if _LEARN_ONLY_RE.search(t):
         return None  # 「把文档学习入库」是学习，不是做看板

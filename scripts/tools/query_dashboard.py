@@ -9,7 +9,9 @@ DEFINITION = {
     "description": (
         "实时查询当前已登记的企业项目看板数据，自动适配新增、删除或更换的数据源，"
         "返回 Markdown 看板正文。用于回答『今天看板怎么样』『现在有哪些滞后项目/故障问题』等。"
-        "注意：看板数据源 base_id 未配置时返回未配置提示。"
+        "正文末尾『## 数据来源』小节列出每个数据源及直达原文链接 [查看原文](url)——"
+        "【回复用户时必须原样保留这些链接】，不得省略、不改为纯文字，否则用户无法点开原文核对"
+        "（v1.11.10 审查发现转述丢链接）。注意：看板数据源 base_id 未配置时返回未配置提示。"
     ),
     "parameters": {"type": "object", "properties": {}, "required": []},
 }
@@ -18,7 +20,8 @@ DEFINITION = {
 @register("query_dashboard", DEFINITION)
 def execute(args: dict) -> str:
     from dashboard import service
-    sources = service.load_all_available_sources()
+    from tools import get_current_user_id
+    sources = service.load_all_available_sources(user_id=get_current_user_id())
     if not sources:
         return json.dumps(
             {"error": "未配置可用的看板数据源（钉钉文档 base_id 未配置）。"

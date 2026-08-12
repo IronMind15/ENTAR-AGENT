@@ -915,5 +915,23 @@ class BotSummaryModeTests(unittest.TestCase):
         self.assertEqual(calls[1][1], "assistant")
 
 
+class ReadDocumentUnknownKindTests(unittest.TestCase):
+    """v1.11.10：read_document 对未知文档类型给出用户可操作的提示"""
+
+    def test_unknown_kind_friendly_message(self):
+        """同事杨妍发钉盘共享文件链接，三类接口全 400 → detect_kind unknown，
+        提示不能裸内部类型名「（unknown）」，要给出钉盘/视图/子表线索与替代路径"""
+        from dingtalk_doc_client import DingTalkDocClient
+        client = object.__new__(DingTalkDocClient)
+        client.parse_doc_url = lambda url: {"node_id": "n1", "sheet_id": ""}
+        client.get_document_name = lambda node_id: ""
+        client.resolve_operator_id = lambda *a, **k: ""
+        client.detect_kind = lambda node_id, operator_id="": "unknown"
+        result = client.read_document("https://alidocs.dingtalk.com/i/nodes/n1")
+        self.assertFalse(result["ok"])
+        self.assertNotIn("（unknown）", result["message"])
+        self.assertIn("钉盘", result["message"])
+
+
 if __name__ == "__main__":
     unittest.main()
