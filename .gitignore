@@ -39,6 +39,9 @@ data/uploads/
 # ── MinerU OCR 中间产物（可重新生成，不退版本） ──
 data/standards/mineru_output/
 
+# ── 数据清理备份（自动生成，可重新导出，不退版本） ──
+data/dup_cleanup_v1.11.9.json
+
 # ── 部署打包产物 ──
 *.tar.gz
 
