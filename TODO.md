@@ -3,7 +3,7 @@
 > 📌 **本文档是项目唯一的待办清单（单一事实源）**——CLAUDE.md、README.md、PROGRESS.md 中的待办均指向本文件。
 > 更新待办请只改这里；进度看板见 [PROGRESS.md](PROGRESS.md)，版本记录见 [CHANGELOG.md](CHANGELOG.md)，项目规则见 [CLAUDE.md](CLAUDE.md)，功能说明见 [README.md](README.md)。
 
-> 生成时间：2026-08-10｜当前版本：v1.10.3（详见 [CHANGELOG.md](CHANGELOG.md)）｜总计：**49 项**（8 完成 + 41 待办）
+> 生成时间：2026-08-10｜当前版本：v1.11.9（详见 [CHANGELOG.md](CHANGELOG.md)）｜总计：**54 项**（8 完成 + 46 待办）
 
 > 🔍 **需求探索清单（2026-08-11）**：公司内部员工/老板潜在需求 9 组（会议工作流/经验库/识图/看板/权限/检索/钉钉生态/运维/第三步），见 [docs/20260811-需求探索清单.md](docs/20260811-需求探索清单.md) —— 探索产物，不逐条入本表，确认需求后再拆解排期
 
@@ -36,7 +36,7 @@
 
 ---
 
-## ⚠️ P1 — 重要（7 项）
+## ⚠️ P1 — 重要（8 项）
 
 > 应当做，影响安全或稳定性
 
@@ -73,6 +73,11 @@
 - [ ] **扫描 PDF 文本接入 sync\_standards.py**
   - OCR 文本接入标准入库管道
   - *来源：checkpoint / progress-snapshot*
+
+- [ ] **Chroma standards 8 组历史重复数据清理**（v1.11.9 外部审查发现）
+  - 同一标准存在两份：本地 PyMuPDF 版本化块（有 doc_id）+ MinerU legacy 块（doc_id=None），如 `EN50178.pdf` 与 `EN50178.pdf-{uuid}`，查询会重复命中
+  - 清理前先抽样对比两批内容覆盖（扫描版 PDF 两批可能互补），涉及删 Chroma 数据需二次确认
+  - *来源：v1.11.9 审查 + 实测探针*
 
 ---
 

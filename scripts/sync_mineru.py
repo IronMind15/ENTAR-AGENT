@@ -60,6 +60,11 @@ def find_markdown_files() -> list[dict]:
         if folder.name.endswith(".zip"):
             continue
 
+        # 审查 Critical 3：跳过 MinerU 缓存目录（{name}-mineru-cache），
+        # 避免把缓存中间产物当独立文档重复入库
+        if folder.name.endswith("-mineru-cache"):
+            continue
+
         md_path = folder / "full.md"
         images_dir = folder / "images"
 

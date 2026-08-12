@@ -29,8 +29,8 @@ class _FakeStore:
         self.gets = []
         self.deletes = []
 
-    def get(self, collection, ids=None, where=None):
-        self.gets.append((collection, ids, where))
+    def get(self, collection, ids=None, where=None, include_hidden=False):
+        self.gets.append((collection, ids, where, include_hidden))
         return {"ids": ["blk-1", "blk-2"],
                 "metadatas": [{"doc_id": "d"}, {"doc_id": "d"}]}
 
@@ -286,6 +286,20 @@ class KnowledgeReviewServiceTests(unittest.TestCase):
         self.assertFalse(self.file_path.exists())
         self.assertIsNone(self.tracker.get_status(str(self.file_path)))
         self.assertEqual("standards", fake.deletes[0][0])
+        self.assertEqual(["blk-1", "blk-2"], fake.deletes[0][1])
+
+    def test_delete_requests_all_versions_include_hidden(self):
+        """审查 Critical 4 回归：删除学习必须请求全部版本（include_hidden=True）。
+        此前 get 走可见性过滤只取 active，retired 块残留，崩溃恢复会把它恢复为
+        active —— 用户删掉的内容隔天「复活」。"""
+        fake = _FakeStore()
+        with patch("doc_mgr.engine.get_store", return_value=fake):
+            result = self.service.delete_for_user("uploader-union-id", "1")
+        self.assertEqual("ok", result["status"])
+        # 取版本时必须 include_hidden=True（覆盖 retired/staging）
+        get_call = fake.gets[-1]
+        self.assertIs(get_call[-1], True)
+        # delete 按 ids 物理删除全部版本（ids 路径不受可见性过滤限制）
         self.assertEqual(["blk-1", "blk-2"], fake.deletes[0][1])
 
     def test_other_user_cannot_see_or_delete_others_file(self):

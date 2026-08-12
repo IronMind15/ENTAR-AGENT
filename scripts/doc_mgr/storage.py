@@ -331,12 +331,14 @@ class ChromaStore(VectorStore):
             return {"documents": [[]], "metadatas": [[]], "distances": [[]]}
 
     def get(self, collection: str, ids: Optional[list[str]] = None,
-            where: Optional[dict] = None) -> dict:
+            where: Optional[dict] = None, include_hidden: bool = False) -> dict:
         coll = self._get_collection(collection)
         kwargs: dict = {}
         if ids:
             kwargs["ids"] = ids
-        kwargs["where"] = _visible_where(where)
+        # include_hidden=True 时不叠加可见性过滤，返回含 staging/retired 的全部版本
+        # （删除学习等场景需要：否则 retired 残留会被崩溃恢复误恢复为 active，造成删除复活）
+        kwargs["where"] = where if include_hidden else _visible_where(where)
         try:
             with self._visibility_lock:
                 return coll.get(**kwargs)

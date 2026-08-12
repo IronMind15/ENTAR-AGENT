@@ -538,7 +538,10 @@ class KnowledgeReviewService:
         try:
             doc_id = stable_document_id(file_path)
             store = get_store()
-            before = store.get(collection, where={"doc_id": doc_id}) or {}
+            # include_hidden=True：必须覆盖 staging/retired 全部版本，否则 retired
+            # 残留会被崩溃恢复（recovery 2b）误恢复为 active，造成删除复活（审查 Critical 4）
+            before = store.get(collection, where={"doc_id": doc_id},
+                               include_hidden=True) or {}
             before_ids = before.get("ids", []) or []
             if before_ids:
                 store.delete(collection, ids=before_ids)

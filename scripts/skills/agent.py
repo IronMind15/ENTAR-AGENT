@@ -618,7 +618,7 @@ class RAGAgentSkill(BaseSkill):
     priority = 50  # 低于精确故障代码；其余问题由本技能统一兜底
 
     @classmethod
-    def match(cls, query: str) -> bool:
+    def match(cls, query: str, user_id: str = "") -> bool:
         """始终匹配 — 作为主要智能处理技能"""
         return True
 

@@ -3422,7 +3422,7 @@ class PCBCalcSkill(BaseSkill):
     priority = 90  # 低于故障代码(100)，高于 RAG Agent(50)
 
     @classmethod
-    def match(cls, query: str) -> bool:
+    def match(cls, query: str, user_id: str = "") -> bool:
         return _is_pcb_calc_query(query)
 
     @classmethod

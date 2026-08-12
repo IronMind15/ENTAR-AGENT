@@ -55,7 +55,7 @@ ERROR_MESSAGE = "❌ 处理出错了（错误码：{code}）。请稍后重试�
 FAST_SKILL_PRIORITY = 50
 
 
-def _is_fast_operation(text: str) -> bool:
+def _is_fast_operation(text: str, user_id: str = "") -> bool:
     """判断是否为秒回操作（无需"正在处理"提示）
 
     秒回 = 审核指令 / 审核口令 / 快速技能（故障精确匹配、PCB计算等纯本地毫秒级）
@@ -73,7 +73,7 @@ def _is_fast_operation(text: str) -> bool:
         return True
     try:
         from skills import get_matched_skill
-        skill = get_matched_skill(t)
+        skill = get_matched_skill(t, user_id)
         return bool(skill and getattr(skill, "priority", 0) > FAST_SKILL_PRIORITY)
     except Exception:
         return False
@@ -358,7 +358,7 @@ class ErrorQueryHandler(ChatbotHandler):
         # ---- 处理消息（整体捕获异常，返回错误码） ----
         # 慢操作（LLM/检索）先回一条提示，避免用户干等
         # 快速操作（故障代码/PCB）通常秒回，无需提示
-        is_fast = _is_fast_operation(text)
+        is_fast = _is_fast_operation(text, user_id)
         if not is_fast:
             try:
                 await asyncio.to_thread(self.reply_text, PENDING_HINT_TEXT, bot_msg)
@@ -632,7 +632,7 @@ class ErrorQueryHandler(ChatbotHandler):
 
         from skills import get_matched_skill
 
-        skill_cls = get_matched_skill(text)
+        skill_cls = get_matched_skill(text, user_id)
         if skill_cls:
             logger.info(f"  → {skill_cls.name}: {text[:40]}")
             return skill_cls.handle(text, user_id=user_id, on_chunk=on_chunk)

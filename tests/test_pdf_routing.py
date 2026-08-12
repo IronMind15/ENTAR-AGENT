@@ -257,6 +257,32 @@ class PdfRoutingEngineTests(unittest.TestCase):
         self.assertEqual(doc.status, "done")
         self.assertEqual(doc.chunk_count, 42)
 
+    def test_auto_mixed_mineru_md_ingest_fails_falls_back_to_local(self):
+        """审查 Critical 2 回归：MinerU 转换成功但 Markdown 入库失败
+        （status=error）必须返回 False 触发本地回退，不得假成功。
+        此前 _run_mineru 吞掉入库失败仍 return True，混合版本可用的
+        本地 PyMuPDF 回退被跳过，文档静默丢失。"""
+        md_path = os.path.join(self.dir, "full.md")
+        with open(md_path, "w", encoding="utf-8") as f:  # _try_mineru 闭包需 isfile 通过
+            f.write("# GB/T X\n测试内容")
+        # MinerU 转换成功，但 Markdown 入库失败（模拟切块/Chroma 写入异常）
+        md_doc = Document(file_name="x.pdf", file_path="x.pdf", file_size=0,
+                          status="error", chunk_count=0, std_id="", std_title="",
+                          source="mineru", message="Chroma 写入失败")
+        with patch.object(engine, "_get_pdf_routing", return_value="auto"), \
+             patch.object(engine, "classify_pdf_type",
+                          return_value=("mixed", {"pages": 3, "text_pages": 2,
+                                                  "total_chars": 500, "coverage": 0.67})), \
+             patch.object(engine, "_try_mineru", return_value=md_path), \
+             patch.object(engine, "_process_markdown", return_value=md_doc), \
+             patch.object(engine, "extract_pdf_text",
+                          return_value=(_PAGE_TEXT * 3, "GB/T X", "标准")):
+            doc = _call_process_pdf(self.path, self.store)
+
+        # 修复前：假成功停在 mineru/error；修复后：本地回退 pymupdf 成功
+        self.assertEqual(doc.status, "done")
+        self.assertEqual(doc.source, "pymupdf")
+
     # ---------- mineru 模式（旧行为） ----------
 
     def test_mineru_mode_always_mineru_first_even_for_text(self):

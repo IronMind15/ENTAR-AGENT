@@ -305,7 +305,7 @@ class StandardsQuerySkill(BaseSkill):
     priority = 70
 
     @classmethod
-    def match(cls, query: str) -> bool:
+    def match(cls, query: str, user_id: str = "") -> bool:
         """含标准编号（GB/IEC/EN 等）才匹配"""
         return bool(STANDARD_ID_PATTERN.search((query or "").strip()))
 

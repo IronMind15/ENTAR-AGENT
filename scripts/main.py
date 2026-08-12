@@ -118,7 +118,7 @@ def ask(q: str = Form("", description="用户问题"), user: str = Form("", desc
     # 遍历已注册技能，找到第一个匹配的处理
     user_id = f"web_{user}" if user else ""
 
-    skill_cls = get_matched_skill(q)
+    skill_cls = get_matched_skill(q, user_id)
     if skill_cls:
         logger.info(f"  → {skill_cls.name}")
         kwargs = {}

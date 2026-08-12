@@ -55,6 +55,26 @@ class MatchTests(unittest.TestCase):
             self.assertFalse(DashboardSkill.match("你好"))
             self.assertFalse(DashboardSkill.match("d4-1 是什么故障"))
 
+    def test_confirm_word_isolated_per_user(self):
+        """审查 Critical 1 回归：A 聊完看板后 B 说「确认」不得被 dashboard 拦截。
+        此前 match 用全局活动时间戳，A 的 pending 会让 B 的确认词被误接住，
+        返回「您还没有待确认的看板操作」误导提示。"""
+        from dashboard import subscription_commands as sub_cmd
+        from skills import get_matched_skill
+
+        sub_cmd.set_pending("userA", {"action": "create", "data_sources": []})
+        try:
+            # B 无看板活动 → 确认词不被 dashboard 拦截，落到 Agent
+            self.assertEqual(
+                get_matched_skill("确认", user_id="userB").name, "智能 RAG")
+            # A 自己有 pending → 确认词仍被 dashboard 承接
+            self.assertEqual(
+                get_matched_skill("确认", user_id="userA").name, "dashboard")
+        finally:
+            sub_cmd.clear_pending("userA")
+            sub_cmd._activity_by_user.clear()
+            sub_cmd._last_activity_ts = 0.0
+
 
 class HandleCreateTests(unittest.TestCase):
     """创建订阅：反问 → 确认 → 落地 + 推样例"""

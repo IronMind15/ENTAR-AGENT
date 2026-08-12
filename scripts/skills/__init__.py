@@ -31,7 +31,7 @@ class BaseSkill:
     priority: int = 0
 
     @classmethod
-    def match(cls, query: str) -> bool:
+    def match(cls, query: str, user_id: str = "") -> bool:
         raise NotImplementedError
 
     @classmethod
@@ -50,15 +50,17 @@ def register(cls):
     return cls
 
 
-def get_matched_skill(query: str) -> Optional[type[BaseSkill]]:
+def get_matched_skill(query: str, user_id: str = "") -> Optional[type[BaseSkill]]:
     """遍历已注册技能，返回第一个 match() 返回 True 的
 
     技能按 priority 降序遍历（高优先级先匹配）。
+    user_id 透传给 match（v1.11.9：确认词等承接式判定需要按用户隔离，
+    避免 A 的看板活动时间戳误拦截 B 的「确认」，见审查 Critical 1）。
     RAG Agent 作为兜底（priority=50，match 始终返回 True），
     因此此函数始终有返回值，但在防御性编程中仍保留 None 分支。
     """
     for skill_cls in _skill_registry:
-        if skill_cls.match(query):
+        if skill_cls.match(query, user_id):
             return skill_cls
     return None
 

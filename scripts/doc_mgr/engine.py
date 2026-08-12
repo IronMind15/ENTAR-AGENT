@@ -550,9 +550,11 @@ def _process_pdf(file_path: str, file_name: str, file_size: int,
         doc.source = "mineru"
         doc.message = md_doc.message or "MinerU → Markdown 入库"
         if doc.status != "done":
-            logger.warning(f"  MinerU Markdown 入库异常: {doc.message}")
-        else:
-            logger.info(f"  MinerU 处理完成: {file_name} → {doc.chunk_count} 块")
+            # 审查 Critical 2：MinerU 转换成功但 Markdown 入库失败（切块/Chroma 异常）
+            # 必须返回 False 触发上层本地 PyMuPDF 回退，不得假成功静默丢文档
+            logger.warning(f"  MinerU Markdown 入库异常: {doc.message}，回退本地 PyMuPDF")
+            return False
+        logger.info(f"  MinerU 处理完成: {file_name} → {doc.chunk_count} 块")
         return True
 
     def _try_local(expected_chars: int = 0) -> bool:

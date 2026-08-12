@@ -405,7 +405,7 @@ class ErrorQuerySkill(BaseSkill):
     priority = 100
 
     @classmethod
-    def match(cls, query: str) -> bool:
+    def match(cls, query: str, user_id: str = "") -> bool:
         """仅匹配精确故障代码（d4-1 等格式），不走 LLM 秒回"""
         return bool(FAULT_CODE_PATTERN.search(query.strip()))
 

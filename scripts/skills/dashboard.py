@@ -37,7 +37,7 @@ class DashboardSkill(BaseSkill):
 
     # ===== 匹配 =====
     @classmethod
-    def match(cls, query: str) -> bool:
+    def match(cls, query: str, user_id: str = "") -> bool:
         q = (query or "").strip()
         if not q:
             return False
@@ -49,13 +49,15 @@ class DashboardSkill(BaseSkill):
         # 订阅管理指令（含"也推给张工"这类不含"看板"的追加指令）
         if sub_cmd.parse_subscription_command(q) is not None:
             return True
-        # 简短确认词：仅当最近有看板活动（有 pending 待确认）才拦截
+        # 简短确认词：仅当该用户最近有看板活动（有 pending 待确认）才拦截。
+        # 必须按 user_id 隔离——此前用全局时间戳，A 聊完看板 10 分钟内 B 说
+        # 「确认/好的」会被误拦截（审查 Critical 1）。
         if sub_cmd.is_confirmation_text(q):
-            return sub_cmd.has_recent_kanban_activity()
+            return sub_cmd.has_recent_kanban_activity(user_id=user_id)
         if sub_cmd.is_cancel_text(q):
-            return sub_cmd.has_recent_kanban_activity()
+            return sub_cmd.has_recent_kanban_activity(user_id=user_id)
         if sub_cmd.is_contextual_delete(q):
-            return sub_cmd.has_recent_kanban_activity()
+            return sub_cmd.has_recent_kanban_activity(user_id=user_id)
         return False
 
     # ===== 处理 =====
