@@ -46,6 +46,19 @@ _PROMPT_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 # 内存缓存，避免每次对话都查 DB
 _prompt_cache: dict[str, str] = {}
 
+_OPERATION_POLICY_PROMPT = """
+
+【工具操作安全规则】
+- 查询、计算、识别、总结但不外发等只读工具可以直接执行。
+- 创建、删除、修改、启停、主动外发等会改变系统或影响他人的操作，必须尊重工具返回的 confirmation_required；此时操作尚未执行，只能说明拟执行目标和影响并请用户再次确认。
+- 绝不能仅凭用户自然语言或模型判断声称“已创建/已删除/已修改/已推送”。只有工具实际返回成功字段后才能报告成功；工具返回 error 时必须如实说明失败。
+- 不得绕过待确认机制，也不得把“准备执行”“已记录请求”表述为“已执行”。
+""".strip()
+
+
+def _with_operation_policy(content: str) -> str:
+    return content if _OPERATION_POLICY_PROMPT in content else content + "\n\n" + _OPERATION_POLICY_PROMPT
+
 
 def _load_system_prompt() -> str:
     """加载 system prompt：优先从 DB 读取 → 回退到文件 → 缓存到内存"""
@@ -482,7 +495,7 @@ def _handle_impl(query: str, user_id: str = "", on_chunk=None) -> dict:
 
     # 构建 messages：静态 system + 历史独立轮次 + 动态上下文末尾
     # （system 保持纯静态 → 前缀缓存稳定；历史作为独立轮次回放 → 追加式增长）
-    messages = [{"role": "system", "content": _load_system_prompt()}]
+    messages = [{"role": "system", "content": _with_operation_policy(_load_system_prompt())}]
 
     # 历史轮次：从窗口滚动点取最近对话（窗口 N 轮 + 释放 1/2），
     # 作为独立 user/assistant 消息回放，不再拼进 system

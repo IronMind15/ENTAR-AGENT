@@ -197,6 +197,16 @@ class DocCandidateStore:
                 (cand_id,))
             self._get_conn().commit()
 
+    def update_name(self, cand_id: int, name: str):
+        """回填文件级真实标题；空标题不覆盖已有值。"""
+        if not name:
+            return
+        with self._lock:
+            self._get_conn().execute(
+                "UPDATE dashboard_doc_candidates SET name=? WHERE id=?",
+                (name, cand_id))
+            self._get_conn().commit()
+
     def find_by_node_id(self, user_id: str, node_id: str) -> Optional[DocCandidate]:
         """按文档 node_id 查该用户最新候选（含已学习，供总结工具定位）"""
         with self._lock:

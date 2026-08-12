@@ -70,7 +70,11 @@ DEFINITION = {
 }
 
 
-@register("create_knowledge_base", DEFINITION)
+@register("create_knowledge_base", DEFINITION, policy={
+    "confirm": True,
+    "risk": "create",
+    "summary": "创建新的企业知识库（会写入知识库配置）",
+})
 def execute(args: dict) -> str:
     """创建知识库"""
     name = (args.get("name") or "").strip()

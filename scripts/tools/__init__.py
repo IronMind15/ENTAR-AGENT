@@ -15,6 +15,8 @@
 
 import json
 import logging
+import threading
+import time
 from typing import Any, Callable
 
 logger = logging.getLogger("tools")
@@ -70,10 +72,13 @@ def get_current_user_id() -> str:
 
 # ===== 注册中心 =====
 # {(name, definition, handler)}
-_tool_registry: dict[str, tuple[dict, Callable[[dict], str]]] = {}
+_tool_registry: dict[str, tuple[dict, Callable[[dict], str], dict]] = {}
+_pending_operations: dict[str, dict] = {}
+_pending_lock = threading.RLock()
+_PENDING_TTL = 10 * 60
 
 
-def register(name: str, definition: dict) -> Callable:
+def register(name: str, definition: dict, policy: dict | None = None) -> Callable:
     """装饰器：注册工具
 
     Args:
@@ -88,7 +93,7 @@ def register(name: str, definition: dict) -> Callable:
     def wrapper(func: Callable[[dict], str]) -> Callable:
         if name in _tool_registry:
             logger.warning(f"工具 [{name}] 重复注册，覆盖旧定义")
-        _tool_registry[name] = (definition, func)
+        _tool_registry[name] = (definition, func, dict(policy or {}))
         return func
     return wrapper
 
@@ -97,7 +102,7 @@ def get_tool_definitions() -> list[dict]:
     """获取所有工具定义列表（供 DeepSeek API 的 tools 参数使用）"""
     return [
         {"type": "function", "function": defn}
-        for defn, _ in _tool_registry.values()
+        for defn, _, _ in _tool_registry.values()
     ]
 
 
@@ -120,13 +125,68 @@ def execute_tool(name: str, args: dict) -> str:
     if not entry:
         logger.warning(f"未知工具调用: {name}")
         return json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False)
-    _, handler = entry
+    definition, handler, policy = entry
+
+    require = policy.get("confirm", False)
+    if callable(require):
+        require = bool(require(args))
+    user_id = get_current_user_id()
+    if require:
+        if not user_id:
+            return json.dumps({"error": "该操作需要用户身份和二次确认，当前无法执行"},
+                              ensure_ascii=False)
+        with _pending_lock:
+            _pending_operations[user_id] = {
+                "tool": name, "args": dict(args or {}), "created_at": time.time(),
+                "summary": policy.get("summary") or definition.get("description", name),
+                "risk": policy.get("risk", "write"),
+            }
+        return json.dumps({
+            "confirmation_required": True,
+            "operation": name,
+            "summary": _pending_operations[user_id]["summary"],
+            "arguments": args,
+            "message": "操作尚未执行。请向用户清楚说明目标和影响，并要求再次确认。",
+        }, ensure_ascii=False)
 
     try:
         return handler(args)
     except Exception as e:
         logger.exception(f"工具 [{name}] 执行异常: {e}")
         return json.dumps({"error": f"工具执行失败: {e}"}, ensure_ascii=False)
+
+
+def get_pending_operation(user_id: str) -> dict | None:
+    with _pending_lock:
+        pending = _pending_operations.get(user_id)
+        if pending and time.time() - pending["created_at"] <= _PENDING_TTL:
+            return dict(pending)
+        _pending_operations.pop(user_id, None)
+    return None
+
+
+def cancel_pending_operation(user_id: str) -> bool:
+    with _pending_lock:
+        return _pending_operations.pop(user_id, None) is not None
+
+
+def confirm_pending_operation(user_id: str) -> str:
+    """确认后执行一次真实 handler；只有得到 handler 结果才允许回报成功。"""
+    pending = get_pending_operation(user_id)
+    if not pending:
+        return json.dumps({"error": "没有待确认或待确认操作已过期"}, ensure_ascii=False)
+    entry = _tool_registry.get(pending["tool"])
+    if not entry:
+        cancel_pending_operation(user_id)
+        return json.dumps({"error": "待确认工具已不可用"}, ensure_ascii=False)
+    _, handler, _ = entry
+    try:
+        result = handler(pending["args"])
+    except Exception as exc:
+        logger.exception("确认工具 [%s] 执行异常: %s", pending["tool"], exc)
+        result = json.dumps({"error": f"工具执行失败: {exc}"}, ensure_ascii=False)
+    cancel_pending_operation(user_id)
+    return result
 
 
 # ===== 自动导入工具模块（确保 @register 装饰器执行） =====
@@ -141,3 +201,4 @@ from . import describe_image         # noqa: E402, F811 — 图片识别（千�
 from . import query_dashboard        # noqa: E402, F811 — 看板实时查询（v1.11.0）
 from . import push_dashboard         # noqa: E402, F811 — 看板主动推送（v1.11.0）
 from . import summarize_doc          # noqa: E402, F811 — 钉钉文档总结（v1.11.3）
+from . import manage_uploaded_file   # noqa: E402, F811 — 文件删除/重学（统一二次确认）

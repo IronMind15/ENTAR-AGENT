@@ -65,10 +65,13 @@ class Collector:
                 }
             # 身份：动态源自带登记人 unionId（跨用户订阅优先用文档归属人身份读）
             op = source.operator_id or self._resolve_operator(operator_id, staff_id)
+            get_name = getattr(self.client, "get_document_name", None)
+            document_name = get_name(source.base_id) if callable(get_name) else ""
+            source_name = document_name or source.name
             kind = source.kind or "notable"
             if kind not in ("notable", "workbook", "doc"):
                 return {
-                    "source_key": source.key, "name": source.name,
+                    "source_key": source.key, "name": source_name,
                     "table_name": "", "records": [],
                     "error": f"暂不支持的文档类型: {kind}",
                 }
@@ -77,13 +80,13 @@ class Collector:
                 doc = self.client.read_doc_content(source.base_id, op)
                 if not doc.get("ok"):
                     return {
-                        "source_key": source.key, "name": source.name,
+                        "source_key": source.key, "name": source_name,
                         "table_name": "", "records": [],
                         "error": doc.get("message", "普通文档读取失败"),
                     }
                 blocks = doc.get("blocks") or []
                 return {
-                    "source_key": source.key, "name": source.name,
+                    "source_key": source.key, "name": source_name,
                     "table_name": "",
                     "records": self.client._doc_blocks_to_records(blocks) or [],
                     "error": "",
@@ -93,7 +96,7 @@ class Collector:
                 latest = find_latest_week_table(sheets)
                 if not latest:
                     return {
-                        "source_key": source.key, "name": source.name,
+                        "source_key": source.key, "name": source_name,
                         "table_name": "", "records": [],
                         "error": "未找到带周次编号的分表",
                     }
@@ -104,7 +107,7 @@ class Collector:
                 table_name = ""
                 if not sheet_id:
                     return {
-                        "source_key": source.key, "name": source.name,
+                        "source_key": source.key, "name": source_name,
                         "table_name": "", "records": [],
                         "error": f"{kind} 数据源缺少 table_id",
                     }
@@ -115,7 +118,7 @@ class Collector:
                 records = self.client.read_notable_records(
                     source.base_id, sheet_id, op)
             return {
-                "source_key": source.key, "name": source.name,
+                "source_key": source.key, "name": source_name,
                 "table_name": table_name, "records": records or [], "error": "",
             }
         except Exception as e:

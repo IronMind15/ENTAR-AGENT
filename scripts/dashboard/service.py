@@ -132,6 +132,10 @@ def collect_and_parse(sources: list, operator_id: str = "", staff_id: str = ""):
             continue
         src = src_by_key.get(c["source_key"])
         if src and c.get("records"):
+            # 采集器可能取得了文件级真实标题；传给 parser，不能再退回候选旧名。
+            if c.get("name") and c.get("name") != src.name:
+                from dataclasses import replace
+                src = replace(src, name=str(c["name"]))
             parsed.append(parse_source_records(
                 src, c["records"], c.get("table_name", "")))
     return parsed, errors
@@ -157,6 +161,16 @@ def assemble(parsed: list, title: str = "恩特能源每日项目看板",
     return assemble_markdown(parsed, title=title, date_str=date_str)
 
 
+def assemble_report(parsed: list, title: str = "恩特能源每日项目看板",
+                    date_str: str = "", llm_func=None, old_snapshot=None,
+                    errors: list[str] | None = None):
+    """返回含语义分页的证据报告；定时推送使用此接口。"""
+    from .llm_pipeline import build_dashboard_report
+    return build_dashboard_report(
+        parsed, old_snapshot, llm_func, title=title, date_str=date_str,
+        collection_errors=errors)
+
+
 def today_str() -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
@@ -180,3 +194,12 @@ def push(recipients: list, title: str, text: str):
     except Exception as e:
         logger.warning(f"看板推送失败: {e}")
         return False, str(e)[:200]
+
+
+def push_messages(recipients: list, title: str, messages: list[str]):
+    """依次发送语义分页；任一页失败即返回失败和页码。"""
+    for index, message in enumerate(messages, 1):
+        ok, error = push(recipients, title, message)
+        if not ok:
+            return False, f"第 {index}/{len(messages)} 页失败：{error}"
+    return True, ""

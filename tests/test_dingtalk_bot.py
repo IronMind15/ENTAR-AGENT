@@ -188,23 +188,27 @@ class ProcessTextRoutingTests(unittest.TestCase):
 
     @mock.patch("knowledge_review.delete_file_for_user")
     def test_delete_command_routes(self, mock_delete):
-        """「删除学习 序号」→ knowledge_delete 分支"""
+        """「删除学习 序号」→ 先建立待确认操作，不直接删除"""
         mock_delete.return_value = {"status": "ok", "file_name": "a.pdf",
                                     "deleted_chunks": 2, "source_deleted": True}
         result = self.handler._process_text("删除学习 1", "u1", "s1")
         self.assertEqual(result["source"], "knowledge_delete")
-        self.assertIn("已删除", result["answer"])
-        mock_delete.assert_called_once_with("u1", "1", is_admin=False)
+        self.assertIn("回复「确认」", result["answer"])
+        mock_delete.assert_not_called()
+        from tools import cancel_pending_operation
+        cancel_pending_operation("u1")
 
     @mock.patch("knowledge_review.relearn_file_for_user")
     def test_relearn_command_routes(self, mock_relearn):
-        """「重新学习 X」→ knowledge_relearn 分支"""
+        """「重新学习 X」→ 先建立待确认操作，不直接覆盖索引"""
         mock_relearn.return_value = {"status": "ok", "file_name": "a.pdf",
                                      "collection": "standards", "chunk_count": 3}
         result = self.handler._process_text("重新学习 1", "u1", "s1")
         self.assertEqual(result["source"], "knowledge_relearn")
-        self.assertIn("学习完成", result["answer"])
-        mock_relearn.assert_called_once_with("u1", "1", is_admin=False)
+        self.assertIn("回复「确认」", result["answer"])
+        mock_relearn.assert_not_called()
+        from tools import cancel_pending_operation
+        cancel_pending_operation("u1")
 
     def test_admin_mode_enter_and_exit(self):
         """ENTARBOSS 口令进入管理员模式，可任意删改；退出后失效"""

@@ -23,6 +23,8 @@
 import json
 import logging
 import re
+import shutil
+import subprocess
 import threading
 import time
 from typing import Optional
@@ -108,6 +110,37 @@ class DingTalkDocClient:
         self._kind_cache: dict[str, tuple[str, float]] = {}
         # staff_id → unionid 兜底缓存
         self._union_cache: dict[str, str] = {}
+        self._metadata_cache: dict[str, tuple[dict, float]] = {}
+        self._allow_dws_metadata = session is None
+
+    def get_document_metadata(self, node_id: str) -> dict:
+        """通过官方 dws 只读命令取得文件级元信息；失败时安静降级。"""
+        cached = self._metadata_cache.get(node_id)
+        if cached and time.time() - cached[1] < _KIND_CACHE_TTL:
+            return dict(cached[0])
+        if not self._allow_dws_metadata:
+            return {}
+        command = shutil.which("dws.cmd") or shutil.which("dws")
+        if not command:
+            return {}
+        try:
+            kwargs = {}
+            if hasattr(subprocess, "CREATE_NO_WINDOW"):
+                kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+            completed = subprocess.run(
+                [command, "doc", "info", "--node", node_id, "--format", "json"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=12, check=False, **kwargs)
+            value = json.loads(completed.stdout) if completed.returncode == 0 else {}
+            if isinstance(value, dict) and value.get("success") and value.get("name"):
+                self._metadata_cache[node_id] = (value, time.time())
+                return value
+        except Exception as exc:
+            logger.debug("读取文档元信息失败(node=%s): %s", node_id[:12], exc)
+        return {}
+
+    def get_document_name(self, node_id: str) -> str:
+        return str(self.get_document_metadata(node_id).get("name") or "").strip()
 
     # ── 认证（新版 API token，提前 60s 刷新）──────────────────
     def _get_access_token(self) -> str:
@@ -647,6 +680,7 @@ class DingTalkDocClient:
             return {"ok": False, "message": "无法识别的钉钉文档链接，请确认格式"}
         node_id = parsed["node_id"]
         sheet_id = parsed["sheet_id"]
+        document_name = self.get_document_name(node_id)
         operator = self.resolve_operator_id(operator_id, staff_id)
         limit = SUMMARY_RECORD_LIMIT if summary else None
 
@@ -665,7 +699,8 @@ class DingTalkDocClient:
                     "ok": True, "kind": "notable", "node_id": node_id,
                     "sheet_id": sheet_id, "records": records,
                     "field_names": field_names, "sheet_name": sheet_name,
-                    "name": sheet_name,
+                    "name": document_name or sheet_name,
+                    "document_name": document_name,
                     "message": f"读取 AI表格成功，共 {len(records)} 条记录",
                 }
             except DingTalkDocPermissionError:
@@ -698,7 +733,8 @@ class DingTalkDocClient:
                 "records": records,
                 "field_names": field_names,  # {field_id: 中文名}，失败为 {}
                 "sheet_name": sheet_name,
-                "name": sheet_name,
+                "name": document_name or sheet_name,
+                "document_name": document_name,
                 "message": f"读取 AI表格成功，共 {len(records)} 条记录",
             }
         if kind == "workbook":
@@ -723,7 +759,8 @@ class DingTalkDocClient:
                     "records": records,
                     "field_names": {},
                     "sheet_name": sheet_name,
-                    "name": sheet_name,
+                    "name": document_name or sheet_name,
+                    "document_name": document_name,
                     "message": f"读取在线表格成功，共 {len(records)} 条记录",
                 }
             except DingTalkDocPermissionError:
@@ -751,7 +788,8 @@ class DingTalkDocClient:
                     "field_names": {},
                     "markdown": doc.get("markdown", ""),
                     "sheet_name": doc_name,
-                    "name": doc_name,
+                    "name": document_name or doc_name,
+                    "document_name": document_name,
                     "message": f"读取普通文档成功，共 {len(records)} 个内容块",
                 }
             except DingTalkDocPermissionError:

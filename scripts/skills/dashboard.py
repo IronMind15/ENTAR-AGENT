@@ -19,8 +19,7 @@ from skills import BaseSkill, register
 
 logger = logging.getLogger("dashboard.skill")
 
-# 简短确认词（须最近有看板活动才拦截，防抢普通对话）
-_CONFIRM_RE = re.compile(r"^(确认|好的|可以|没问题|就这样|订阅吧|就这么办)$")
+# 确认词由 subscription_commands 统一识别，支持“是的，全部删除”等动作复述。
 
 _HELP_TEXT = (
     "我可以帮您开通「每日项目看板」自动推送，也可以查实时看板。试试说：\n"
@@ -51,7 +50,11 @@ class DashboardSkill(BaseSkill):
         if sub_cmd.parse_subscription_command(q) is not None:
             return True
         # 简短确认词：仅当最近有看板活动（有 pending 待确认）才拦截
-        if len(q) <= 6 and _CONFIRM_RE.fullmatch(q):
+        if sub_cmd.is_confirmation_text(q):
+            return sub_cmd.has_recent_kanban_activity()
+        if sub_cmd.is_cancel_text(q):
+            return sub_cmd.has_recent_kanban_activity()
+        if sub_cmd.is_contextual_delete(q):
             return sub_cmd.has_recent_kanban_activity()
         return False
 
@@ -60,14 +63,28 @@ class DashboardSkill(BaseSkill):
     def handle(cls, query: str, user_id: str = "", on_chunk=None) -> dict:
         q = (query or "").strip()
         uid = user_id or ""
+        had_recent_activity = sub_cmd.has_recent_kanban_activity(user_id=uid)
 
         # 确认/继续分支
-        if len(q) <= 6 and _CONFIRM_RE.fullmatch(q):
+        if sub_cmd.is_confirmation_text(q):
             pending = sub_cmd.get_pending(uid)
             if not pending:
                 return {"answer": "您还没有待确认的看板操作。说「帮我推个看板」即可开通。",
                         "source": "dashboard"}
             return cls._execute_pending(pending, uid)
+        if sub_cmd.is_cancel_text(q) and sub_cmd.get_pending(uid):
+            sub_cmd.clear_pending(uid)
+            return {"answer": "已取消，刚才的看板操作没有执行。", "source": "dashboard"}
+
+        # “现在帮我全部删除”只有在该用户刚查看/管理过看板时才承接，避免误删。
+        if sub_cmd.is_contextual_delete(q) and had_recent_activity:
+            store = get_subscription_store()
+            subs = store.list_for_owner(uid)
+            if not subs:
+                return {"answer": "您还没有订阅看板，无需删除。", "source": "dashboard"}
+            pending = {"intent": "delete", "sub_ids": [s.id for s in subs]}
+            sub_cmd.set_pending(uid, pending)
+            return {"answer": sub_cmd.render_confirmation(pending), "source": "dashboard"}
 
         # 「按这几个文档做每日看板」→ 动态数据源创建
         if sub_cmd.parse_doc_dashboard_intent(q) is not None:
@@ -84,10 +101,17 @@ class DashboardSkill(BaseSkill):
             return {"answer": sub_cmd.render_confirmation(pending), "source": "dashboard"}
 
         if intent == "query":
+            sub_cmd.touch_activity(uid)
             return {"answer": cls._render_subscription_status(uid), "source": "dashboard"}
 
         if intent == "resume":
-            return {"answer": cls._resume_subscription(uid), "source": "dashboard"}
+            store = get_subscription_store()
+            paused = [s for s in store.list_for_owner(uid) if not s.enabled]
+            if not paused:
+                return {"answer": cls._resume_subscription(uid), "source": "dashboard"}
+            pending = {"intent": "resume", "sub_ids": [s.id for s in paused]}
+            sub_cmd.set_pending(uid, pending)
+            return {"answer": sub_cmd.render_confirmation(pending), "source": "dashboard"}
 
         if intent == "delete":
             store = get_subscription_store()
@@ -104,7 +128,13 @@ class DashboardSkill(BaseSkill):
                     "source": "dashboard"}
 
         if intent == "stop":
-            return {"answer": cls._stop_subscription(uid), "source": "dashboard"}
+            store = get_subscription_store()
+            active = [s for s in store.list_for_owner(uid) if s.enabled]
+            if not active:
+                return {"answer": cls._stop_subscription(uid), "source": "dashboard"}
+            pending = {"intent": "stop", "sub_ids": [s.id for s in active]}
+            sub_cmd.set_pending(uid, pending)
+            return {"answer": sub_cmd.render_confirmation(pending), "source": "dashboard"}
 
         if intent in ("change_time", "change_freq", "change_recipients"):
             store = get_subscription_store()
@@ -203,21 +233,53 @@ class DashboardSkill(BaseSkill):
                 recipients=pending.get("recipients") or [],
                 title=pending.get("title", "恩特能源每日项目看板"),
             )
+            duplicate = store.find_exact_duplicate(sub)
+            if duplicate:
+                if not duplicate.enabled:
+                    store.set_enabled(duplicate.id, True)
+                    state = "已恢复原订阅"
+                else:
+                    state = "未重复创建"
+                sub_cmd.clear_pending(user_id)
+                return {
+                    "answer": f"✅ 已有相同看板订阅（编号 {duplicate.id}），{state}。",
+                    "source": "dashboard",
+                }
             store.create(sub)
             sub_cmd.clear_pending(user_id)
             note = cls._push_sample(sub)
             return {"answer": f"✅ 已为您开通每日看板推送！{note}", "source": "dashboard"}
 
         if intent == "delete":
-            # v1.11.6：删除订阅（确认后彻底移除）
+            # 只删除当前用户真实拥有的订阅，并依据 rowcount 回报，禁止吞错后谎报成功。
+            owned_ids = {s.id for s in store.list_for_owner(user_id)}
+            requested_ids = [int(sid) for sid in (pending.get("sub_ids") or [])]
+            deleted = 0
             for sid in (pending.get("sub_ids") or []):
-                try:
-                    store.delete(sid)
-                except Exception:
-                    pass
+                if int(sid) in owned_ids and store.delete(int(sid)):
+                    deleted += 1
             sub_cmd.clear_pending(user_id)
-            return {"answer": "✅ 已删除您的看板订阅。需要的话说「帮我推个看板」重新开通。",
+            remaining = [sid for sid in requested_ids if store.get(sid) is not None]
+            if remaining:
+                return {"answer": f"⚠️ 已删除 {deleted} 个，但仍有 {len(remaining)} 个未删除，请联系管理员排查。",
+                        "source": "dashboard"}
+            return {"answer": f"✅ 已删除 {deleted} 个看板订阅。需要的话说「帮我推个看板」重新开通。",
                     "source": "dashboard"}
+
+        if intent in ("stop", "resume"):
+            desired = intent == "resume"
+            owned_ids = {s.id for s in store.list_for_owner(user_id)}
+            changed = 0
+            for sid in (pending.get("sub_ids") or []):
+                sid = int(sid)
+                if sid in owned_ids:
+                    store.set_enabled(sid, desired)
+                    current = store.get(sid)
+                    if current and current.enabled == desired:
+                        changed += 1
+            sub_cmd.clear_pending(user_id)
+            action = "恢复" if desired else "停止"
+            return {"answer": f"✅ 已{action} {changed} 个看板订阅。", "source": "dashboard"}
 
         sub = store.get(pending.get("sub_id") or 0)
         if not sub:
@@ -261,17 +323,15 @@ class DashboardSkill(BaseSkill):
         # 样例推送与定时推送统一走 LLM 组装（失败规则兜底）
         try:
             from skills.agent import call_deepseek_json
-            text = service.assemble(parsed, title=sub.title,
-                                    date_str=service.today_str(),
-                                    llm_func=call_deepseek_json,
-                                    old_snapshot=sub.last_snapshot,
-                                    evidence_pipeline=True, errors=errors)
+            report = service.assemble_report(
+                parsed, title=sub.title, date_str=service.today_str(),
+                llm_func=call_deepseek_json, old_snapshot=sub.last_snapshot,
+                errors=errors)
         except Exception:
-            text = service.assemble(parsed, title=sub.title,
-                                    date_str=service.today_str(),
-                                    old_snapshot=sub.last_snapshot,
-                                    evidence_pipeline=True, errors=errors)
-        ok, msg = service.push(sub.recipients, sub.title, text)
+            report = service.assemble_report(
+                parsed, title=sub.title, date_str=service.today_str(),
+                old_snapshot=sub.last_snapshot, errors=errors)
+        ok, msg = service.push_messages(sub.recipients, sub.title, report.messages)
         if ok:
             return "已推送示例看板给您，可先查看效果！"
         return f"（订阅已开通，但示例推送失败：{msg}）"
@@ -295,6 +355,26 @@ class DashboardSkill(BaseSkill):
             lines.append(f"  · 数据源：{src_names or '（未配置）'}")
             lines.append(f"  · 接收人：{len(s.recipients)} 人")
             lines.append(f"  · 上次推送：{s.last_pushed_at or '尚无'}")
+        overlaps = []
+        for index, left in enumerate(subs):
+            if not left.enabled:
+                continue
+            left_sources = set(left.data_sources)
+            for right in subs[index + 1:]:
+                if not right.enabled:
+                    continue
+                if (left.push_hour, left.push_minute, left.weekdays or "") != (
+                        right.push_hour, right.push_minute, right.weekdays or ""):
+                    continue
+                union = left_sources | set(right.data_sources)
+                score = len(left_sources & set(right.data_sources)) / len(union) if union else 1.0
+                if score >= 0.5:
+                    overlaps.append((left.id, right.id, round(score * 100)))
+        if overlaps:
+            lines.extend(["", "⚠️ 发现可能重复的订阅："])
+            lines.extend(f"- 编号 {a} 与 {b}：同一时间、来源重合 {score}%"
+                         for a, b, score in overlaps)
+            lines.append("如需清理，可说「删除看板」，我会列出数量并再次确认。")
         return "\n".join(lines)
 
     @classmethod
@@ -346,6 +426,14 @@ class DashboardSkill(BaseSkill):
                     c.url, operator_id=c.operator_union or "",
                     staff_id="", summary=True)
                 if result.get("ok"):
+                    real_name = result.get("document_name") or result.get("name") or ""
+                    if real_name and real_name != c.name:
+                        c.name = real_name
+                        try:
+                            from dashboard.doc_candidates import get_candidate_store
+                            get_candidate_store().update_name(c.id, real_name)
+                        except Exception as exc:
+                            logger.debug("回填文档真实标题失败(cand=%s): %s", c.id, exc)
                     usable.append(c)
                 else:
                     blocked.append({

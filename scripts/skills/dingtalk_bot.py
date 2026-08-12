@@ -442,6 +442,34 @@ class ErrorQueryHandler(ChatbotHandler):
         set_current_staff_id(staff_id)
         set_current_user_id(user_id)
 
+        # 通用工具二次确认优先于 Agent：确认后直接执行已冻结的工具名和参数，
+        # 不再让 LLM 重解释一次，避免目标漂移或凭空声称成功。
+        from tools import (cancel_pending_operation, confirm_pending_operation,
+                           get_pending_operation)
+        tool_pending = get_pending_operation(user_id)
+        stripped = text.strip()
+        if tool_pending and re.fullmatch(r"(?:取消|算了|不要了|不执行)[。！!]?", stripped):
+            cancel_pending_operation(user_id)
+            answer = "已取消，刚才的操作没有执行。"
+            if on_chunk:
+                on_chunk(answer, "done")
+            return {"answer": answer, "source": "tool_confirmation"}
+        if tool_pending:
+            from dashboard.subscription_commands import is_confirmation_text
+            if is_confirmation_text(stripped):
+                raw = confirm_pending_operation(user_id)
+                try:
+                    value = json.loads(raw) if isinstance(raw, str) else (raw or {})
+                except Exception:
+                    value = {"message": str(raw)}
+                if value.get("error"):
+                    answer = f"❌ 操作未完成：{value['error']}"
+                else:
+                    answer = "✅ " + str(value.get("message") or "操作已完成，并已取得实际执行结果。")
+                if on_chunk:
+                    on_chunk(answer, "done")
+                return {"answer": answer, "source": "tool_confirmation"}
+
         # 审核口令与普通技能路由
         if text in ("查看我的审核ID", "我的审核ID", "查看我的钉钉ID"):
             answer = (
@@ -510,8 +538,12 @@ class ErrorQueryHandler(ChatbotHandler):
         # 4. 删除学习内容 + 源文件
         m = _DELETE_RE.match(t)
         if m:
-            result = delete_file_for_user(user_id, m.group(1), is_admin=is_admin)
-            answer = _format_delete_result(result)
+            from tools import execute_tool
+            value = json.loads(execute_tool(
+                "manage_uploaded_file", {"action": "delete", "target": m.group(1)}))
+            answer = (f"⚠️ 准备删除「{m.group(1)}」及对应知识库内容。"
+                      "此操作不可恢复，回复「确认」执行，回复「取消」放弃。") \
+                if value.get("confirmation_required") else f"❌ {value.get('error', '无法创建删除操作')}"
             if on_chunk:
                 on_chunk(answer, "done")
             return {"answer": answer, "source": "knowledge_delete"}
@@ -519,8 +551,12 @@ class ErrorQueryHandler(ChatbotHandler):
         # 5. 强制重新学习
         m = _RELEARN_RE.match(t)
         if m:
-            result = relearn_file_for_user(user_id, m.group(1), is_admin=is_admin)
-            answer = _format_learn_result(result)
+            from tools import execute_tool
+            value = json.loads(execute_tool(
+                "manage_uploaded_file", {"action": "relearn", "target": m.group(1)}))
+            answer = (f"⚠️ 准备重新学习「{m.group(1)}」并更新知识库索引。"
+                      "回复「确认」执行，回复「取消」放弃。") \
+                if value.get("confirmation_required") else f"❌ {value.get('error', '无法创建重学操作')}"
             if on_chunk:
                 on_chunk(answer, "done")
             return {"answer": answer, "source": "knowledge_relearn"}
@@ -775,7 +811,9 @@ class ErrorQueryHandler(ChatbotHandler):
                 kind=kind,
                 operator_union=operator_union or user_id,
                 records_count=len(result.get("records") or []),
-                name=result.get("sheet_name") or result.get("name") or "",
+                # 文件级真实标题优先；sheet_name 仅表示工作表/首段，不能冒充文件名。
+                name=result.get("document_name") or result.get("name")
+                or result.get("sheet_name") or "",
                 # v1.11.1：doc 也做看板源（文档内容不齐，采集 Markdown 全文由 LLM 提炼）
                 enabled=kind in ("notable", "workbook", "doc"),
                 field_map=json.dumps(field_map, ensure_ascii=False),

@@ -77,6 +77,14 @@ _CREATE_RE = re.compile(
     r"每日.{0,4}看板|每天.{0,4}看板|"
     r"看板.{0,4}(推送|提醒|订阅)")
 
+_CONTEXT_DELETE_RE = re.compile(
+    r"(?:现在)?(?:帮我)?(?:把)?(?:这些|以上|前面|现有|我的)?(?:全部|都)?"
+    r"(?:删除|删掉|移除|清除)(?:掉|了)?$")
+_CONFIRM_TEXT_RE = re.compile(
+    r"^(?:是的?|对|好的?|可以|没问题|确认|确定|就这样|就这么办|执行|继续)"
+    r"(?:[,， ]*(?:确认|执行|继续|删除|全部删除|都删除|删除全部|删掉全部))?[。！!]?$")
+_CANCEL_TEXT_RE = re.compile(r"^(?:取消|算了|不要了|不执行|先不弄了)[。！!]?$")
+
 # 周次用 1-7（周一=1 … 周日=7），与 datetime.isoweekday() 对齐
 _WEEKDAY_MAP = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "日": 7, "天": 7}
 _CN_WEEK = ("", "周一", "周二", "周三", "周四", "周五", "周六", "周日")
@@ -159,6 +167,20 @@ def parse_subscription_command(text: str, ctx: Optional[dict] = None) -> Optiona
             return None
         return {"intent": intent, **(ctx or {})}
     return None
+
+
+def is_contextual_delete(text: str) -> bool:
+    """识别承接上一轮看板上下文的“全部删除”，不单独作为全局意图。"""
+    return bool(_CONTEXT_DELETE_RE.fullmatch((text or "").strip()))
+
+
+def is_confirmation_text(text: str) -> bool:
+    """允许带动作复述的自然确认，例如“是的，全部删除”。"""
+    return bool(_CONFIRM_TEXT_RE.fullmatch((text or "").strip()))
+
+
+def is_cancel_text(text: str) -> bool:
+    return bool(_CANCEL_TEXT_RE.fullmatch((text or "").strip()))
 
 
 # ===== 时间解析 =====
@@ -376,12 +398,20 @@ def render_confirmation(pending: dict, current=None) -> str:
         lines.append("如需增加其他接收人，直接告诉我姓名（如「也推给张工」）。")
 
     elif intent == "delete":
-        lines.append("好的，将删除您的看板订阅（此操作不可恢复，历史推送配置一并清除）。")
+        count = len(pending.get("sub_ids") or [])
+        target = f" {count} 个" if count else ""
+        lines.append(f"好的，将删除您的{target}看板订阅（此操作不可恢复，历史推送配置一并清除）。")
         lines.append("回复「确认」删除；如果只是想暂停，说「停掉看板」即可。")
 
     elif intent == "stop":
-        lines.append("好的，将停止您的每日看板推送。")
+        count = len(pending.get("sub_ids") or [])
+        lines.append(f"好的，将停止您的 {count} 个每日看板订阅。")
         lines.append("回复「确认」停止；如果只是想调整，直接告诉我要改什么（如「改到10点」）。")
+
+    elif intent == "resume":
+        count = len(pending.get("sub_ids") or [])
+        lines.append(f"好的，将恢复您的 {count} 个每日看板订阅。")
+        lines.append("回复「确认」恢复推送；回复「取消」则保持暂停。")
 
     else:
         lines.append("收到，请问您想对看板做什么调整？")
@@ -403,6 +433,7 @@ _ACTIVITY_TIMEOUT = 600   # 最近看板活动（秒），用于确认词防误�
 _pending: dict[str, dict] = {}
 _pending_lock = threading.Lock()
 _last_activity_ts: float = 0.0
+_activity_by_user: dict[str, float] = {}
 
 
 def set_pending(user_id: str, pending: dict):
@@ -410,6 +441,15 @@ def set_pending(user_id: str, pending: dict):
     with _pending_lock:
         _pending[user_id] = pending
         _last_activity_ts = time.time()
+        _activity_by_user[user_id] = _last_activity_ts
+
+
+def touch_activity(user_id: str):
+    """记录该用户刚进行过看板对话，供承接式命令安全判定。"""
+    global _last_activity_ts
+    with _pending_lock:
+        _last_activity_ts = time.time()
+        _activity_by_user[user_id] = _last_activity_ts
 
 
 def get_pending(user_id: str) -> Optional[dict]:
@@ -422,7 +462,10 @@ def clear_pending(user_id: str):
         _pending.pop(user_id, None)
 
 
-def has_recent_kanban_activity(timeout: float = _ACTIVITY_TIMEOUT) -> bool:
+def has_recent_kanban_activity(timeout: float = _ACTIVITY_TIMEOUT,
+                                user_id: str | None = None) -> bool:
     """最近 timeout 秒内是否有过看板对话（技能 match 用：简短「确认」只在
     刚聊过看板时拦截，避免抢普通对话）"""
-    return (time.time() - _last_activity_ts) <= timeout
+    with _pending_lock:
+        last = _activity_by_user.get(user_id, 0.0) if user_id is not None else _last_activity_ts
+    return (time.time() - last) <= timeout

@@ -14,7 +14,11 @@ DEFINITION = {
 }
 
 
-@register("push_dashboard", DEFINITION)
+@register("push_dashboard", DEFINITION, policy={
+    "confirm": True,
+    "risk": "external_send",
+    "summary": "立即向所有启用订阅的接收人推送看板",
+})
 def execute(args: dict) -> str:
     from dashboard import service
     from dashboard.subscription_store import get_subscription_store
@@ -42,15 +46,15 @@ def execute(args: dict) -> str:
     recipients = list({sid for s in subs for sid in s.recipients})
     try:
         from skills.agent import call_deepseek_json
-        text = service.assemble(
+        report = service.assemble_report(
             parsed, title=sub0.title, date_str=service.today_str(),
             llm_func=call_deepseek_json, old_snapshot=sub0.last_snapshot,
-            evidence_pipeline=True, errors=errors)
+            errors=errors)
     except Exception:
-        text = service.assemble(
+        report = service.assemble_report(
             parsed, title=sub0.title, date_str=service.today_str(),
-            old_snapshot=sub0.last_snapshot, evidence_pipeline=True, errors=errors)
-    ok, msg = service.push(recipients, sub0.title, text)
+            old_snapshot=sub0.last_snapshot, errors=errors)
+    ok, msg = service.push_messages(recipients, sub0.title, report.messages)
     if not ok:
         return json.dumps({"error": f"推送失败：{msg}"}, ensure_ascii=False)
     return json.dumps({"ok": True, "recipients": len(recipients), "sources": len(parsed)},

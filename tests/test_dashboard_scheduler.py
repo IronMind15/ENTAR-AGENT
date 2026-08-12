@@ -13,7 +13,8 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from dashboard.subscription_store import Subscription  # noqa: E402
-from dashboard_scheduler import _execute_subscription, is_due  # noqa: E402
+from dashboard_scheduler import (_deduplicate_due_subscriptions,
+                                 _execute_subscription, is_due)  # noqa: E402
 
 
 def _sub(**kw):
@@ -74,6 +75,15 @@ class IsDueTests(unittest.TestCase):
         sub = _sub(push_hour=9, push_minute=0, weekdays="")
         for wd in range(7):
             self.assertTrue(is_due(self._now(9, 0, weekday=wd), sub))
+
+    def test_subset_subscriptions_are_suppressed_for_same_delivery(self):
+        full = _sub(id=5, data_sources=["doc_1", "doc_2", "doc_3"])
+        subset_a = _sub(id=4, data_sources=["doc_1", "doc_2"])
+        subset_b = _sub(id=6, data_sources=["doc_3"])
+        selected, suppressed = _deduplicate_due_subscriptions(
+            [subset_a, full, subset_b])
+        self.assertEqual([sub.id for sub in selected], [5])
+        self.assertEqual(set(suppressed), {(4, 5), (6, 5)})
 
 
 class ExecuteSubscriptionTests(unittest.TestCase):

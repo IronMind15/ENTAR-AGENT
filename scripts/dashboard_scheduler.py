@@ -131,21 +131,23 @@ def _execute_subscription(sub) -> dict:
     # LLM 组装 → 失败/超长规则兜底（service.assemble 内部处理）
     try:
         from skills.agent import call_deepseek_json
-        text = service.assemble(parsed, title=sub.title, date_str=service.today_str(),
-                                llm_func=call_deepseek_json,
-                                old_snapshot=sub.last_snapshot,
-                                evidence_pipeline=True, errors=errors)
-    except Exception:
-        text = service.assemble(
+        report = service.assemble_report(
             parsed, title=sub.title, date_str=service.today_str(),
-            old_snapshot=sub.last_snapshot, evidence_pipeline=True, errors=errors)
+            llm_func=call_deepseek_json, old_snapshot=sub.last_snapshot,
+            errors=errors)
+    except Exception:
+        report = service.assemble_report(
+            parsed, title=sub.title, date_str=service.today_str(),
+            old_snapshot=sub.last_snapshot, errors=errors)
+
+    messages = list(report.messages)
 
     # 每日必推：顶部注入变化标注（有变化列变更、无变化显式说明）
     if sub.alert_mode == "always":
         name_by_key = {s.key: s.name for s in sources}
-        text = change_banner(sub.last_snapshot, snap, name_by_key) + "\n\n" + text
+        messages[0] = change_banner(sub.last_snapshot, snap, name_by_key) + "\n\n" + messages[0]
 
-    ok, msg = service.push(sub.recipients, sub.title, text)
+    ok, msg = service.push_messages(sub.recipients, sub.title, messages)
     if not ok:
         logger.warning(f"[看板] 订阅 {sub.id} 推送失败：{msg}")
         _notify_failure(sub, f"推送失败：{msg}")
@@ -153,8 +155,28 @@ def _execute_subscription(sub) -> dict:
 
     get_subscription_store().set_snapshot(
         sub.id, snap, last_pushed_at=service.now_str())
-    logger.info(f"[看板] 订阅 {sub.id} 已推送（{len(sub.recipients)} 人）")
+    logger.info("[看板] 订阅 %s 已推送（%s 人，%s 页；核验=%s）",
+                sub.id, len(sub.recipients), len(messages), report.verification)
     return {"ok": True, "reason": ""}
+
+
+def _deduplicate_due_subscriptions(subs: list) -> tuple[list, list[tuple[int, int]]]:
+    """保留来源覆盖最全的订阅，返回 (待执行, [(被抑制ID, 覆盖者ID)])。"""
+    ordered = sorted(subs, key=lambda sub: len(set(sub.data_sources)), reverse=True)
+    covered: list[tuple[tuple, set[str], int]] = []
+    selected, suppressed = [], []
+    for sub in ordered:
+        identity = (sub.owner_user_id, sub.push_hour, sub.push_minute,
+                    sub.weekdays or "", tuple(sorted(sub.recipients)))
+        sources = set(str(key) for key in sub.data_sources)
+        parent = next((sid for key, keys, sid in covered
+                       if key == identity and sources <= keys), None)
+        if parent is not None:
+            suppressed.append((sub.id, parent))
+            continue
+        selected.append(sub)
+        covered.append((identity, sources, sub.id))
+    return selected, suppressed
 
 
 def _tick():
@@ -168,12 +190,18 @@ def _tick():
     except Exception as e:
         logger.warning(f"[看板] 读取订阅列表失败：{e}")
         return
-    for sub in subs:
+    due_subs = [sub for sub in subs if is_due(now, sub)]
+    # 同一用户、时刻、接收人下，来源为另一条订阅子集时只执行覆盖最全的一条。
+    # 配置不自动删除，用户查询状态时仍会收到“可能重复”提示并自行确认清理。
+    due_subs, suppressed = _deduplicate_due_subscriptions(due_subs)
+    for sub_id, parent_id in suppressed:
+        logger.warning("[看板] 订阅 %s 被同批订阅 %s 完整覆盖，已抑制重复推送",
+                       sub_id, parent_id)
+    for sub in due_subs:
         try:
-            if is_due(now, sub):
-                result = _execute_subscription(sub)
-                logger.info(f"[看板] tick 订阅 {sub.id} → {result}")
-                executed += 1
+            result = _execute_subscription(sub)
+            logger.info(f"[看板] tick 订阅 {sub.id} → {result}")
+            executed += 1
         except Exception as e:
             logger.exception(f"[看板] 订阅 {sub.id} 执行异常: {e}")
             _notify_failure(sub, f"执行异常：{e}")

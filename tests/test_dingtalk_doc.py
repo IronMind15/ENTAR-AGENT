@@ -28,6 +28,7 @@ class ParseDocUrlTests(unittest.TestCase):
         self.assertEqual("np9zOoBVBYQe06entLExnXArW1DK0g6l", parsed["node_id"])
         self.assertEqual("", parsed["sheet_id"])
 
+
     def test_link_with_sheet_param(self):
         parsed = DingTalkDocClient.parse_doc_url(
             "https://alidocs.dingtalk.com/i/nodes/abc123?sheet=xyz789")
@@ -57,6 +58,20 @@ class ParseDocUrlTests(unittest.TestCase):
         parsed = DingTalkDocClient.parse_doc_url(
             "https://www.alidocs.dingtalk.com/i/nodes/node1")
         self.assertEqual("node1", parsed["node_id"])
+
+
+class DocumentMetadataTests(unittest.TestCase):
+    def test_dws_metadata_uses_real_document_name_and_cache(self):
+        client = DingTalkDocClient()
+        completed = type("Completed", (), {
+            "returncode": 0,
+            "stdout": '{"success":true,"name":"31-32周部门周报","extension":"adoc"}',
+        })()
+        with patch("dingtalk_doc_client.shutil.which", return_value="dws.cmd"), \
+             patch("dingtalk_doc_client.subprocess.run", return_value=completed) as run:
+            self.assertEqual(client.get_document_name("node-1"), "31-32周部门周报")
+            self.assertEqual(client.get_document_name("node-1"), "31-32周部门周报")
+        run.assert_called_once()
 
 
 class ResolveOperatorIdTests(unittest.TestCase):

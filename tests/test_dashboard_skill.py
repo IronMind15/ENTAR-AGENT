@@ -43,6 +43,12 @@ class MatchTests(unittest.TestCase):
                         return_value=True):
             self.assertTrue(DashboardSkill.match("确认"))
 
+    def test_natural_delete_confirmation_matches(self):
+        """真实话术“是的，全部删除”应能确认已有删除提案。"""
+        with mock.patch("dashboard.subscription_commands.has_recent_kanban_activity",
+                        return_value=True):
+            self.assertTrue(DashboardSkill.match("是的，全部删除"))
+
     def test_unrelated_does_not_match(self):
         with mock.patch("dashboard.subscription_commands.has_recent_kanban_activity",
                         return_value=False):
@@ -208,6 +214,9 @@ class HandleStopAndQueryTests(unittest.TestCase):
 
     def test_stop_disables_subscription(self):
         r = DashboardSkill.handle("停掉看板", user_id="u1")
+        self.assertIn("确认", r["answer"])
+        self.assertTrue(all(s.enabled for s in self._store.list_for_owner("u1")))
+        r = DashboardSkill.handle("确认", user_id="u1")
         self.assertIn("已停止", r["answer"])
         subs = self._store.list_for_owner("u1")
         self.assertTrue(all(not s.enabled for s in subs))
@@ -450,6 +459,9 @@ class HandleResumeDeleteTests(unittest.TestCase):
         """恢复：重新启用已停用订阅，不新建重复"""
         self._store.create(self._sub(enabled=False))
         r = DashboardSkill.handle("恢复看板", user_id="u1")
+        self.assertIn("确认", r["answer"])
+        self.assertFalse(self._store.list_for_owner("u1")[0].enabled)
+        r = DashboardSkill.handle("确认", user_id="u1")
         self.assertIn("已恢复", r["answer"])
         subs = self._store.list_for_owner("u1")
         self.assertEqual(len(subs), 1)       # 不新建
@@ -459,6 +471,8 @@ class HandleResumeDeleteTests(unittest.TestCase):
         """回归：v1.11.5 前「重新开通看板」新建重复订阅，现在应恢复"""
         self._store.create(self._sub(enabled=False))
         r = DashboardSkill.handle("重新开通看板", user_id="u1")
+        self.assertIn("确认", r["answer"])
+        r = DashboardSkill.handle("确认", user_id="u1")
         self.assertIn("已恢复", r["answer"])
         subs = self._store.list_for_owner("u1")
         self.assertEqual(len(subs), 1)
@@ -482,6 +496,28 @@ class HandleResumeDeleteTests(unittest.TestCase):
         r2 = DashboardSkill.handle("确认", user_id="u1")
         self.assertIn("已删除", r2["answer"])
         self.assertEqual(self._store.list_for_owner("u1"), [])
+
+    def test_contextual_delete_all_then_natural_confirmation(self):
+        """查询看板后说“全部删除”应生成真实删除提案，确认后回读为空。"""
+        self._store.create(self._sub())
+        self._store.create(self._sub(data_sources=["test_issues"]))
+        DashboardSkill.handle("我的看板任务有哪些", user_id="u1")
+        r = DashboardSkill.handle("现在帮我全部删除", user_id="u1")
+        self.assertIn("2 个", r["answer"])
+        self.assertEqual(len(self._store.list_for_owner("u1")), 2)
+        r2 = DashboardSkill.handle("是的，全部删除", user_id="u1")
+        self.assertIn("已删除 2 个", r2["answer"])
+        self.assertEqual(self._store.list_for_owner("u1"), [])
+
+    @mock.patch("skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
+    @mock.patch("skills.dashboard.DashboardSkill._push_sample", return_value="")
+    def test_exact_duplicate_create_is_reused(self, m_push, mock_staff):
+        """相同用户、来源、时间、接收人和模式不得创建第二条订阅。"""
+        self._store.create(self._sub(data_sources=["project_status", "test_issues"]))
+        DashboardSkill.handle("帮我推个看板", user_id="u1")
+        r = DashboardSkill.handle("确认", user_id="u1")
+        self.assertIn("已有相同", r["answer"])
+        self.assertEqual(len(self._store.list_for_owner("u1")), 1)
 
     def test_delete_without_subscription(self):
         r = DashboardSkill.handle("删除看板", user_id="nobody")

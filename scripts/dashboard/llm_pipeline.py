@@ -36,6 +36,24 @@ class DashboardReport:
     snapshot: list[dict]
     changes: list[dict]
     verification: dict
+    messages: list[str]
+
+
+def _plain_text(value, max_chars: int | None = None) -> str:
+    """转成主动消息安全文本；Markdown 表格改为普通文本，避免 `|` 原样泄漏。"""
+    text = str(value or "").replace("\r", "").strip()
+    rows = []
+    for line in text.split("\n"):
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) > 1:
+            if all(re.fullmatch(r":?-{3,}:?", cell or "-") for cell in cells):
+                continue
+            line = "；".join(cell for cell in cells if cell)
+        rows.append(line.replace("|", "｜"))
+    text = " ".join(part for part in rows if part).strip()
+    if max_chars and len(text) > max_chars:
+        text = text[:max_chars].rstrip() + "…"
+    return text
 
 
 def _json_object(text: str) -> dict:
@@ -186,8 +204,8 @@ def _source_lines(results: list[dict], labels: dict) -> list[str]:
     for result in results:
         meta = result.get("source_meta", {})
         key = result.get("source_key", "")
-        name = result.get("name") or meta.get("source_name") or key
-        table = result.get("table_name", "")
+        name = _plain_text(result.get("name") or meta.get("source_name") or key, 100)
+        table = _plain_text(result.get("table_name", ""), 80)
         captured = meta.get("captured_at", "")
         url = meta.get("source_url", "")
         suffix = f"，分表：{table}" if table else ""
@@ -207,16 +225,39 @@ def _fallback_claims(results: list[dict], labels: dict) -> list[dict]:
             fields = [(k, v) for k, v in item.get("fields", {}).items() if v]
             if not fields:
                 continue
-            title = str(fields[0][1])
-            details = "；".join(f"{k}：{v}" for k, v in fields[1:4])
+            title = _plain_text(fields[0][1], 120)
+            details = "；".join(f"{_plain_text(k, 30)}：{_plain_text(v, 160)}"
+                               for k, v in fields[1:4])
             evidence = item.get("evidence", {})
             ref = f"{result.get('source_key')}:{evidence.get('record_id')}"
             claims.append({
                 "text": title + (f"（{details}）" if details else ""),
                 "level": "info", "refs": [ref],
                 "evidence": [{"ref": ref, "field": fields[0][0],
-                              "value": str(fields[0][1])}],
+                              "value": _plain_text(fields[0][1], 160)}],
             })
+    return claims[:12]
+
+
+def _fallback_claims_from_units(units: list[dict]) -> list[dict]:
+    """兜底也先写今日变更，再补充存量上下文。"""
+    claims = []
+    for unit in units:
+        fields = [(k, v) for k, v in unit.get("fields", {}).items() if v]
+        if not fields:
+            continue
+        change = unit.get("change", {})
+        kind = change.get("change")
+        prefix = {"added": "新增：", "updated": "更新：", "removed": "移除："}.get(kind, "")
+        title = _plain_text(fields[0][1], 120)
+        details = "；".join(f"{_plain_text(k, 30)}：{_plain_text(v, 160)}"
+                           for k, v in fields[1:4])
+        claims.append({
+            "text": prefix + title + (f"（{details}）" if details else ""),
+            "level": "update" if kind else "info", "refs": [unit["ref"]],
+            "evidence": [{"ref": unit["ref"], "field": fields[0][0],
+                          "value": _plain_text(fields[0][1], 160)}],
+        })
     return claims[:12]
 
 
@@ -234,27 +275,50 @@ def _render(results: list[dict], claims: list[dict], labels: dict,
         lines.append("- 当前没有可由来源记录支持的结论，请查看来源数据。")
     for claim in claims[:12]:
         refs = " ".join(f"[{labels[r]}]" for r in claim["refs"] if r in labels)
-        lines.append(f"- {icons.get(claim.get('level'), '•')} {claim['text']} {refs}".rstrip())
+        claim_text = _plain_text(claim.get("text", ""), 360)
+        lines.append(f"- {icons.get(claim.get('level'), '•')} {claim_text} {refs}".rstrip())
         evidence_parts = []
         for evidence in claim.get("evidence", [])[:2]:
-            value = str(evidence.get("value", ""))
-            if len(value) > 100:
-                value = value[:100] + "…"
-            evidence_parts.append(f"{evidence.get('field')}：{value}")
+            value = _plain_text(evidence.get("value", ""), 160)
+            evidence_parts.append(f"{_plain_text(evidence.get('field'), 40)}：{value}")
         if evidence_parts:
             lines.append("  - 依据原值：" + "；".join(evidence_parts))
     if collection_errors:
         lines.extend(["", "## 数据完整性提醒", ""])
-        lines.extend(f"- ⚠️ {error}" for error in collection_errors[:5])
+        lines.extend(f"- ⚠️ {_plain_text(error, 300)}" for error in collection_errors[:5])
     lines.extend([""] + _source_lines(results, labels))
     text = "\n".join(lines).strip() + "\n"
-    if len(text) > REPORT_MARKDOWN_LEN:
-        # 保住来源索引：先减少结论数量再渲染，而非生硬截断来源。
-        if len(claims) > 4:
-            return _render(results, claims[:-1], labels, title, date_str, headline,
-                           collection_errors)
-        text = text[:REPORT_MARKDOWN_LEN - 16].rsplit("\n", 1)[0] + "\n…（已截断）"
     return text
+
+
+def _paginate_markdown(text: str, title: str) -> list[str]:
+    """按完整段落分页；不把半行或半个 Markdown 结构切到下一条消息。"""
+    if len(text) <= REPORT_MARKDOWN_LEN:
+        return [text]
+    body = text
+    heading = f"# {title}\n\n"
+    if body.startswith(heading):
+        body = body[len(heading):]
+    blocks = [block.strip() for block in body.split("\n\n") if block.strip()]
+    reserve = len(heading) + 40
+    pages, current = [], []
+    for block in blocks:
+        # 正常渲染的单块已限制长度；仍异常超长时按完整行拆分。
+        candidates = [block]
+        if len(block) > REPORT_MARKDOWN_LEN - reserve:
+            candidates = [line for line in block.splitlines() if line.strip()]
+        for candidate in candidates:
+            proposed = "\n\n".join(current + [candidate])
+            if current and len(proposed) > REPORT_MARKDOWN_LEN - reserve:
+                pages.append("\n\n".join(current))
+                current = [candidate]
+            else:
+                current.append(candidate)
+    if current:
+        pages.append("\n\n".join(current))
+    total = len(pages)
+    return [f"# {title}\n\n> 第 {index}/{total} 页\n\n{page}\n"
+            for index, page in enumerate(pages, 1)]
 
 
 def build_dashboard_report(results: list[dict], old_snapshot: list[dict] | None,
@@ -293,8 +357,14 @@ def build_dashboard_report(results: list[dict], old_snapshot: list[dict] | None,
         unit = dict(record)
         if record["ref"] in change_by_ref:
             unit["change"] = change_by_ref[record["ref"]]
+            unit["priority"] = "changed"
+        else:
+            unit["priority"] = "context"
         analysis_units.append(unit)
+    for unit in removed_units:
+        unit["priority"] = "changed"
     analysis_units.extend(removed_units)
+    analysis_units.sort(key=lambda unit: 0 if unit.get("priority") == "changed" else 1)
     change_summary = []
     for source_change in changes:
         counts = {}
@@ -324,7 +394,7 @@ def build_dashboard_report(results: list[dict], old_snapshot: list[dict] | None,
                 llm_func,
                 _prompt("map", {
                     "records": batch,
-                    "instruction": "逐条阅读完整字段，只筛选本批最值得上报的记录引用ID",
+                    "instruction": "优先筛选 priority=changed 的今日变化；存量只保留持续风险、阻塞或待决策事项",
                 }),
                 # 模型偶尔会无视“最多8个”而列出大量 ID；给足额度保证 JSON
                 # 完整闭合，解析后 _selected_refs 仍只取前 8 个。
@@ -391,9 +461,20 @@ def build_dashboard_report(results: list[dict], old_snapshot: list[dict] | None,
     verified_claim_count = len(final_claims)
     used_fallback = not final_claims
     if used_fallback:
-        final_claims = _fallback_claims(results, labels)
-    # headline 没有独立证据结构，不采用 LLM 自由文本；总览由确定性统计生成。
-    headline = ""
+        final_claims = _fallback_claims_from_units(analysis_units)
+    # 总览由确定性变更统计生成，不采用无独立证据结构的自由文本。
+    kind_counts: dict[str, int] = {}
+    for change in change_by_ref.values():
+        kind = change.get("change", "updated")
+        kind_counts[kind] = kind_counts.get(kind, 0) + 1
+    if kind_counts:
+        parts = []
+        for kind, label in (("added", "新增"), ("updated", "更新"), ("removed", "移除")):
+            if kind_counts.get(kind):
+                parts.append(f"{label} {kind_counts[kind]} 条")
+        headline = "，".join(parts) + "；以下仅展示可回溯原值的重点"
+    else:
+        headline = "与上次快照相比暂无业务字段变化；以下为持续事项摘要"
     render_errors = list(collection_errors or []) + (
         [f"AI 整理完成 {map_completed}/{len(batches) if llm_func else 0} 个数据批次，"
          f"另有 {llm_errors} 个批次/阶段未完成；报告仅保留已通过原值核验的结论。"]
@@ -402,11 +483,22 @@ def build_dashboard_report(results: list[dict], old_snapshot: list[dict] | None,
                    date_str or datetime.now().strftime("%Y-%m-%d"), headline,
                    render_errors)
     if not validate_markdown(text)[0]:
-        text = _render(results, _fallback_claims(results, labels)[:4], labels,
-                       title, date_str, "已生成来源可核验的规则兜底摘要",
-                       render_errors)
+        final_claims = _fallback_claims_from_units(analysis_units)[:4]
+        text = _render(results, final_claims, labels,
+                       title, date_str or datetime.now().strftime("%Y-%m-%d"),
+                       "已生成来源可核验的规则兜底摘要", render_errors)
+    # 第二次仍不合法时做通道级净化；禁止未经校验的 fallback 直接外发。
+    if not validate_markdown(text)[0]:
+        text = text.replace("|", "｜")
+    messages = _paginate_markdown(text, title)
+    valid_messages = []
+    for message in messages:
+        if not validate_markdown(message)[0]:
+            message = message.replace("|", "｜")
+        valid_messages.append(message)
     return DashboardReport(
-        text=text, snapshot=snapshot, changes=changes,
+        text=valid_messages[0], messages=valid_messages,
+        snapshot=snapshot, changes=changes,
         verification={"accepted_claims": verified_claim_count,
                       "fallback_claims": len(final_claims) if used_fallback else 0,
                       "rejected_claims": rejected, "llm_errors": llm_errors,

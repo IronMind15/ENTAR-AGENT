@@ -92,6 +92,53 @@ class FullSnapshotTests(unittest.TestCase):
 
 
 class LlmPipelineTests(unittest.TestCase):
+    def test_changed_records_are_prioritized_over_unchanged_records(self):
+        """日报的 map 输入应先分析今日变化，不能让存量记录挤掉更新。"""
+        source = _source()
+        old = parse_source_records(source, [
+            {"recordId": "r1", "fields": {"name": "存量", "progress": "未变化", "owner": "甲"}},
+            {"recordId": "r2", "fields": {"name": "重点", "progress": "昨天", "owner": "乙"}},
+        ])
+        new = parse_source_records(source, [
+            {"recordId": "r1", "fields": {"name": "存量", "progress": "未变化", "owner": "甲"}},
+            {"recordId": "r2", "fields": {"name": "重点", "progress": "今天完成", "owner": "乙"}},
+        ])
+        prompts = []
+
+        def fake_llm(prompt, max_tokens=4000):
+            prompts.append(prompt)
+            if '"stage": "reduce"' in prompt:
+                return ('{"claims":[{"text":"重点今天完成","level":"update",'
+                        '"refs":["future_board:r2"],"evidence":['
+                        '{"ref":"future_board:r2","field":"详细进展"}]}]}')
+            return '{"selected_refs":["future_board:r2"]}'
+
+        report = build_dashboard_report([new], make_snapshot([old]), fake_llm,
+                                        batch_size=1, max_batch_chars=100000)
+        map_payloads = [p for p in prompts if '"stage": "map"' in p]
+        self.assertIn('"priority": "changed"', map_payloads[0])
+        self.assertIn("重点今天完成", report.text)
+
+    def test_table_source_never_leaks_pipe_markdown_after_fallback(self):
+        """普通文档表格即使走规则兜底，也不能把 | 表格语法发到主动消息。"""
+        parsed = parse_source_records(_source(), [{"recordId": "t1", "fields": {
+            "name": "| 项目 | 状态 |\n| --- | --- |\n| A | 完成 |",
+            "progress": "已完成", "owner": "张三",
+        }}])
+        report = build_dashboard_report([parsed], None, None)
+        self.assertNotRegex(report.text, r"\|.*\|.*\|")
+
+    def test_long_report_is_split_on_sections_not_hard_truncated(self):
+        """长报告应产出独立消息分页，不出现半行硬切标记。"""
+        parsed = parse_source_records(_source(), [
+            {"recordId": f"r{i}", "fields": {
+                "name": f"事项{i}", "progress": "详细进展" * 100, "owner": "张三",
+            }} for i in range(30)
+        ])
+        report = build_dashboard_report([parsed], None, None)
+        self.assertNotIn("已截断", report.text)
+        self.assertGreaterEqual(len(report.messages), 1)
+        self.assertTrue(all(len(message) <= 5000 for message in report.messages))
     def test_arbitrary_source_is_chunked_and_output_has_verified_references(self):
         source = _source()
         parsed = parse_source_records(source, [

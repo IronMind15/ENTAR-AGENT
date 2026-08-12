@@ -72,6 +72,16 @@ class Subscription:
     created_at: str = ""
     updated_at: str = ""
 
+    def fingerprint(self) -> tuple:
+        """业务唯一键；忽略列表顺序和数据库生成字段。"""
+        return (
+            self.owner_user_id,
+            tuple(sorted(str(x) for x in self.data_sources)),
+            int(self.push_hour), int(self.push_minute), self.weekdays or "",
+            self.alert_mode or "always",
+            tuple(sorted(str(x) for x in self.recipients)),
+        )
+
 
 class SubscriptionStore:
     """订阅存储（threading.local + RLock + WAL，同 user_store 模式）"""
@@ -199,6 +209,29 @@ class SubscriptionStore:
                 (owner_user_id,)).fetchall()
         return [self._row_to_sub(r) for r in rows]
 
+    def find_exact_duplicate(self, candidate: Subscription) -> Optional[Subscription]:
+        """查找与候选订阅业务配置完全相同的记录。"""
+        wanted = candidate.fingerprint()
+        for existing in self.list_for_owner(candidate.owner_user_id):
+            if existing.fingerprint() == wanted:
+                return existing
+        return None
+
+    def find_similar(self, candidate: Subscription, threshold: float = 0.5) -> list[tuple[Subscription, float]]:
+        """同一时间且来源明显重叠的订阅，用于向用户提示潜在重复。"""
+        wanted = set(str(x) for x in candidate.data_sources)
+        matches = []
+        for existing in self.list_for_owner(candidate.owner_user_id):
+            if (existing.push_hour, existing.push_minute, existing.weekdays or "") != (
+                    candidate.push_hour, candidate.push_minute, candidate.weekdays or ""):
+                continue
+            current = set(str(x) for x in existing.data_sources)
+            union = wanted | current
+            score = len(wanted & current) / len(union) if union else 1.0
+            if score >= threshold:
+                matches.append((existing, score))
+        return matches
+
     def update(self, sub: Subscription):
         with self._lock:
             self._get_conn().execute(
@@ -232,11 +265,12 @@ class SubscriptionStore:
             )
             self._get_conn().commit()
 
-    def delete(self, sub_id: int):
+    def delete(self, sub_id: int) -> bool:
         with self._lock:
-            self._get_conn().execute(
+            cur = self._get_conn().execute(
                 "DELETE FROM dashboard_subscriptions WHERE id=?", (sub_id,))
             self._get_conn().commit()
+            return cur.rowcount == 1
 
 
 # 全局单例（同 get_doc_client 惯例）

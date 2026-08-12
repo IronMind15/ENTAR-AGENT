@@ -38,7 +38,11 @@ DEFINITION = {
 }
 
 
-@register("summarize_doc", DEFINITION)
+@register("summarize_doc", DEFINITION, policy={
+    "confirm": lambda args: bool(args.get("push_to_self")),
+    "risk": "external_send",
+    "summary": "总结文档并主动推送到用户钉钉单聊",
+})
 def execute(args: dict) -> str:
     try:
         from tools import get_current_staff_id, get_current_user_id
