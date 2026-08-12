@@ -630,6 +630,22 @@ class QueryDashboardToolContractTests(unittest.TestCase):
         self.assertIn("get_current_user_id()", src)
         self.assertIn("load_all_available_sources(user_id=", src)
 
+    def test_push_dashboard_scopes_to_current_user(self):
+        """v1.11.10：push_dashboard 主动推送必须按当前用户隔离——
+        只采本人数据源、只推本人订阅，防『现在推看板』把别人的私人表格
+        推给所有订阅接收人"""
+        from tools.push_dashboard import execute as push_exec
+        import inspect
+        src = inspect.getsource(push_exec)
+        self.assertIn("load_all_available_sources(user_id=uid)", src)
+        self.assertIn("owner_user_id == uid", src)
+        self.assertNotIn("load_all_available_sources()", src)
+
+    def test_push_dashboard_definition_mentions_own_subscription(self):
+        from tools.push_dashboard import DEFINITION
+        self.assertIn("当前用户", DEFINITION["description"])
+        self.assertIn("该用户启用的订阅", DEFINITION["description"])
+
 
 if __name__ == "__main__":
     unittest.main()

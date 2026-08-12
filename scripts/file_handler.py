@@ -34,8 +34,20 @@ _UPLOAD_ROOT = Path(__file__).parent.parent / "data" / "uploads"
 # 支持自动处理的文件类型
 _AUTO_PROCESS_EXTENSIONS = {".pdf", ".xlsx", ".xls", ".md"}
 
-# 可「帮我学习」直接入库的文件类型（v1.10.2，比自动处理集合宽，含 Word/PPT/CSV）
-_LEARN_EXTENSIONS = {".pdf", ".xlsx", ".xls", ".md", ".docx", ".pptx", ".csv"}
+# 可「帮我学习」直接入库的文件类型（v1.10.2，比自动处理集合宽，含 Word/PPT/CSV；v1.11.11 补 .txt 纯文本）
+_LEARN_EXTENSIONS = {".pdf", ".xlsx", ".xls", ".md", ".docx", ".pptx", ".csv", ".txt"}
+
+# 图片扩展名：当作「文件消息」发来的图片也走识图（v1.11.11，复用 describe_image 能力）
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+
+# 特殊不支持类型的引导文案（v1.11.11）：让用户知道该怎么做，而不是干等
+_SPECIAL_HINTS = {
+    ".doc": "老版 Word（.doc）暂不支持入库，请用 WPS/Office 另存为 .docx 后重发，即可「帮我学习」。",
+    ".ppt": "老版 PPT（.ppt）暂不支持入库，请用 WPS/Office 另存为 .pptx 后重发，即可「帮我学习」。",
+    ".zip": "压缩包暂不支持解包入库，请解压后逐个发送里面的文件。",
+    ".rar": "压缩包暂不支持解包入库，请解压后逐个发送里面的文件。",
+    ".7z": "压缩包暂不支持解包入库，请解压后逐个发送里面的文件。",
+}
 
 
 def sanitize_file_name(file_name: str) -> str:
@@ -258,7 +270,10 @@ def format_file_received_message(result: dict, auto_process: bool = False) -> st
 
     if auto_process:
         ext = get_file_type(result["file_name"])
-        if ext in _LEARN_EXTENSIONS:
+        if ext in _IMAGE_EXTENSIONS:
+            # v1.11.11：图片当文件发也走识图，bot 侧会追加识图结果
+            msg += "\n👀 图片已保存，正在识别内容……\n"
+        elif ext in _LEARN_EXTENSIONS:
             # v1.11.0：上传后主动推荐入库，回复「入库」/「确认」即学习。
             # （旧审核文案见 git 历史；未来恢复审核流程时改回提示申请编号。）
             msg += (
@@ -266,6 +281,10 @@ def format_file_received_message(result: dict, auto_process: bool = False) -> st
                 "📁 回复「我的文件」可查看已上传文件；「删除学习 序号」可删除。\n"
             )
         else:
-            msg += "\n⚠️ 该文件类型暂不支持入库，已保存到待处理区。\n"
+            hint = _SPECIAL_HINTS.get(ext)
+            if hint:
+                msg += f"\n⚠️ {hint}\n"
+            else:
+                msg += "\n⚠️ 该文件类型暂不支持入库，已保存到待处理区。\n"
 
     return msg

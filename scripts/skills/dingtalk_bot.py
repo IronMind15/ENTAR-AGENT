@@ -969,8 +969,30 @@ class ErrorQueryHandler(ChatbotHandler):
                 except Exception as e:
                     logger.warning(f"登记推荐入库失败: {e}")
 
+            # v1.11.11：图片当作文件发（非图片消息）也能识图——复用 describe_image 能力
+            img_desc = ""
+            if result["success"]:
+                try:
+                    from file_handler import _IMAGE_EXTENSIONS, get_file_type
+                    from config import DASHSCOPE_API_KEY
+                    if get_file_type(file_name) in _IMAGE_EXTENSIONS and DASHSCOPE_API_KEY:
+                        from tools import execute_tool
+                        raw = execute_tool(
+                            "describe_image",
+                            {"image_path": result.get("file_path", ""),
+                             "question": "请用中文详细描述这张图片的内容"},
+                        )
+                        parsed = json.loads(raw) if isinstance(raw, str) else (raw or {})
+                        img_desc = parsed.get("description") or \
+                            f"⚠️ {parsed.get('error', '识别失败')}"
+                except Exception as e:
+                    logger.warning(f"识图失败 {file_name}: {e}")
+                    img_desc = f"⚠️ 识别异常：{e}"
+
             # 构建回复消息（已包含待处理提示）
             answer = format_file_received_message(result, auto_process=True)
+            if img_desc:
+                answer += f"\n🖼️ 图片识别：{img_desc}\n"
 
             # 回复用户
             self.reply_markdown(

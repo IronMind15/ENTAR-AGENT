@@ -376,7 +376,7 @@ def process_file(file_path: str, file_name: Optional[str] = None,
     """
     name = file_name or os.path.basename(file_path)
     ext = os.path.splitext(name)[1].lower()
-    supported_exts = (".pdf", ".xlsx", ".xls", ".md", ".docx", ".pptx", ".csv")
+    supported_exts = (".pdf", ".xlsx", ".xls", ".md", ".docx", ".pptx", ".csv", ".txt")
     if ext not in supported_exts:
         ext = os.path.splitext(file_path)[1].lower()
     size = os.path.getsize(file_path)
@@ -387,6 +387,7 @@ def process_file(file_path: str, file_name: Optional[str] = None,
         ".xlsx": "error_codes",
         ".xls": "error_codes",
         ".md": "standards",
+        ".txt": "standards",
         ".docx": "standards",
         ".pptx": "standards",
         ".csv": "error_codes",
@@ -927,6 +928,10 @@ def _process_markdown(file_path: str, file_name: str, file_size: int,
     # 1. 读取 Markdown 内容
     try:
         with open(file_path, "r", encoding="utf-8") as f:
+            full_text = f.read()
+    except UnicodeDecodeError:
+        # v1.11.11：中文环境常见的 GBK 编码 .txt/.md 兜底（utf-8 解不动才回退）
+        with open(file_path, "r", encoding="gbk", errors="replace") as f:
             full_text = f.read()
     except Exception as e:
         doc.status = "error"

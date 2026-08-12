@@ -615,3 +615,69 @@ class ImageMessageRecognitionTests(unittest.TestCase):
         self.handler._handle_image_message(self._image_msg(), "u1", "测试")
         m_tool.assert_not_called()
         self.assertEqual(m_md.call_args[1]["text"], "图片接收失败，请重试")
+
+
+class FileMessageImageRecognitionTests(unittest.TestCase):
+    """v1.11.11 图片当作「文件消息」发也能识图（复用 describe_image 能力）"""
+
+    def setUp(self):
+        self.handler = ErrorQueryHandler()
+
+    def _file_msg(self, file_name="image_1.png"):
+        msg = mock.MagicMock()
+        msg.extensions = {"content": {
+            "fileName": file_name, "downloadCode": "x", "fileSize": 100}}
+        return msg
+
+    @staticmethod
+    def _saved_file(file_name="image_1.png"):
+        return {
+            "success": True,
+            "file_path": f"D:/ENTAR_AGENT/data/uploads/u1/2026-08-07/{file_name}",
+            "file_name": file_name,
+            "file_size": 100,
+            "message": "ok",
+        }
+
+    @mock.patch("tools.execute_tool")
+    @mock.patch("file_handler.download_and_save_file")
+    @mock.patch.object(ErrorQueryHandler, "reply_markdown")
+    @mock.patch.object(ErrorQueryHandler, "reply_text")
+    @mock.patch("config.DASHSCOPE_API_KEY", "sk-test")
+    def test_file_image_recognized(self, m_reply, m_md, m_save, m_tool):
+        """图片当文件发 → 调识图，回复含识别内容"""
+        import json
+        m_save.return_value = self._saved_file()
+        m_tool.return_value = json.dumps({"description": "一张电路板照片"}, ensure_ascii=False)
+        self.handler._handle_file_message(self._file_msg(), "u1", "测试")
+        m_tool.assert_called_with("describe_image", mock.ANY)
+        text = m_md.call_args[1]["text"]
+        self.assertIn("图片识别", text)
+        self.assertIn("一张电路板照片", text)
+
+    @mock.patch("tools.execute_tool")
+    @mock.patch("file_handler.download_and_save_file")
+    @mock.patch.object(ErrorQueryHandler, "reply_markdown")
+    @mock.patch.object(ErrorQueryHandler, "reply_text")
+    @mock.patch("config.DASHSCOPE_API_KEY", "")
+    def test_file_image_no_key_skip(self, m_reply, m_md, m_save, m_tool):
+        """未配置 key → 图片当文件发不调识图，仍提示图片已保存"""
+        m_save.return_value = self._saved_file()
+        self.handler._handle_file_message(self._file_msg(), "u1", "测试")
+        m_tool.assert_not_called()
+        text = m_md.call_args[1]["text"]
+        self.assertIn("图片已保存", text)
+
+    @mock.patch("tools.execute_tool")
+    @mock.patch("knowledge_review.set_pending_learn")
+    @mock.patch("file_handler.download_and_save_file")
+    @mock.patch.object(ErrorQueryHandler, "reply_markdown")
+    @mock.patch.object(ErrorQueryHandler, "reply_text")
+    @mock.patch("config.DASHSCOPE_API_KEY", "sk-test")
+    def test_non_image_file_not_recognized(self, m_reply, m_md, m_save, m_learn, m_tool):
+        """非图片文件（.txt）→ 不调识图，走入库推荐（不误伤普通文件）"""
+        m_save.return_value = self._saved_file("说明.txt")
+        self.handler._handle_file_message(self._file_msg("说明.txt"), "u1", "测试")
+        m_tool.assert_not_called()
+        text = m_md.call_args[1]["text"]
+        self.assertIn("要不要我把这份文件入库知识库", text)

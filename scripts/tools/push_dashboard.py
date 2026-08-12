@@ -1,4 +1,4 @@
-"""看板主动推送工具（v1.11.0）— 立即采集组装并推送给所有启用订阅的接收人"""
+"""看板主动推送工具（v1.11.0）— 立即采集组装并推送当前用户启用的订阅"""
 
 import json
 
@@ -7,8 +7,9 @@ from tools import register
 DEFINITION = {
     "name": "push_dashboard",
     "description": (
-        "立即推送一次每日项目看板给所有启用订阅的接收人。"
-        "用户明确要求『现在推看板』『推送看板』时使用；日常自动推送由定时任务负责。"
+        "立即推送一次每日项目看板。只操作当前用户自己的订阅与数据源，"
+        "推送给该用户启用的订阅接收人。用户明确要求『现在推看板』『推送看板』时使用；"
+        "日常自动推送由定时任务负责。"
     ),
     "parameters": {"type": "object", "properties": {}, "required": []},
 }
@@ -17,22 +18,28 @@ DEFINITION = {
 @register("push_dashboard", DEFINITION, policy={
     "confirm": True,
     "risk": "external_send",
-    "summary": "立即向所有启用订阅的接收人推送看板",
+    "summary": "立即向您启用的订阅接收人推送看板",
 })
 def execute(args: dict) -> str:
     from dashboard import service
     from dashboard.subscription_store import get_subscription_store
+    from tools import get_current_user_id
 
-    sources = service.load_all_available_sources()
+    # v1.11.10：用户级隔离——只采集当前用户的动态数据源（配置源为系统级共享），
+    # 只推当前用户自己的订阅；此前全量采集所有用户候选并推给所有订阅接收人，违反隔离。
+    uid = get_current_user_id()
+    sources = service.load_all_available_sources(user_id=uid)
     if not sources:
         return json.dumps(
-            {"error": "未配置可用的看板数据源（钉钉文档 base_id 未配置）。"
+            {"error": "您还没有可用的看板数据源（钉钉文档 base_id 未配置）。"
                      "请先发钉钉文档，再回复「按这几个文档做每日看板」登记数据源。"},
             ensure_ascii=False)
 
-    subs = [s for s in get_subscription_store().list_enabled() if s.recipients]
+    subs = [s for s in get_subscription_store().list_enabled()
+            if s.owner_user_id == uid and s.recipients]
     if not subs:
-        return json.dumps({"error": "没有启用的看板订阅"}, ensure_ascii=False)
+        return json.dumps({"error": "您还没有启用的看板订阅。说「帮我推个看板」先开通。"},
+                          ensure_ascii=False)
 
     # 用第一个订阅的操作人身份读取（同一应用权限一致）
     sub0 = subs[0]

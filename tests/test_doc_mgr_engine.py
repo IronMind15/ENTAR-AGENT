@@ -52,6 +52,8 @@ class ProcessFileTests(unittest.TestCase):
             ("sample.pdf", "_process_pdf", "standards"),
             ("sample.xlsx", "_process_excel", "error_codes"),
             ("sample.md", "_process_markdown", "standards"),
+            # v1.11.11：.txt 纯文本复用 markdown 管道入库
+            ("sample.txt", "_process_markdown", "standards"),
         ]
         with tempfile.TemporaryDirectory() as temp_dir:
             for file_name, processor_name, expected in cases:
@@ -101,6 +103,31 @@ class ProcessFileTests(unittest.TestCase):
             self.assertIn("boom", doc.message)
             record.assert_called_once()
             self.assertIs(record.call_args.args[4], doc)
+
+
+class TxtEncodingFallbackTests(unittest.TestCase):
+    """v1.11.11 中文环境 .txt 的 GBK 编码兜底（utf-8 解不动才回退）"""
+
+    def test_gbk_txt_decodes_and_indexes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "说明.txt"
+            gbk_text = "这是中文内容的纯文本文件，用于记录排查步骤。"
+            file_path.write_bytes(gbk_text.encode("gbk"))
+            indexed = {}
+
+            def fake_index(*args, **kwargs):
+                indexed["text"] = args[0]
+                return [], [], [], None, None
+
+            with patch.object(engine, "_index_markdown_text",
+                              side_effect=fake_index) as m_index:
+                doc = engine._process_markdown(
+                    str(file_path), "说明.txt", file_path.stat().st_size,
+                    FakeStore(), target_collection="standards")
+
+            self.assertEqual("done", doc.status)
+            self.assertEqual(gbk_text, indexed["text"])
+            m_index.assert_called_once()
 
 
 class ExcelIdentityTests(unittest.TestCase):

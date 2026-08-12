@@ -85,8 +85,28 @@ class FormatMessageTests(unittest.TestCase):
         self.assertNotIn("已提交", msg)
 
     def test_unsupported_type_message(self):
-        msg = format_file_received_message(self._ok("a.txt"), auto_process=True)
+        msg = format_file_received_message(self._ok("音频.mp3"), auto_process=True)
         self.assertIn("不支持", msg)
+
+    def test_txt_is_learnable(self):
+        """v1.11.11 .txt 纯文本也能「帮我学习」入库"""
+        msg = format_file_received_message(self._ok("说明.txt"), auto_process=True)
+        self.assertIn("要不要我把这份文件入库知识库", msg)
+
+    def test_legacy_doc_hint(self):
+        """v1.11.11 老版 .doc 引导另存为 .docx"""
+        msg = format_file_received_message(self._ok("报告.doc"), auto_process=True)
+        self.assertIn("另存为 .docx", msg)
+
+    def test_legacy_ppt_hint(self):
+        """v1.11.11 老版 .ppt 引导另存为 .pptx"""
+        msg = format_file_received_message(self._ok("汇报.ppt"), auto_process=True)
+        self.assertIn("另存为 .pptx", msg)
+
+    def test_archive_hint(self):
+        """v1.11.11 压缩包引导解压后再发"""
+        msg = format_file_received_message(self._ok("资料.zip"), auto_process=True)
+        self.assertIn("解压后", msg)
 
     def test_failure_message(self):
         msg = format_file_received_message(
@@ -106,12 +126,13 @@ class ReceivedMessageTests(unittest.TestCase):
         self.assertIn("要不要我把这份文件入库知识库", msg)
         self.assertIn("入库", msg)
 
-    def test_unsupported_type_hint(self):
+    def test_image_file_hint(self):
+        """v1.11.11 图片当文件发 → 提示正在识别内容（不再笼统说不支持）"""
         msg = format_file_received_message(
             {"success": True, "file_name": "图片.png", "file_size": 1024,
              "file_path": "/x/图片.png", "message": "保存成功"},
             auto_process=True)
-        self.assertIn("暂不支持入库", msg)
+        self.assertIn("正在识别内容", msg)
 
     def test_failure_message(self):
         msg = format_file_received_message(
