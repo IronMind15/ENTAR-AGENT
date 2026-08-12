@@ -625,5 +625,141 @@ class DashboardSkillTemplateTests(unittest.TestCase):
         self.assertIn("模板", r["answer"])
 
 
+class TemplateChoiceFlowTests(unittest.TestCase):
+    """创建订阅后主动反问选模板（v1.12.0）"""
+
+    def setUp(self):
+        from dashboard.template_store import TemplateStore
+        self._tpl_path = _tmp_db()
+        self._tpl_store = TemplateStore(db_path=self._tpl_path)
+        self.patch_tpl = mock.patch(
+            "dashboard.template_store.get_template_store",
+            return_value=self._tpl_store)
+        self.patch_tpl.start()
+        self.addCleanup(self.patch_tpl.stop)
+        self.addCleanup(lambda: _cleanup_db(self._tpl_path, self._tpl_store))
+
+        self._sub_path = _tmp_db()
+        self._sub_store = SubscriptionStore(db_path=self._sub_path)
+        self.patch_sub = mock.patch(
+            "skills.dashboard.get_subscription_store",
+            return_value=self._sub_store)
+        self.patch_sub.start()
+        self.addCleanup(self.patch_sub.stop)
+        self.addCleanup(lambda: _cleanup_db(self._sub_path, self._sub_store))
+
+        self.patch_pending = mock.patch(
+            "dashboard.subscription_commands._pending", {})
+        self.patch_pending.start()
+        self.addCleanup(self.patch_pending.stop)
+
+    def _create_and_ask(self, uid="union001"):
+        """完整创建流程：帮推看板 → 确认 → 返回反问文案 + 已设 choose_template pending"""
+        from skills.dashboard import DashboardSkill
+        with mock.patch("skills.dashboard.DashboardSkill._staff_id_of",
+                        return_value="staff001"):
+            DashboardSkill.handle("帮我推个看板", user_id=uid)
+        with mock.patch("skills.dashboard.DashboardSkill._push_sample",
+                        return_value="已推送示例看板"):
+            return DashboardSkill.handle("确认", user_id=uid)
+
+    def test_parse_choice_without_pending_returns_none(self):
+        from dashboard import subscription_commands as sc
+        for t in ("1", "2", "3", "周报", "不用了", "项目"):
+            self.assertIsNone(sc.parse_template_choice(t, "union001"), t)
+
+    def test_parse_choice_number_name_none(self):
+        from dashboard import subscription_commands as sc
+        sc.set_pending("union001", {"intent": "choose_template", "sub_id": 1})
+        cases = [
+            ("1", "daily"), ("2", "weekly"), ("3", "project"),
+            ("周报", "weekly"), ("每日简报", "daily"), ("项目看板", "project"),
+            ("项目", "project"), ("不用了", "none"), ("就这样", "none"),
+            ("2周报", "weekly"),
+        ]
+        for t, expect in cases:
+            p = sc.parse_template_choice(t, "union001")
+            self.assertIsNotNone(p, t)
+            self.assertEqual(p["choice"], expect, t)
+
+    def test_parse_choice_requires_recent_window(self):
+        from dashboard import subscription_commands as sc
+        sc.set_pending("union001", {"intent": "choose_template", "sub_id": 1})
+        sc._activity_by_user["union001"] = 0.0  # 反问窗口过期
+        self.assertIsNone(sc.parse_template_choice("2", "union001"))
+
+    def test_parse_choice_does_not_steal_queries(self):
+        from dashboard import subscription_commands as sc
+        sc.set_pending("union001", {"intent": "choose_template", "sub_id": 1})
+        for t in ("项目进展怎么样", "帮我查下周报数据", "看板今天数据如何"):
+            self.assertIsNone(sc.parse_template_choice(t, "union001"), t)
+
+    @mock.patch("skills.dashboard.DashboardSkill._push_sample",
+                return_value="已推送示例看板")
+    def test_create_asks_template_choice(self, m_push):
+        from dashboard import subscription_commands as sc
+        from skills.dashboard import DashboardSkill
+        with mock.patch("skills.dashboard.DashboardSkill._staff_id_of",
+                        return_value="staff001"):
+            DashboardSkill.handle("帮我推个看板", user_id="union001")
+        r = DashboardSkill.handle("确认", user_id="union001")
+        self.assertIn("1 每日简报", r["answer"])
+        self.assertIn("2 周报总结", r["answer"])
+        self.assertIn("3 项目看板", r["answer"])
+        self.assertEqual(sc.get_pending("union001")["intent"], "choose_template")
+
+    @mock.patch("skills.dashboard.DashboardSkill._push_sample",
+                return_value="已推送示例看板")
+    def test_choose_weekly_applies_to_subscription(self, m_push):
+        from skills.dashboard import DashboardSkill
+        self._create_and_ask("union001")
+        r = DashboardSkill.handle("2", user_id="union001")
+        self.assertIn("周报总结", r["answer"])
+        self.assertEqual(self._sub_store.list_for_owner("union001")[0].template_id,
+                         "weekly")
+
+    @mock.patch("skills.dashboard.DashboardSkill._push_sample",
+                return_value="已推送示例看板")
+    def test_choose_daily_by_name(self, m_push):
+        from skills.dashboard import DashboardSkill
+        self._create_and_ask("union001")
+        r = DashboardSkill.handle("每日简报", user_id="union001")
+        self.assertIn("每日简报", r["answer"])
+        self.assertEqual(self._sub_store.list_for_owner("union001")[0].template_id,
+                         "daily")
+
+    @mock.patch("skills.dashboard.DashboardSkill._push_sample",
+                return_value="已推送示例看板")
+    def test_choose_none_keeps_daily_and_clears(self, m_push):
+        from dashboard import subscription_commands as sc
+        from skills.dashboard import DashboardSkill
+        self._create_and_ask("union001")
+        r = DashboardSkill.handle("不用了", user_id="union001")
+        self.assertIn("保持当前模板", r["answer"])
+        self.assertEqual(self._sub_store.list_for_owner("union001")[0].template_id,
+                         "daily")
+        self.assertIsNone(sc.get_pending("union001"))
+
+    @mock.patch("skills.dashboard.DashboardSkill._push_sample",
+                return_value="已推送示例看板")
+    def test_confirm_during_choice_keeps_default(self, m_push):
+        from dashboard import subscription_commands as sc
+        from skills.dashboard import DashboardSkill
+        self._create_and_ask("union001")
+        r = DashboardSkill.handle("好的", user_id="union001")
+        self.assertIn("保持当前模板", r["answer"])
+        self.assertEqual(self._sub_store.list_for_owner("union001")[0].template_id,
+                         "daily")
+        self.assertIsNone(sc.get_pending("union001"))
+
+    @mock.patch("skills.dashboard.DashboardSkill._push_sample",
+                return_value="已推送示例看板")
+    def test_choose_template_pushes_sample_again(self, m_push):
+        from skills.dashboard import DashboardSkill
+        self._create_and_ask("union001")
+        DashboardSkill.handle("2", user_id="union001")
+        self.assertGreaterEqual(m_push.call_count, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

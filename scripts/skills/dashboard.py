@@ -43,6 +43,11 @@ class DashboardSkill(BaseSkill):
         q = (query or "").strip()
         if not q:
             return False
+        # v1.12.0：创建订阅后的「选模板」反问回复（1/2/3/模板名/不用了）。
+        # 须放最前——数字「1」不含「看板」，其他判定都接不住；且 parse_template_choice
+        # 内部限定 pending choose_template + 反问窗口，普通聊天不会误拦。
+        if sub_cmd.parse_template_choice(q, user_id) is not None:
+            return True
         # 第 0 步：「按这几个文档做每日看板」（_NEGATIVE_RE 含「文档」会拦常规路径，需提前）
         if sub_cmd.parse_doc_dashboard_intent(q) is not None:
             return True
@@ -75,10 +80,21 @@ class DashboardSkill(BaseSkill):
             if not pending:
                 return {"answer": "您还没有待确认的看板操作。说「帮我推个看板」即可开通。",
                         "source": "dashboard"}
+            if pending.get("intent") == "choose_template":
+                # v1.12.0：反问「选模板」中用户回「好的/确认」→ 保持当前模板（默认每日）
+                sub_cmd.clear_pending(uid)
+                return {"answer":
+                        "好的，保持当前模板。想换格式随时说「用周报模板」「用项目模板」等。",
+                        "source": "dashboard"}
             return cls._execute_pending(pending, uid)
         if sub_cmd.is_cancel_text(q) and sub_cmd.get_pending(uid):
             sub_cmd.clear_pending(uid)
             return {"answer": "已取消，刚才的看板操作没有执行。", "source": "dashboard"}
+
+        # v1.12.0：创建订阅后的「选模板」反问回复（1/2/3/模板名/不用了）
+        choice = sub_cmd.parse_template_choice(q, uid)
+        if choice:
+            return cls._execute_template_choice(choice, uid)
 
         # “现在帮我全部删除”只有在该用户刚查看/管理过看板时才承接，避免误删。
         if sub_cmd.is_contextual_delete(q) and had_recent_activity:
@@ -278,6 +294,36 @@ class DashboardSkill(BaseSkill):
         }
 
     @classmethod
+    def _execute_template_choice(cls, choice: dict, user_id: str) -> dict:
+        """v1.12.0：应用创建订阅反问时用户选择的模板；none=保持默认。
+
+        模板切换应用到该用户所有订阅（与 set_template 一致）；按真实 update 结果回报。
+        """
+        sub_cmd.clear_pending(user_id)
+        if choice.get("choice") == "none":
+            return {"answer": "好的，保持当前模板。想换格式随时说「用周报模板」等。",
+                    "source": "dashboard"}
+        key = choice.get("choice")
+        try:
+            from dashboard.template_store import get_template_store
+            tpl = get_template_store().get(key, user_id=user_id)
+        except Exception:
+            tpl = None
+        if not tpl:
+            return {"answer": "该模板不存在，保持当前模板。", "source": "dashboard"}
+        store = get_subscription_store()
+        owned = store.list_for_owner(user_id)
+        if not owned:
+            return {"answer": f"已记住模板「{tpl.name}」（您还没有订阅，开通后即生效）。",
+                    "source": "dashboard"}
+        for s in owned:
+            s.template_id = tpl.key
+            store.update(s)
+        note = cls._push_sample(owned[0])
+        return {"answer": f"✅ 已将看板切换为「{tpl.name}」模板。{note}",
+                "source": "dashboard"}
+
+    @classmethod
     def _execute_pending(cls, pending: dict, user_id: str) -> dict:
         store = get_subscription_store()
         intent = pending.get("intent")
@@ -310,9 +356,13 @@ class DashboardSkill(BaseSkill):
             store.create(sub)
             sub_cmd.clear_pending(user_id)
             note = cls._push_sample(sub)
-            # v1.12.0：创建后主动告知当前模板模式
-            return {"answer": f"✅ 已为您开通每日看板推送！{note} "
-                              f"当前模板：每日简报（说「看板模板」查看或「用周报模板」切换）。",
+            # v1.12.0：创建后主动反问选模板（用户可回复 1/2/3/模板名/不用了，
+            # 或不理会保持默认每日；pending 供 parse_template_choice 识别选择回复）
+            sub_cmd.set_pending(user_id, {"intent": "choose_template", "sub_id": sub.id})
+            return {"answer": f"✅ 已为您开通每日看板推送！{note}\n"
+                              f"🎨 当前模板：每日简报。要不要换个格式？回复：\n"
+                              f"  1 每日简报\n  2 周报总结\n  3 项目看板\n"
+                              f"（回复「不用了」保持默认；随时也能说「用周报模板」切换）",
                     "source": "dashboard"}
 
         if intent == "delete":

@@ -86,6 +86,18 @@ _TEMPLATE_SET_RE = re.compile(
 _TEMPLATE_LIST_RE = re.compile(
     r"(?:有哪|有哪些|哪些|几种|什么|列一下|介绍一下?|看看|查询|有什么)\s*看板\s*(?:模板|模式|样式)|"
     r"看板\s*(?:模板|模式|样式)\s*(?:有|有哪|哪些|几种|列表|是什么|怎么|介绍)?")
+# v1.12.0：创建订阅后的「选模板」反问回复。数字 1/2/3 太泛，必须绑死「刚创建完
+# 正被反问」的上下文（pending choose_template + 600s 反问窗口），超时/非选择回复
+# 放行给 Agent/主流程，防「项目进展怎么样」这类长句误判成选模板。
+_TEMPLATE_CHOICE_NONE_RE = re.compile(
+    r"^(?:不用了?|不要了?|就这个|默认|保持|不换|就这样|都可以|随便)[。！!]?$")
+_TEMPLATE_CHOICE_NUM_RE = re.compile(
+    r"^([1-3])\s*(?:每日|日报|周报|每周|项目|里程碑|简报|总结)?[。！!]?$")
+_TEMPLATE_CHOICE_OPTIONS = [
+    ("daily", ("每日", "日报", "每日简报", "日更")),
+    ("weekly", ("周报", "每周", "周总结", "周更")),
+    ("project", ("项目看板", "项目模板", "里程碑")),
+]
 _TIME_RE = re.compile(r"\d{1,2}[点时:：]|半")
 _FREQ_RE = re.compile(r"每周|周一到|周[一二三四五六日天]|星期|周末|每隔|隔天|频率")
 # v1.11.5：明确的创建/开通意图才建订阅；否则含「看板」文本放行给 Agent
@@ -208,6 +220,42 @@ def parse_subscription_command(text: str, ctx: Optional[dict] = None) -> Optiona
     return None
 
 
+def parse_template_choice(text: str, user_id: str) -> Optional[dict]:
+    """识别「创建订阅后被反问选模板」的回复（1/2/3/模板名/不用了）
+
+    仅当该用户有 choose_template pending 且处于反问窗口（600s）内才识别——
+    数字「1」等太泛，必须绑死「刚创建完正被反问」的上下文；超时后用户再说
+    「周报」走 set_template 主流程，不会误拦普通聊天。
+
+    返回 {"intent": "choose_template", "choice": "daily|weekly|project|none"}；
+    非选择回复返回 None（放行给 Agent/主流程）。
+    """
+    pending = get_pending(user_id)
+    if not pending or pending.get("intent") != "choose_template":
+        return None
+    if not has_recent_kanban_activity(user_id=user_id):
+        return None  # 反问窗口过期
+    t = (text or "").strip()
+    if not t:
+        return None
+    if _TEMPLATE_CHOICE_NONE_RE.fullmatch(t):
+        return {"intent": "choose_template", "choice": "none"}
+    m = _TEMPLATE_CHOICE_NUM_RE.fullmatch(t)
+    if m:
+        return {"intent": "choose_template",
+                "choice": ("daily", "weekly", "project")[int(m.group(1)) - 1]}
+    # 裸「项目」是选择回复；「项目进展怎么样」这类长句不匹配
+    if re.fullmatch(r"项目[。！!]?", t):
+        return {"intent": "choose_template", "choice": "project"}
+    # 其余模板名匹配要求「去掉模板名后剩余字符为空」——纯模板名才是选择回复，
+    # 「帮我查下周报数据」「项目进展怎么样」这类带动作/上下文的文本放行不误判
+    for key, aliases in _TEMPLATE_CHOICE_OPTIONS:
+        for alias in aliases:
+            if alias in t and not t.replace(alias, "").strip(" 。！!，,、\t"):
+                return {"intent": "choose_template", "choice": key}
+    return None
+
+
 def is_contextual_delete(text: str) -> bool:
     """识别承接上一轮看板上下文的“全部删除”，不单独作为全局意图。"""
     return bool(_CONTEXT_DELETE_RE.fullmatch((text or "").strip()))
@@ -294,7 +342,7 @@ def _extract_template_desc(text: str) -> Optional[str]:
 _ALL_INTENTS = {"create", "stop", "delete", "query", "change_time",
                 "change_freq", "change_recipients", "set_recipient_self",
                 "template", "set_template", "describe_template",
-                "submit_template"}
+                "submit_template", "choose_template"}
 _SUSPECT_QUESTION_RE = re.compile(
     r"是不是|是否|吗|？|\?|要不要|要收费|免费|多少钱|为啥|为什么|怎么|啥|干嘛|有没有")
 _SUSPECT_REFER_RE = re.compile(r"别人|他们|她们|大家|某人|任何人")
