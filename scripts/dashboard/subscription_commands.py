@@ -68,6 +68,24 @@ _RESUME_RE = re.compile(
 _DELETE_RE = re.compile(
     r"删除.*看板|删掉.*看板|解绑.*看板|注销.*看板|移除订阅.*看板|"
     r"看板.*删除|看板.*删掉|看板.*解绑|看板.*注销")
+# v1.12.0：模板意图。顺序：describe > submit > set > list（「看板用周报模板」含
+# 「看板…模板」不能误判成列表查询；「按这个格式做看板：…」含「做看板」须在
+# _CREATE_RE 之前判定）。
+_TEMPLATE_DESCRIBE_RE = re.compile(
+    r"(?:按|照着|根据|自定义|模板描述|描述格式)[^，。！？\n]{0,30}?"
+    r"(?:格式|方式|样式|模板)[^，。！？\n：:，,]{0,12}?[：:，,]\s*(?P<desc>\S.{0,160})|"
+    r"(?:模板描述|描述格式|自定义格式)[：:，,]\s*(?P<desc2>\S.{0,160})")
+_TEMPLATE_SUBMIT_RE = re.compile(
+    r"(?:当|作为|做成|提交|上传|换成)\s*(?:看板)?\s*模板|"
+    r"模板.{0,4}(?:提交|上传|当|做成)|"
+    r"看板.{0,4}(?:当|作为|做成|提交|上传)")
+_TEMPLATE_SET_RE = re.compile(
+    r"(?:按|根据|用|换|切|改成|改为|设置|设|变成|换成)\s*(?:[^，。！？\s]{0,10}?)?\s*(?:模板|模式)|"
+    r"(?:模板|模式)\s*(?:用|换|切|改成|改为|设置|设|变成)")
+# 模板列表/查询（「看板模板」后必须紧跟 模板/模式/样式，避开「看板用周报模板」这类切换）
+_TEMPLATE_LIST_RE = re.compile(
+    r"(?:有哪|有哪些|哪些|几种|什么|列一下|介绍一下?|看看|查询|有什么)\s*看板\s*(?:模板|模式|样式)|"
+    r"看板\s*(?:模板|模式|样式)\s*(?:有|有哪|哪些|几种|列表|是什么|怎么|介绍)?")
 _TIME_RE = re.compile(r"\d{1,2}[点时:：]|半")
 _FREQ_RE = re.compile(r"每周|周一到|周[一二三四五六日天]|星期|周末|每隔|隔天|频率")
 # v1.11.5：明确的创建/开通意图才建订阅；否则含「看板」文本放行给 Agent
@@ -141,6 +159,17 @@ def parse_subscription_command(text: str, ctx: Optional[dict] = None) -> Optiona
     if _DELETE_RE.search(text):
         # v1.11.6：删除订阅（确认后彻底移除）
         return {"intent": "delete", **(ctx or {})}
+    # v1.12.0：模板意图（describe > submit > set > list）
+    if _TEMPLATE_DESCRIBE_RE.search(text):
+        desc = _extract_template_desc(text)
+        if desc:
+            return {"intent": "describe_template", "description": desc, **(ctx or {})}
+    if _TEMPLATE_SUBMIT_RE.search(text):
+        return {"intent": "submit_template", **(ctx or {})}
+    if _TEMPLATE_SET_RE.search(text):
+        return {"intent": "set_template", **(ctx or {})}
+    if _TEMPLATE_LIST_RE.search(text):
+        return {"intent": "template", **(ctx or {})}
     if _QUERY_RE.search(text):
         return {"intent": "query", **(ctx or {})}
     if _SET_SELF_RE.search(text):
@@ -249,12 +278,23 @@ def _extract_names(text: str) -> list[str]:
     return names
 
 
+def _extract_template_desc(text: str) -> Optional[str]:
+    """从描述意图文本中提取格式描述（「按…格式：内容」或「模板描述：内容」）"""
+    m = _TEMPLATE_DESCRIBE_RE.search(text or "")
+    if not m:
+        return None
+    desc = (m.group("desc") or m.group("desc2") or "").strip()
+    return desc or None
+
+
 # ===== LLM 意图复核（v1.11.6）=====
 # 正则做快闸，LLM 兜住枚举盲区。正则命中 create/change_recipients 这类「重操作」，
 # 但文本带疑问/反问（"看板推送是不是要收费"）或捕获的是指代词（"别人"）时，
 # 调一次 LLM 确认是不是真的订阅管理操作。仅可疑才调，LLM 只用在刀刃上。
 _ALL_INTENTS = {"create", "stop", "delete", "query", "change_time",
-                "change_freq", "change_recipients", "set_recipient_self"}
+                "change_freq", "change_recipients", "set_recipient_self",
+                "template", "set_template", "describe_template",
+                "submit_template"}
 _SUSPECT_QUESTION_RE = re.compile(
     r"是不是|是否|吗|？|\?|要不要|要收费|免费|多少钱|为啥|为什么|怎么|啥|干嘛|有没有")
 _SUSPECT_REFER_RE = re.compile(r"别人|他们|她们|大家|某人|任何人")
@@ -333,6 +373,17 @@ def format_weekdays(weekdays: str) -> str:
             idx = int(d)
             days.append(_CN_WEEK[idx] if 0 < idx < len(_CN_WEEK) else f"周{d}")
     return "每周" + "、".join(days) if days else weekdays
+
+
+def format_spec_summary(section_spec: list) -> str:
+    """section_spec → 给用户看的一句话结构描述（如：要点 / 进展 / 风险与待决策）"""
+    if not isinstance(section_spec, list):
+        return "（无章节）"
+    titles = []
+    for section in section_spec:
+        if isinstance(section, dict) and section.get("title"):
+            titles.append(str(section["title"]))
+    return " / ".join(titles[:8]) if titles else "（无章节）"
 
 
 def _format_sources(data_sources: list) -> str:
@@ -422,6 +473,21 @@ def render_confirmation(pending: dict, current=None) -> str:
         count = len(pending.get("sub_ids") or [])
         lines.append(f"好的，将恢复您的 {count} 个每日看板订阅。")
         lines.append("回复「确认」恢复推送；回复「取消」则保持暂停。")
+
+    elif intent == "set_template":
+        name = pending.get("template_name") or pending.get("template_key") or ""
+        lines.append(f"好的，将把您的看板切换为「{name}」模板。")
+        lines.append("回复「确认」生效；或说「看板模板」先看看有哪些可用模板。")
+
+    elif intent in ("describe_template", "submit_template"):
+        name = pending.get("template_name") or "自定义模板"
+        if intent == "describe_template":
+            lines.append(f"好的，将按您的描述创建看板模板「{name}」，结构：")
+        else:
+            lines.append(f"好的，将从文件《{pending.get('file_name') or '上传文件'}》"
+                         f"识别看板模板「{name}」，结构：")
+        lines.append(f"📐 {format_spec_summary(pending.get('section_spec'))}")
+        lines.append("回复「确认」保存模板并应用到您的看板；回复「取消」则不保存。")
 
     else:
         lines.append("收到，请问您想对看板做什么调整？")

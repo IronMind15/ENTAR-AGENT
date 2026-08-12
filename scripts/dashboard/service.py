@@ -8,6 +8,7 @@
 import json
 import logging
 from datetime import datetime
+from typing import Optional
 
 logger = logging.getLogger("dashboard.service")
 
@@ -144,19 +145,35 @@ def collect_and_parse(sources: list, operator_id: str = "", staff_id: str = ""):
     return parsed, errors
 
 
+def resolve_template(sub) -> Optional["DashboardTemplate"]:
+    """订阅 → 其输出格式模板；模板缺失/不可见 → None（回落 daily 旧行为）
+
+    v1.12.0：用户私有模板被删时订阅仍引用它，这里优雅回落而不是崩。
+    """
+    if sub is None:
+        return None
+    try:
+        from .template_store import get_template_store
+        return get_template_store().get(sub.template_id, user_id=sub.owner_user_id)
+    except Exception as e:
+        logger.warning(f"取看板模板失败({getattr(sub, 'template_id', '?')}): {e}")
+        return None
+
+
 def assemble(parsed: list, title: str = "恩特能源每日项目看板",
              date_str: str = "", llm_func=None, old_snapshot=None,
-             evidence_pipeline: bool = False, errors: list[str] | None = None) -> str:
+             evidence_pipeline: bool = False, errors: list[str] | None = None,
+             template=None) -> str:
     """组装 Markdown。
 
     evidence_pipeline=True 使用完整字段、分批 LLM 和来源校验；默认保留旧接口，
-    避免外部调用在升级时失效。
+    避免外部调用在升级时失效。template 只作用于证据流水线（旧规则模板不支持）。
     """
     if evidence_pipeline:
         from .llm_pipeline import build_dashboard_report
         return build_dashboard_report(
             parsed, old_snapshot, llm_func, title=title, date_str=date_str,
-            collection_errors=errors).text
+            collection_errors=errors, template=template).text
     from .assembler import assemble_markdown, llm_assemble
     if llm_func:
         return llm_assemble(parsed, title=title, date_str=date_str,
@@ -166,12 +183,12 @@ def assemble(parsed: list, title: str = "恩特能源每日项目看板",
 
 def assemble_report(parsed: list, title: str = "恩特能源每日项目看板",
                     date_str: str = "", llm_func=None, old_snapshot=None,
-                    errors: list[str] | None = None):
+                    errors: list[str] | None = None, template=None):
     """返回含语义分页的证据报告；定时推送使用此接口。"""
     from .llm_pipeline import build_dashboard_report
     return build_dashboard_report(
         parsed, old_snapshot, llm_func, title=title, date_str=date_str,
-        collection_errors=errors)
+        collection_errors=errors, template=template)
 
 
 def today_str() -> str:

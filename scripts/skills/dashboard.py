@@ -25,7 +25,9 @@ _HELP_TEXT = (
     "我可以帮您开通「每日项目看板」自动推送，也可以查实时看板。试试说：\n"
     "· 「帮我推个看板」— 开通每日自动推送\n"
     "· 「看板今天怎么样」— 查当前看板\n"
-    "· 「改看板时间到10点」「每周一和周五」「也推给张工」「停掉看板」"
+    "· 「改看板时间到10点」「每周一和周五」「也推给张工」「停掉看板」\n"
+    "· 「看板模板」— 查看模板；「用周报模板」— 切换输出格式；\n"
+    "  「按这个格式做看板：负责人/今日进展/明日计划」— 自定义模板"
 )
 
 
@@ -105,6 +107,64 @@ class DashboardSkill(BaseSkill):
         if intent == "query":
             sub_cmd.touch_activity(uid)
             return {"answer": cls._render_subscription_status(uid), "source": "dashboard"}
+
+        if intent == "template":
+            # v1.12.0：查看模板列表（直接答复，非写操作）
+            sub_cmd.touch_activity(uid)
+            return {"answer": cls._render_template_list(uid), "source": "dashboard"}
+
+        if intent == "set_template":
+            # v1.12.0：切换模板（写操作，确认后落地）
+            store = get_subscription_store()
+            subs = store.list_for_owner(uid)
+            if not subs:
+                return {"answer": "您还没有订阅看板。说「帮我推个看板」先开通，再切换模板。",
+                        "source": "dashboard"}
+            tpl = cls._match_template(q, uid)
+            if not tpl:
+                return {"answer": cls._render_template_list(uid, hint=True),
+                        "source": "dashboard"}
+            pending = {"intent": "set_template", "template_key": tpl.key,
+                       "template_name": tpl.name}
+            sub_cmd.set_pending(uid, pending)
+            return {"answer": sub_cmd.render_confirmation(pending), "source": "dashboard"}
+
+        if intent == "describe_template":
+            # v1.12.0：描述成模板（LLM 生成 → 确认 → 保存并应用）
+            from dashboard.template_builder import describe_to_spec
+            tdef = describe_to_spec(parsed.get("description") or "")
+            if not tdef.get("ok"):
+                return {"answer": tdef.get("message", "生成模板失败，请换个描述试试。"),
+                        "source": "dashboard"}
+            pending = {"intent": "describe_template",
+                       "template_name": tdef.get("name", "自定义模板"),
+                       "section_spec": tdef.get("section_spec"),
+                       "template_def": tdef}
+            sub_cmd.set_pending(uid, pending)
+            return {"answer": sub_cmd.render_confirmation(pending), "source": "dashboard"}
+
+        if intent == "submit_template":
+            # v1.12.0：提交模板（解析最近上传文件 → 确认 → 保存并应用）
+            from knowledge_review import get_pending_learn
+            uploaded = get_pending_learn(uid)
+            if not uploaded or not uploaded.get("file_path"):
+                return {"answer":
+                        "请先上传一个 Excel 或 Markdown 文件（Excel 用第一行表头、"
+                        "Markdown 用 # 标题定义章节），再回复「把这个当看板模板」。",
+                        "source": "dashboard"}
+            from dashboard.template_builder import parse_template_file
+            tdef = parse_template_file(uploaded["file_path"],
+                                       uploaded.get("file_name") or "")
+            if not tdef.get("ok"):
+                return {"answer": tdef.get("message", "解析模板失败，请换一个文件试试。"),
+                        "source": "dashboard"}
+            pending = {"intent": "submit_template",
+                       "template_name": tdef.get("name", "自定义模板"),
+                       "file_name": uploaded.get("file_name") or "",
+                       "section_spec": tdef.get("section_spec"),
+                       "template_def": tdef}
+            sub_cmd.set_pending(uid, pending)
+            return {"answer": sub_cmd.render_confirmation(pending), "source": "dashboard"}
 
         if intent == "resume":
             store = get_subscription_store()
@@ -250,7 +310,10 @@ class DashboardSkill(BaseSkill):
             store.create(sub)
             sub_cmd.clear_pending(user_id)
             note = cls._push_sample(sub)
-            return {"answer": f"✅ 已为您开通每日看板推送！{note}", "source": "dashboard"}
+            # v1.12.0：创建后主动告知当前模板模式
+            return {"answer": f"✅ 已为您开通每日看板推送！{note} "
+                              f"当前模板：每日简报（说「看板模板」查看或「用周报模板」切换）。",
+                    "source": "dashboard"}
 
         if intent == "delete":
             # 只删除当前用户真实拥有的订阅，并依据 rowcount 回报，禁止吞错后谎报成功。
@@ -282,6 +345,46 @@ class DashboardSkill(BaseSkill):
             sub_cmd.clear_pending(user_id)
             action = "恢复" if desired else "停止"
             return {"answer": f"✅ 已{action} {changed} 个看板订阅。", "source": "dashboard"}
+
+        if intent == "set_template":
+            # v1.12.0：切换模板到订阅（按真实 update 结果回报）
+            tpl = cls._match_template_key(pending.get("template_key"), user_id)
+            if not tpl:
+                sub_cmd.clear_pending(user_id)
+                return {"answer": "模板不存在，可能已被删除。说「看板模板」查看可用模板。",
+                        "source": "dashboard"}
+            owned = store.list_for_owner(user_id)
+            if not owned:
+                sub_cmd.clear_pending(user_id)
+                return {"answer": "您还没有订阅看板。说「帮我推个看板」先开通。",
+                        "source": "dashboard"}
+            for s in owned:
+                s.template_id = tpl.key
+                store.update(s)
+            sub_cmd.clear_pending(user_id)
+            note = cls._push_sample(owned[0])
+            return {"answer": f"✅ 已将 {len(owned)} 个看板订阅切换为「{tpl.name}」模板。"
+                              f"{note}",
+                    "source": "dashboard"}
+
+        if intent in ("describe_template", "submit_template"):
+            # v1.12.0：保存用户模板并应用到订阅
+            tdef = pending.get("template_def") or {}
+            ok, tpl, message = cls._save_user_template(user_id, tdef)
+            if not ok:
+                sub_cmd.clear_pending(user_id)
+                return {"answer": message, "source": "dashboard"}
+            owned = store.list_for_owner(user_id)
+            note = "（还没有看板订阅，开通后说「用这个模板」即可切换）"
+            if owned:
+                for s in owned:
+                    s.template_id = tpl.key
+                    store.update(s)
+                note = cls._push_sample(owned[0])
+            sub_cmd.clear_pending(user_id)
+            return {"answer":
+                    f"✅ 已保存模板「{tpl.name}」并应用到您的看板。{note}",
+                    "source": "dashboard"}
 
         sub = store.get(pending.get("sub_id") or 0)
         if not sub:
@@ -322,17 +425,18 @@ class DashboardSkill(BaseSkill):
         if not parsed:
             msg = "；".join(errors[:2]) or "无数据"
             return f"（推送前准备失败：{msg}，配置好数据源后每日自动推送）"
-        # 样例推送与定时推送统一走 LLM 组装（失败规则兜底）
+        # 样例推送与定时推送统一走 LLM 组装（失败规则兜底）；按订阅模板输出格式
+        template = service.resolve_template(sub)
         try:
             from skills.agent import call_deepseek_json
             report = service.assemble_report(
                 parsed, title=sub.title, date_str=service.today_str(),
                 llm_func=call_deepseek_json, old_snapshot=sub.last_snapshot,
-                errors=errors)
+                errors=errors, template=template)
         except Exception:
             report = service.assemble_report(
                 parsed, title=sub.title, date_str=service.today_str(),
-                old_snapshot=sub.last_snapshot, errors=errors)
+                old_snapshot=sub.last_snapshot, errors=errors, template=template)
         ok, msg = service.push_messages(sub.recipients, sub.title, report.messages)
         if ok:
             return "已推送示例看板给您，可先查看效果！"
@@ -356,7 +460,11 @@ class DashboardSkill(BaseSkill):
                 src_names = ""
             lines.append(f"  · 数据源：{src_names or '（未配置）'}")
             lines.append(f"  · 接收人：{len(s.recipients)} 人")
+            lines.append(f"  · 模板：{cls._template_label(s)}")
             lines.append(f"  · 上次推送：{s.last_pushed_at or '尚无'}")
+        if subs:
+            lines.append("")
+            lines.append("说「看板模板」查看可用模板，或「用周报模板」切换输出格式。")
         overlaps = []
         for index, left in enumerate(subs):
             if not left.enabled:
@@ -462,3 +570,96 @@ class DashboardSkill(BaseSkill):
             return (get_store().get_user(user_id) or {}).get("staff_id", "") or ""
         except Exception:
             return ""
+
+    # ===== v1.12.0 看板模板辅助 =====
+    @classmethod
+    def _render_template_list(cls, user_id: str, hint: bool = False) -> str:
+        """列出用户可见模板；hint=True 时追加使用提示（切换指令模板名没对上时）"""
+        try:
+            from dashboard.template_store import get_template_store
+            templates = get_template_store().list_visible(user_id)
+        except Exception as e:
+            logger.warning(f"取模板列表失败: {e}")
+            templates = []
+        current_key = cls._current_template_key(user_id)
+        lines = ["可用的看板模板："]
+        if not templates:
+            lines.append("-（暂无可用模板）")
+        for tpl in templates:
+            mark = " ← 当前" if tpl.key == current_key else ""
+            tag = "（系统）" if tpl.scope == "system" else "（我的）"
+            lines.append(f"- {tpl.name}：{tpl.description}{tag}{mark}")
+        if hint:
+            lines.extend([
+                "",
+                "说「用周报模板」「用项目看板」切换；或「按这个格式做看板：负责人/"
+                "今日进展/明日计划」自定义模板。",
+            ])
+        return "\n".join(lines)
+
+    @staticmethod
+    def _current_template_key(user_id: str) -> str:
+        try:
+            subs = get_subscription_store().list_for_owner(user_id)
+            if subs:
+                return subs[0].template_id or "daily"
+        except Exception:
+            pass
+        return ""
+
+    @classmethod
+    def _match_template(cls, text: str, user_id: str):
+        """按名称/别名解析模板（TemplateStore.resolve）；返回模板或 None"""
+        try:
+            from dashboard.template_store import get_template_store
+            return get_template_store().resolve(text, user_id)
+        except Exception as e:
+            logger.warning(f"解析看板模板失败({text}): {e}")
+            return None
+
+    @staticmethod
+    def _match_template_key(key: str, user_id: str):
+        """确认落地时校验模板键仍存在（防止 pending 期间模板被删）"""
+        if not key:
+            return None
+        try:
+            from dashboard.template_store import get_template_store
+            return get_template_store().get(key, user_id)
+        except Exception:
+            return None
+
+    @classmethod
+    def _save_user_template(cls, user_id: str, tdef: dict) -> tuple:
+        """创建用户模板；key/name 冲突自动加序号后缀。
+
+        Returns: (ok, template_or_None, message)
+        """
+        from dashboard.template_store import get_template_store
+        store_t = get_template_store()
+        name = (tdef.get("name") or "").strip() or "自定义模板"
+        base_key = "".join((name or "模板").split()) or "模板"
+        if base_key in ("daily", "weekly", "project"):
+            base_key = base_key + "_u"
+        for attempt in range(5):
+            suffix = "" if attempt == 0 else f"_{attempt + 1}"
+            name_candidate = name if attempt == 0 else f"{name}{attempt + 1}"
+            res = store_t.create_user_template(
+                key=base_key + suffix, name=name_candidate, user_id=user_id,
+                description=tdef.get("description", ""),
+                map_instructions=tdef.get("map_instructions", ""),
+                reduce_instructions=tdef.get("reduce_instructions", ""),
+                section_spec=tdef.get("section_spec"))
+            if res.get("ok"):
+                return True, res.get("template"), ""
+        return False, None, "模板保存失败（名称占用较多），请换一个模板名再试。"
+
+    @staticmethod
+    def _template_label(sub) -> str:
+        """订阅 → 模板展示名（缺失回落「每日简报」）"""
+        try:
+            tpl = service.resolve_template(sub)
+            if tpl:
+                return f"{tpl.name}（{tpl.key}）"
+        except Exception:
+            pass
+        return "每日简报（daily）"

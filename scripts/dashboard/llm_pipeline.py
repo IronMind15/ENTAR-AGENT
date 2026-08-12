@@ -20,6 +20,11 @@ from typing import Callable
 
 from .alerts import field_diff, make_snapshot
 from .assembler import MAX_MARKDOWN_LEN, validate_markdown
+from .template_store import (
+    _DEFAULT_MAP_INSTRUCTION,
+    _DEFAULT_REDUCE_INSTRUCTION,
+    _DEFAULT_SECTION_SPEC,
+)
 
 logger = logging.getLogger("dashboard.llm_pipeline")
 REPORT_MARKDOWN_LEN = MAX_MARKDOWN_LEN - 400
@@ -199,8 +204,8 @@ def _verify(claims: list[dict], valid_refs: dict) -> tuple[list[dict], int]:
     return accepted, rejected
 
 
-def _source_lines(results: list[dict], labels: dict) -> list[str]:
-    lines = ["## 数据来源", ""]
+def _source_lines(results: list[dict], labels: dict, title: str = "数据来源") -> list[str]:
+    lines = [f"## {title}"]
     for result in results:
         meta = result.get("source_meta", {})
         key = result.get("source_key", "")
@@ -261,19 +266,24 @@ def _fallback_claims_from_units(units: list[dict]) -> list[dict]:
     return claims[:12]
 
 
-def _render(results: list[dict], claims: list[dict], labels: dict,
-            title: str, date_str: str, headline: str = "",
-            collection_errors: list[str] | None = None) -> str:
-    icons = {"risk": "🔴", "decision": "🟠", "update": "🔵", "info": "•"}
-    lines = [f"# {title}", ""]
-    if date_str:
-        lines.extend([f"> 数据日期：{date_str}", ""])
-    total = sum(int(r.get("total", 0)) for r in results)
-    lines.extend([f"📌 今日要点：{headline or f'已核对 {len(results)} 个来源、{total} 条记录'}", ""])
-    lines.extend(["## 重点更新", ""])
+def _render_claims_block(title: str, claims: list[dict], labels: dict, icons: dict,
+                         levels: list[str] | None = None,
+                         show_empty_fallback: bool = False) -> list[str]:
+    """渲染一个结论区（按 levels 分流）。返回行列表；空区返回 []。
+
+    v1.12.0：模板可配置多个结论区（如周报=进展 + 风险待决策）。
+    无结论时只对第一个结论区显示兜底文案（避免多个空区重复提示）。
+    """
+    filtered = [c for c in claims if not levels or c.get("level") in levels]
     if not claims:
-        lines.append("- 当前没有可由来源记录支持的结论，请查看来源数据。")
-    for claim in claims[:12]:
+        if not show_empty_fallback:
+            return []
+        return [f"## {title}",
+                "- 当前没有可由来源记录支持的结论，请查看来源数据。"]
+    if not filtered:
+        return []
+    lines = [f"## {title}"]
+    for claim in filtered[:12]:
         refs = " ".join(f"[{labels[r]}]" for r in claim["refs"] if r in labels)
         claim_text = _plain_text(claim.get("text", ""), 360)
         lines.append(f"- {icons.get(claim.get('level'), '•')} {claim_text} {refs}".rstrip())
@@ -283,11 +293,64 @@ def _render(results: list[dict], claims: list[dict], labels: dict,
             evidence_parts.append(f"{_plain_text(evidence.get('field'), 40)}：{value}")
         if evidence_parts:
             lines.append("  - 依据原值：" + "；".join(evidence_parts))
-    if collection_errors:
-        lines.extend(["", "## 数据完整性提醒", ""])
-        lines.extend(f"- ⚠️ {_plain_text(error, 300)}" for error in collection_errors[:5])
-    lines.extend([""] + _source_lines(results, labels))
-    text = "\n".join(lines).strip() + "\n"
+    return lines
+
+
+def _render(results: list[dict], claims: list[dict], labels: dict,
+            title: str, date_str: str, headline: str = "",
+            collection_errors: list[str] | None = None,
+            spec: list[dict] | None = None) -> str:
+    """按 section_spec 渲染看板 Markdown。
+
+    spec 为 [{kind, title, levels?}]：
+        headline — 顶部一句话要点（📌）
+        claims   — 结论区（可多个，levels 限定收录级别；无 levels 全收）
+        errors   — 数据完整性提醒（仅当 collection_errors 非空）
+        sources  — 数据来源
+    spec 缺省 = daily（_DEFAULT_SECTION_SPEC），输出与旧硬编码逐字一致。
+    """
+    icons = {"risk": "🔴", "decision": "🟠", "update": "🔵", "info": "•"}
+    spec = spec or _DEFAULT_SECTION_SPEC
+    blocks = [[f"# {title}"]]
+    if date_str:
+        blocks.append([f"> 数据日期：{date_str}"])
+    total = sum(int(r.get("total", 0)) for r in results)
+    default_headline = f"已核对 {len(results)} 个来源、{total} 条记录"
+    rendered_headline = False
+    rendered_claims = False
+    first_claims = True
+    for section in spec:
+        if not isinstance(section, dict):
+            continue
+        kind = section.get("kind")
+        if kind == "headline":
+            blocks.append([f"📌 {section.get('title', '今日要点')}："
+                           f"{headline or default_headline}"])
+            rendered_headline = True
+        elif kind == "claims":
+            block = _render_claims_block(
+                section.get("title", "重点更新"), claims, labels, icons,
+                levels=section.get("levels"),
+                show_empty_fallback=first_claims)
+            first_claims = False
+            if block:
+                blocks.append(block)
+                rendered_claims = True
+        elif kind == "errors":
+            if collection_errors:
+                blocks.append(
+                    [f"## {section.get('title', '数据完整性提醒')}"] +
+                    [f"- ⚠️ {_plain_text(e, 300)}" for e in collection_errors[:5]])
+        elif kind == "sources":
+            blocks.append(_source_lines(results, labels,
+                                        section.get("title", "数据来源")))
+    # 兜底：spec 没配 headline/claims 时仍保证报告不空
+    if not rendered_headline:
+        blocks.append([f"📌 今日要点：{headline or default_headline}"])
+    if not rendered_claims:
+        blocks.append(_render_claims_block(
+            "重点更新", claims, labels, icons, show_empty_fallback=True))
+    text = "\n\n".join("\n".join(block) for block in blocks).strip() + "\n"
     return text
 
 
@@ -325,8 +388,26 @@ def build_dashboard_report(results: list[dict], old_snapshot: list[dict] | None,
                            llm_func: Callable | None, title: str = "恩特能源每日项目看板",
                            date_str: str = "", batch_size: int | None = None,
                            max_batch_chars: int | None = None,
-                           collection_errors: list[str] | None = None) -> DashboardReport:
-    """完整数据分批提炼，再汇总并校验引用；任一步失败均可降级。"""
+                           collection_errors: list[str] | None = None,
+                           template=None) -> DashboardReport:
+    """完整数据分批提炼，再汇总并校验引用；任一步失败均可降级。
+
+    v1.12.0：template 为 DashboardTemplate，控制输出格式（map/reduce 补充指令
+    + section_spec + 标题覆盖）。缺省 None = daily 旧行为，逐字回归。
+    """
+    # 模板只改输出格式：map/reduce 指令 + 章节结构；采集/变化检测/证据校验不动。
+    map_instruction = _DEFAULT_MAP_INSTRUCTION
+    reduce_instruction = _DEFAULT_REDUCE_INSTRUCTION
+    section_spec = None
+    if template is not None:
+        if getattr(template, "map_instructions", ""):
+            map_instruction = template.map_instructions
+        if getattr(template, "reduce_instructions", ""):
+            reduce_instruction = template.reduce_instructions
+        if getattr(template, "section_spec", None):
+            section_spec = template.section_spec
+        if getattr(template, "title", ""):
+            title = template.title
     snapshot = make_snapshot(results)
     changes = field_diff(old_snapshot, snapshot)
     valid_refs, labels, records = _catalog(results)
@@ -394,7 +475,7 @@ def build_dashboard_report(results: list[dict], old_snapshot: list[dict] | None,
                 llm_func,
                 _prompt("map", {
                     "records": batch,
-                    "instruction": "优先筛选 priority=changed 的今日变化；存量只保留持续风险、阻塞或待决策事项",
+                    "instruction": map_instruction,
                 }),
                 # 模型偶尔会无视“最多8个”而列出大量 ID；给足额度保证 JSON
                 # 完整闭合，解析后 _selected_refs 仍只取前 8 个。
@@ -440,7 +521,7 @@ def build_dashboard_report(results: list[dict], old_snapshot: list[dict] | None,
                             "total": r.get("total"),
                             "status_counts": r.get("status_counts", {}),
                         } for r in results],
-                        "instruction": "依据筛选记录的完整字段去重、排序，生成最多12条老板摘要",
+                        "instruction": reduce_instruction,
                     }), max_tokens=5000)
                 reduced = _json_object(reduce_future.result(timeout=remaining))
                 final_claims, reduce_rejected = _verify(_claims(reduced), valid_refs)
@@ -481,12 +562,13 @@ def build_dashboard_report(results: list[dict], old_snapshot: list[dict] | None,
         if llm_errors else [])
     text = _render(results, final_claims, labels, title,
                    date_str or datetime.now().strftime("%Y-%m-%d"), headline,
-                   render_errors)
+                   render_errors, spec=section_spec)
     if not validate_markdown(text)[0]:
         final_claims = _fallback_claims_from_units(analysis_units)[:4]
         text = _render(results, final_claims, labels,
                        title, date_str or datetime.now().strftime("%Y-%m-%d"),
-                       "已生成来源可核验的规则兜底摘要", render_errors)
+                       "已生成来源可核验的规则兜底摘要", render_errors,
+                       spec=section_spec)
     # 第二次仍不合法时做通道级净化；禁止未经校验的 fallback 直接外发。
     if not validate_markdown(text)[0]:
         text = text.replace("|", "｜")

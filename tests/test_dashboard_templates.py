@@ -1,0 +1,629 @@
+"""看板模板系统测试（v1.12.0）
+
+覆盖：系统种子（daily 逐字回归锚点）、用户私有隔离、订阅 template_id 迁移、
+section_spec 渲染（多结论区分流）、模板指令透传、描述成模板（LLM mock）、
+提交模板解析（Excel/Markdown 表头）、订阅命令意图、技能切换/保存流程。
+"""
+
+import os
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS_DIR = PROJECT_ROOT / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from dashboard.template_store import (  # noqa: E402
+    DashboardTemplate,
+    TemplateStore,
+    _DEFAULT_SECTION_SPEC,
+    _SYSTEM_TEMPLATES,
+)
+from dashboard.subscription_store import (  # noqa: E402
+    Subscription,
+    SubscriptionStore,
+)
+
+
+def _tmp_db():
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    return path
+
+
+def _cleanup_db(path, store):
+    try:
+        store.close()
+    except Exception:
+        pass
+    for suffix in ("", "-wal", "-shm"):
+        p = path + suffix
+        if os.path.exists(p):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+
+class TemplateStoreTests(unittest.TestCase):
+    def setUp(self):
+        self._path = _tmp_db()
+        self.store = TemplateStore(db_path=self._path)
+        self.addCleanup(lambda: _cleanup_db(self._path, self.store))
+
+    def test_system_seeds_exist_and_daily_is_regression_anchor(self):
+        keys = [t.key for t in self.store.list_visible()]
+        self.assertEqual(sorted(keys), ["daily", "project", "weekly"])
+        daily = self.store.get("daily")
+        self.assertEqual(daily.scope, "system")
+        # daily section_spec 必须与硬编码默认一致（_render spec=None 用它做逐字锚点）
+        self.assertEqual(daily.section_spec, _DEFAULT_SECTION_SPEC)
+        # 3 个种子的 key/name/section_spec 与代码定义一致
+        for tpl in _SYSTEM_TEMPLATES:
+            saved = self.store.get(tpl["key"])
+            self.assertEqual(saved.name, tpl["name"])
+            self.assertEqual(saved.section_spec, tpl["section_spec"])
+
+    def test_user_template_isolated_per_owner(self):
+        res = self.store.create_user_template(
+            key="mytpl", name="我的模板", user_id="user001",
+            map_instructions="只看变化", section_spec=_DEFAULT_SECTION_SPEC)
+        self.assertTrue(res["ok"])
+        # 本人可见
+        self.assertIsNotNone(self.store.get("mytpl", "user001"))
+        # 他人不可见、不可读
+        keys = [t.key for t in self.store.list_visible("user002")]
+        self.assertNotIn("mytpl", keys)
+        self.assertIsNone(self.store.get("mytpl", "user002"))
+
+    def test_create_user_template_rejects_system_key_and_duplicate(self):
+        res = self.store.create_user_template(
+            key="daily", name="复制", user_id="u1")
+        self.assertFalse(res["ok"])
+        self.assertIn("系统", res["message"])
+        self.assertTrue(self.store.create_user_template(
+            key="ok1", name="同名", user_id="u1")["ok"])
+        dup = self.store.create_user_template(
+            key="ok2", name="同名", user_id="u1")
+        self.assertFalse(dup["ok"])
+
+    def test_delete_only_own_user_template(self):
+        self.assertTrue(self.store.create_user_template(
+            key="t1", name="我的", user_id="u1")["ok"])
+        self.assertFalse(self.store.delete_user_template("daily", "u1"))  # 系统不可删
+        self.assertFalse(self.store.delete_user_template("t1", "u2"))    # 他人不可删
+        self.assertTrue(self.store.delete_user_template("t1", "u1"))
+        self.assertIsNone(self.store.get("t1", "u1"))
+
+    def test_resolve_by_name_alias_and_key(self):
+        self.assertEqual(self.store.resolve("看板用周报模板", "u1").key, "weekly")
+        self.assertEqual(self.store.resolve("用项目看板", "u1").key, "project")
+        self.assertEqual(self.store.resolve("daily", "u1").key, "daily")
+        self.assertIsNone(self.store.resolve("没有这个模板", "u1"))
+
+
+class SubscriptionTemplateMigrationTests(unittest.TestCase):
+    def setUp(self):
+        self._path = _tmp_db()
+        self.store = SubscriptionStore(db_path=self._path)
+        self.addCleanup(lambda: _cleanup_db(self._path, self.store))
+
+    def _sub(self, **kw):
+        base = Subscription(
+            owner_user_id="user001", owner_staff_id="staff001",
+            owner_union_id="union001", data_sources=["project_status"],
+            push_hour=9, push_minute=0, weekdays="", alert_mode="always",
+            recipients=["staff001"], title="恩特能源每日项目看板",
+        )
+        for k, v in kw.items():
+            setattr(base, k, v)
+        return base
+
+    def test_template_id_defaults_to_daily(self):
+        sub_id = self.store.create(self._sub())
+        got = self.store.get(sub_id)
+        self.assertEqual(got.template_id, "daily")
+
+    def test_create_and_read_custom_template_id(self):
+        sub_id = self.store.create(self._sub(template_id="weekly"))
+        self.assertEqual(self.store.get(sub_id).template_id, "weekly")
+        self.store.update(self.store.get(sub_id))
+        self.assertEqual(self.store.get(sub_id).template_id, "weekly")
+
+    def test_fingerprint_includes_template_id(self):
+        a = self._sub(template_id="daily").fingerprint()
+        b = self._sub(template_id="weekly").fingerprint()
+        self.assertNotEqual(a, b)
+
+    def test_legacy_table_gets_template_id_via_alter(self):
+        """老库无 template_id 列：SubscriptionStore 初始化应 ALTER 补列"""
+        import sqlite3
+        # setUp 已用 SubscriptionStore 建过带 template_id 的表，这里用全新库模拟老库
+        self._path = _tmp_db()
+        conn = sqlite3.connect(self._path)
+        conn.execute("""
+            CREATE TABLE dashboard_subscriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_user_id TEXT NOT NULL,
+                owner_staff_id TEXT DEFAULT '',
+                owner_union_id TEXT DEFAULT '',
+                data_sources TEXT DEFAULT '[]',
+                push_hour INTEGER DEFAULT 9,
+                push_minute INTEGER DEFAULT 0,
+                weekdays TEXT DEFAULT '',
+                alert_mode TEXT DEFAULT 'always',
+                recipients TEXT DEFAULT '[]',
+                title TEXT DEFAULT '恩特能源每日项目看板',
+                last_snapshot TEXT DEFAULT 'null',
+                last_pushed_at TEXT DEFAULT '',
+                enabled INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT '',
+                updated_at TEXT DEFAULT ''
+            )""")
+        conn.commit()
+        conn.close()
+        self.store.close()  # 释放 setUp 建的旧连接，避免 WAL 文件锁
+        store = SubscriptionStore(db_path=self._path)  # 触发 _ensure_column
+        self.addCleanup(store.close)
+        cols = [r[1] for r in store._get_conn().execute(
+            "PRAGMA table_info(dashboard_subscriptions)").fetchall()]
+        self.assertIn("template_id", cols)
+        sub_id = store.create(self._sub())
+        self.assertEqual(store.get(sub_id).template_id, "daily")
+
+
+class RenderTemplateTests(unittest.TestCase):
+    """_render 的 section_spec 驱动输出"""
+
+    @classmethod
+    def setUpClass(cls):
+        from dashboard.llm_pipeline import _render
+        cls._render = _render
+        cls.results = [{
+            "source_key": "s1", "name": "项目A", "total": 5,
+            "table_name": "", "status_counts": {},
+            "source_meta": {"captured_at": "2026-08-12 09:00"},
+            "detailed_items": [],
+        }]
+        cls.labels = {"s1": "S1", "s1:r1": "S1-R1"}
+        cls.claims = [
+            {"text": "本周上线了版本V2", "level": "update", "refs": ["s1:r1"],
+             "evidence": [{"ref": "s1:r1", "field": "进展", "value": "已上线"}]},
+            {"text": "供应商延期存在阻塞", "level": "risk", "refs": ["s1:r1"],
+             "evidence": [{"ref": "s1:r1", "field": "风险", "value": "延期2周"}]},
+        ]
+
+    def _r(self, **kw):
+        defaults = dict(results=self.results, claims=self.claims, labels=self.labels,
+                        title="恩特能源每日项目看板", date_str="2026-08-12",
+                        headline="今日变化 2 条")
+        defaults.update(kw)
+        # __func__：类属性函数经实例访问会被绑定成方法（实例变 results 位置参数），
+        # 导致 TypeError: got multiple values for 'results'——须取原始函数再按关键字调用
+        return self._render.__func__(**defaults)
+
+    def test_daily_spec_is_verbatim_regression_anchor(self):
+        """daily 模板输出 == 不传 spec 的输出（旧硬编码逐字回归）"""
+        expected = (
+            "# 恩特能源每日项目看板\n\n"
+            "> 数据日期：2026-08-12\n\n"
+            "📌 今日要点：今日变化 2 条\n\n"
+            "## 重点更新\n"
+            "- 🔵 本周上线了版本V2 [S1-R1]\n"
+            "  - 依据原值：进展：已上线\n"
+            "- 🔴 供应商延期存在阻塞 [S1-R1]\n"
+            "  - 依据原值：风险：延期2周\n\n"
+            "## 数据来源\n"
+            "- [S1] 项目A：5 条，采集：2026-08-12 09:00\n"
+        )
+        self.assertEqual(self._r(spec=None), expected)
+        self.assertEqual(self._r(spec=_DEFAULT_SECTION_SPEC), expected)
+        self.assertEqual(self._r(spec=_DEFAULT_SECTION_SPEC),
+                         self._r(spec=None))
+
+    def test_weekly_spec_splits_claims_into_two_sections(self):
+        spec = [
+            {"kind": "headline", "title": "本周要点"},
+            {"kind": "claims", "title": "本周进展", "levels": ["update", "info"]},
+            {"kind": "claims", "title": "风险与待决策", "levels": ["risk", "decision"]},
+            {"kind": "errors", "title": "数据完整性提醒"},
+            {"kind": "sources", "title": "数据来源"},
+        ]
+        text = self._r(spec=spec)
+        self.assertIn("📌 本周要点：今日变化 2 条", text)
+        self.assertIn("## 本周进展", text)
+        self.assertIn("本周上线了版本V2", text)
+        self.assertIn("## 风险与待决策", text)
+        self.assertIn("供应商延期存在阻塞", text)
+        self.assertIn("## 数据来源", text)
+        # 无错误时完整性提醒不渲染
+        self.assertNotIn("数据完整性提醒", text)
+
+    def test_empty_claims_fallback_only_first_claims_section(self):
+        spec = [
+            {"kind": "headline", "title": "今日要点"},
+            {"kind": "claims", "title": "进展", "levels": ["update", "info"]},
+            {"kind": "claims", "title": "风险", "levels": ["risk", "decision"]},
+            {"kind": "sources", "title": "数据来源"},
+        ]
+        text = self._r(claims=[], spec=spec)
+        # 兜底文案只出现一次（第一个结论区）
+        self.assertEqual(text.count("当前没有可由来源记录支持的结论"),
+                         1)
+        self.assertIn("## 进展", text)
+
+    def test_collection_errors_render_section(self):
+        spec = _DEFAULT_SECTION_SPEC
+        text = self._r(collection_errors=["来源A 读取失败", "来源B 超时"])
+        self.assertIn("## 数据完整性提醒", text)
+        self.assertIn("- ⚠️ 来源A 读取失败", text)
+
+
+class BuildDashboardTemplateTests(unittest.TestCase):
+    """build_dashboard_report 的模板指令/结构透传"""
+
+    def _parsed(self):
+        from dashboard.config_model import FieldSpec, SourceConfig
+        from dashboard.parser import parse_source_records
+        source = SourceConfig(
+            key="future_board", name="未来新增看板", kind="notable",
+            base_id="node-1",
+            source_url="https://alidocs.dingtalk.com/i/nodes/node-1",
+            field_map={
+                "name": FieldSpec(label="事项名称", type="string"),
+                "progress": FieldSpec(label="详细进展", type="string"),
+            })
+        return parse_source_records(source, [
+            {"recordId": "r2", "fields": {"name": "重点", "progress": "今天完成"}},
+        ])
+
+    def _daily_template(self):
+        from dashboard.template_store import _DEFAULT_MAP_INSTRUCTION
+        from dashboard.template_store import _DEFAULT_REDUCE_INSTRUCTION
+        return DashboardTemplate(
+            key="daily", name="每日简报", scope="system",
+            map_instructions=_DEFAULT_MAP_INSTRUCTION,
+            reduce_instructions=_DEFAULT_REDUCE_INSTRUCTION,
+            section_spec=list(_DEFAULT_SECTION_SPEC))
+
+    def _make_fake_llm(self, prompts):
+        def fake_llm(prompt, max_tokens=4000):
+            prompts.append(prompt)
+            if '"stage": "reduce"' in prompt:
+                return ('{"claims":[{"text":"重点今天完成","level":"update",'
+                        '"refs":["future_board:r2"],"evidence":['
+                        '{"ref":"future_board:r2","field":"详细进展"}]}]}')
+            return '{"selected_refs":["future_board:r2"]}'
+        return fake_llm
+
+    def test_custom_instructions_are_passed_to_llm(self):
+        from dashboard.llm_pipeline import build_dashboard_report
+        prompts = []
+        tpl = DashboardTemplate(
+            key="weekly", name="周报", scope="system",
+            map_instructions="优先本周变化，只留风险",
+            reduce_instructions="按进展与风险分列",
+            section_spec=[{"kind": "claims", "title": "重点更新",
+                           "levels": ["update", "info"]}],
+        )
+        build_dashboard_report([self._parsed()], None, self._make_fake_llm(prompts),
+                               batch_size=1, max_batch_chars=100000, template=tpl)
+        map_prompt = next(p for p in prompts if '"stage": "map"' in p)
+        reduce_prompt = next(p for p in prompts if '"stage": "reduce"' in p)
+        self.assertIn("优先本周变化，只留风险", map_prompt)
+        self.assertIn("按进展与风险分列", reduce_prompt)
+
+    def test_daily_template_equals_default_output(self):
+        from dashboard.llm_pipeline import build_dashboard_report
+        prompts = []
+        fake = self._make_fake_llm(prompts)
+        base = build_dashboard_report([self._parsed()], None, fake,
+                                      batch_size=1, max_batch_chars=100000)
+        prompts2 = []
+        with_tpl = build_dashboard_report(
+            [self._parsed()], None, self._make_fake_llm(prompts2),
+            batch_size=1, max_batch_chars=100000, template=self._daily_template())
+        self.assertEqual(base.text, with_tpl.text)
+
+    def test_template_title_override(self):
+        from dashboard.llm_pipeline import build_dashboard_report
+        tpl = self._daily_template()
+        tpl.title = "老板看板"
+        report = build_dashboard_report([self._parsed()], None, None,
+                                        template=tpl)
+        self.assertIn("# 老板看板", report.text)
+
+    def test_weekly_template_renders_two_sections(self):
+        from dashboard.llm_pipeline import build_dashboard_report
+        spec = [
+            {"kind": "headline", "title": "本周要点"},
+            {"kind": "claims", "title": "本周进展", "levels": ["update", "info"]},
+            {"kind": "claims", "title": "风险与待决策", "levels": ["risk", "decision"]},
+            {"kind": "sources", "title": "数据来源"},
+        ]
+        tpl = DashboardTemplate(key="weekly", name="周报", scope="system",
+                                section_spec=spec)
+        report = build_dashboard_report([self._parsed()], None, None, template=tpl)
+        self.assertIn("## 本周进展", report.text)
+        self.assertIn("## 数据来源", report.text)
+
+
+class TemplateBuilderTests(unittest.TestCase):
+    def test_parse_markdown_headings_to_spec(self):
+        from dashboard.template_builder import parse_template_file
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "周报模板.md"
+            path.write_text(
+                "# 本周要点\n"
+                "一些说明\n"
+                "## 本周进展\n"
+                "细节\n"
+                "## 风险与待决策\n"
+                "细节\n"
+                "## 数据来源\n",
+                encoding="utf-8")
+            res = parse_template_file(str(path), "周报模板.md")
+        self.assertTrue(res["ok"])
+        kinds = [s["kind"] for s in res["section_spec"]]
+        self.assertIn("headline", kinds)
+        self.assertEqual(kinds.count("claims"), 2)
+        self.assertIn("sources", kinds)
+
+    def test_parse_excel_header_row(self):
+        import openpyxl
+        from dashboard.template_builder import parse_template_file
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "表模板.xlsx"
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.append(["今日要点", "本周进展", "风险与阻塞", "数据完整性提醒", "数据来源"])
+            ws.append(["内容", "内容", "内容", "内容", "内容"])
+            wb.save(path)
+            res = parse_template_file(str(path), "表模板.xlsx")
+        self.assertTrue(res["ok"])
+        kinds = [s["kind"] for s in res["section_spec"]]
+        self.assertIn("headline", kinds)
+        self.assertIn("errors", kinds)
+        self.assertIn("sources", kinds)
+        titles = [s["title"] for s in res["section_spec"]]
+        self.assertIn("风险与阻塞", titles)
+
+    def test_parse_missing_file_and_unsupported_ext(self):
+        from dashboard.template_builder import parse_template_file
+        res = parse_template_file("/不存在/文件.md", "文件.md")
+        self.assertFalse(res["ok"])
+        res = parse_template_file(__file__, "测试.py")
+        self.assertFalse(res["ok"])
+        self.assertIn("只支持", res["message"])
+
+    def test_describe_to_spec_mock_llm(self):
+        from dashboard.template_builder import describe_to_spec
+
+        def fake_llm(prompt, max_tokens=4000):
+            return ('{"name": "晨会看板", '
+                    '"map_instructions": "优先今日变化", '
+                    '"reduce_instructions": "按板块组织", '
+                    '"section_spec": ['
+                    '{"kind": "headline", "title": "今日要点"},'
+                    '{"kind": "claims", "title": "进展", "levels": ["update", "info"]},'
+                    '{"kind": "claims", "title": "风险", "levels": ["risk", "decision"]}'
+                    "]}")
+
+        res = describe_to_spec("晨会用，负责人/今日进展/明日计划", fake_llm)
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["name"], "晨会看板")
+        self.assertEqual(res["map_instructions"], "优先今日变化")
+        # 核心章节兜底：缺 errors/sources 自动补齐
+        kinds = [s["kind"] for s in res["section_spec"]]
+        self.assertIn("headline", kinds)
+        self.assertEqual(kinds.count("claims"), 2)
+        self.assertIn("errors", kinds)
+        self.assertIn("sources", kinds)
+
+    def test_describe_to_spec_llm_error_fallback(self):
+        from dashboard.template_builder import describe_to_spec
+
+        def broken_llm(prompt, max_tokens=4000):
+            raise RuntimeError("API 挂了")
+
+        res = describe_to_spec("测试描述", broken_llm)
+        self.assertFalse(res["ok"])
+
+    def test_describe_to_spec_empty_description(self):
+        from dashboard.template_builder import describe_to_spec
+        res = describe_to_spec("   ")
+        self.assertFalse(res["ok"])
+
+
+class SubscriptionCommandTemplateTests(unittest.TestCase):
+    def test_template_intents(self):
+        from dashboard import subscription_commands as sc
+        cases = [
+            ("看板模板", "template"),
+            ("有什么看板模板", "template"),
+            ("看板用周报模板", "set_template"),
+            ("用周报模板做看板", "set_template"),
+            ("按周报模板做看板", "set_template"),
+            ("按这个格式做看板：负责人/今日进展/明日计划", "describe_template"),
+            ("把这个当看板模板", "submit_template"),
+        ]
+        for text, expected in cases:
+            parsed = sc.parse_subscription_command(text)
+            self.assertIsNotNone(parsed, text)
+            self.assertEqual(parsed["intent"], expected, text)
+
+    def test_describe_extracts_description(self):
+        from dashboard import subscription_commands as sc
+        parsed = sc.parse_subscription_command(
+            "按这个格式做看板：负责人/今日进展/明日计划")
+        self.assertEqual(parsed["description"], "负责人/今日进展/明日计划")
+
+    def test_template_query_is_direct_not_write(self):
+        from dashboard import subscription_commands as sc
+        parsed = sc.parse_subscription_command("看板模板")
+        self.assertNotIn("template_key", parsed)
+
+    def test_render_confirmation_for_set_and_describe(self):
+        from dashboard import subscription_commands as sc
+        set_pending = {"intent": "set_template", "template_key": "weekly",
+                       "template_name": "周报总结"}
+        text = sc.render_confirmation(set_pending)
+        self.assertIn("周报总结", text)
+        self.assertIn("确认", text)
+        describe_pending = {
+            "intent": "describe_template", "template_name": "晨会看板",
+            "section_spec": [{"kind": "headline", "title": "今日要点"},
+                             {"kind": "claims", "title": "进展",
+                              "levels": ["update", "info"]}],
+        }
+        text = sc.render_confirmation(describe_pending)
+        self.assertIn("晨会看板", text)
+        self.assertIn("今日要点 / 进展", text)
+
+
+class DashboardSkillTemplateTests(unittest.TestCase):
+    """技能层：模板列表/切换/描述/提交（mock 存储，不打真实库/API）"""
+
+    def setUp(self):
+        from dashboard.template_store import TemplateStore
+        self._tpl_path = _tmp_db()
+        self._tpl_store = TemplateStore(db_path=self._tpl_path)
+        self.patch_tpl = mock.patch(
+            "dashboard.template_store.get_template_store",
+            return_value=self._tpl_store)
+        self.patch_tpl.start()
+        self.addCleanup(self.patch_tpl.stop)
+        self.addCleanup(lambda: _cleanup_db(self._tpl_path, self._tpl_store))
+
+        self._sub_path = _tmp_db()
+        self._sub_store = SubscriptionStore(db_path=self._sub_path)
+        self.patch_sub = mock.patch(
+            "skills.dashboard.get_subscription_store",
+            return_value=self._sub_store)
+        self.patch_sub.start()
+        self.addCleanup(self.patch_sub.stop)
+        self.addCleanup(lambda: _cleanup_db(self._sub_path, self._sub_store))
+
+        self.patch_pending = mock.patch(
+            "dashboard.subscription_commands._pending", {})
+        self.patch_pending.start()
+        self.addCleanup(self.patch_pending.stop)
+
+        self._create_sub("union001")
+
+    def _create_sub(self, uid):
+        sub = Subscription(
+            owner_user_id=uid, owner_staff_id="staff001", owner_union_id=uid,
+            data_sources=["project_status"], push_hour=9, push_minute=0,
+            weekdays="", alert_mode="always", recipients=["staff001"],
+            title="恩特能源每日项目看板",
+        )
+        return self._sub_store.create(sub)
+
+    def _confirm(self, uid="union001"):
+        from dashboard import subscription_commands as sc
+        pending = sc.get_pending(uid)
+        self.assertIsNotNone(pending, "应有待确认操作")
+        return pending
+
+    def test_template_list_answer(self):
+        from skills.dashboard import DashboardSkill
+        r = DashboardSkill.handle("看板模板", user_id="union001")
+        self.assertEqual(r["source"], "dashboard")
+        self.assertIn("每日简报", r["answer"])
+        self.assertIn("周报总结", r["answer"])
+        self.assertIn("项目看板", r["answer"])
+
+    @mock.patch("skills.dashboard.DashboardSkill._push_sample",
+                return_value="已推送示例看板")
+    def test_set_template_confirm_flow(self, m_push):
+        from skills.dashboard import DashboardSkill
+        r = DashboardSkill.handle("用周报模板做看板", user_id="union001")
+        self.assertIn("周报总结", r["answer"])
+        self.assertEqual(self._confirm()["intent"], "set_template")
+        r2 = DashboardSkill.handle("确认", user_id="union001")
+        self.assertIn("切换为", r2["answer"])
+        # 必须读 mock 的临时库（self._sub_store）——真实 get_subscription_store
+        # 单例连生产库 data/user_store.db，会被既有订阅污染
+        sub = self._sub_store.list_for_owner("union001")[0]
+        self.assertEqual(sub.template_id, "weekly")
+
+    @mock.patch("skills.dashboard.DashboardSkill._push_sample",
+                return_value="已推送示例看板")
+    @mock.patch("dashboard.template_builder.describe_to_spec")
+    def test_describe_template_confirm_flow(self, m_describe, m_push):
+        m_describe.return_value = {
+            "ok": True, "name": "晨会看板",
+            "description": "晨会",
+            "map_instructions": "优先今日变化",
+            "reduce_instructions": "按板块组织",
+            "section_spec": [
+                {"kind": "headline", "title": "今日要点"},
+                {"kind": "claims", "title": "进展",
+                 "levels": ["update", "info"]},
+                {"kind": "claims", "title": "风险",
+                 "levels": ["risk", "decision"]},
+                {"kind": "sources", "title": "数据来源"},
+            ],
+        }
+        from skills.dashboard import DashboardSkill
+        r = DashboardSkill.handle(
+            "按这个格式做看板：负责人/今日进展/明日计划", user_id="union001")
+        self.assertIn("晨会看板", r["answer"])
+        pending = self._confirm()
+        self.assertEqual(pending["intent"], "describe_template")
+        r2 = DashboardSkill.handle("确认", user_id="union001")
+        self.assertIn("已保存模板", r2["answer"])
+        sub = self._sub_store.list_for_owner("union001")[0]
+        self.assertEqual(sub.template_id, "晨会看板")
+        self.assertIsNotNone(self._tpl_store.get("晨会看板", "union001"))
+
+    @mock.patch("skills.dashboard.DashboardSkill._push_sample",
+                return_value="已推送示例看板")
+    @mock.patch("dashboard.template_builder.parse_template_file")
+    @mock.patch("knowledge_review.get_pending_learn")
+    def test_submit_template_confirm_flow(self, m_learn, m_parse, m_push):
+        m_learn.return_value = {"file_path": "/tmp/周报模板.md",
+                                "file_name": "周报模板.md"}
+        m_parse.return_value = {
+            "ok": True, "name": "周报模板",
+            "description": "从文件识别",
+            "map_instructions": "优先今日变化",
+            "reduce_instructions": "按章节组织",
+            "section_spec": [
+                {"kind": "headline", "title": "本周要点"},
+                {"kind": "claims", "title": "进展",
+                 "levels": ["update", "info"]},
+                {"kind": "sources", "title": "数据来源"},
+            ],
+        }
+        from skills.dashboard import DashboardSkill
+        r = DashboardSkill.handle("把这个当看板模板", user_id="union001")
+        self.assertIn("周报模板", r["answer"])
+        pending = self._confirm()
+        self.assertEqual(pending["intent"], "submit_template")
+        r2 = DashboardSkill.handle("确认", user_id="union001")
+        self.assertIn("已保存模板", r2["answer"])
+        sub = self._sub_store.list_for_owner("union001")[0]
+        self.assertEqual(sub.template_id, "周报模板")
+
+    def test_submit_without_uploaded_file_hints(self):
+        from skills.dashboard import DashboardSkill
+        with mock.patch("knowledge_review.get_pending_learn",
+                        return_value=None):
+            r = DashboardSkill.handle("把这个当看板模板", user_id="union001")
+        self.assertIn("先上传", r["answer"])
+
+    def test_subscription_status_shows_template(self):
+        from skills.dashboard import DashboardSkill
+        r = DashboardSkill.handle("我的看板", user_id="union001")
+        self.assertIn("每日简报", r["answer"])
+        self.assertIn("模板", r["answer"])
+
+
+if __name__ == "__main__":
+    unittest.main()

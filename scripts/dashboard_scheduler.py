@@ -129,16 +129,18 @@ def _execute_subscription(sub) -> dict:
         return {"ok": False, "reason": "off"}
 
     # LLM 组装 → 失败/超长规则兜底（service.assemble 内部处理）
+    # v1.12.0：按订阅模板决定输出格式（daily 缺省=旧行为）
+    template = service.resolve_template(sub)
     try:
         from skills.agent import call_deepseek_json
         report = service.assemble_report(
             parsed, title=sub.title, date_str=service.today_str(),
             llm_func=call_deepseek_json, old_snapshot=sub.last_snapshot,
-            errors=errors)
+            errors=errors, template=template)
     except Exception:
         report = service.assemble_report(
             parsed, title=sub.title, date_str=service.today_str(),
-            old_snapshot=sub.last_snapshot, errors=errors)
+            old_snapshot=sub.last_snapshot, errors=errors, template=template)
 
     messages = list(report.messages)
 

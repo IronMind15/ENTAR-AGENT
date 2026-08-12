@@ -66,6 +66,7 @@ class Subscription:
     alert_mode: str = "always" # always（每日必推） | changes_only | off
     recipients: list = field(default_factory=list)     # batchSend staff_id，含 owner
     title: str = "恩特能源每日项目看板"
+    template_id: str = "daily"           # 看板模板键（v1.12.0，输出格式）
     last_snapshot: Optional[list] = None   # alerts.make_snapshot 输出
     last_pushed_at: str = ""
     enabled: bool = True
@@ -73,13 +74,18 @@ class Subscription:
     updated_at: str = ""
 
     def fingerprint(self) -> tuple:
-        """业务唯一键；忽略列表顺序和数据库生成字段。"""
+        """业务唯一键；忽略列表顺序和数据库生成字段。
+
+        v1.12.0 加入 template_id：同来源同时段不同格式不视为重复订阅——
+        用户可能故意同时要「每日简报」和「周报总结」两个输出。
+        """
         return (
             self.owner_user_id,
             tuple(sorted(str(x) for x in self.data_sources)),
             int(self.push_hour), int(self.push_minute), self.weekdays or "",
             self.alert_mode or "always",
             tuple(sorted(str(x) for x in self.recipients)),
+            self.template_id or "daily",
         )
 
 
@@ -128,6 +134,7 @@ class SubscriptionStore:
                 alert_mode     TEXT DEFAULT 'always',
                 recipients     TEXT DEFAULT '[]',
                 title          TEXT DEFAULT '恩特能源每日项目看板',
+                template_id    TEXT DEFAULT 'daily',
                 last_snapshot  TEXT DEFAULT 'null',
                 last_pushed_at TEXT DEFAULT '',
                 enabled        INTEGER DEFAULT 1,
@@ -139,7 +146,16 @@ class SubscriptionStore:
             CREATE INDEX IF NOT EXISTS idx_dashboard_sub_enabled
                 ON dashboard_subscriptions(enabled);
         """)
+        # v1.12.0 迁移：老库补 template_id 列（默认 daily，等价于旧行为）
+        self._ensure_column(conn, "dashboard_subscriptions", "template_id",
+                            "TEXT DEFAULT 'daily'")
         conn.commit()
+
+    @staticmethod
+    def _ensure_column(conn, table: str, column: str, ddl: str):
+        cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+        if column not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
     # ── Row → Subscription ──────────────────────────────
     def _row_to_sub(self, row) -> Subscription:
@@ -155,6 +171,7 @@ class SubscriptionStore:
             alert_mode=row["alert_mode"],
             recipients=_loads_list(row["recipients"]),
             title=row["title"],
+            template_id=row["template_id"] or "daily",
             last_snapshot=_loads_json(row["last_snapshot"]),
             last_pushed_at=row["last_pushed_at"],
             enabled=bool(row["enabled"]),
@@ -171,11 +188,13 @@ class SubscriptionStore:
                 """INSERT INTO dashboard_subscriptions
                    (owner_user_id, owner_staff_id, owner_union_id, data_sources,
                     push_hour, push_minute, weekdays, alert_mode, recipients, title,
-                    last_snapshot, last_pushed_at, enabled, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    template_id, last_snapshot, last_pushed_at, enabled, created_at,
+                    updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (sub.owner_user_id, sub.owner_staff_id, sub.owner_union_id,
                  _dumps(sub.data_sources), sub.push_hour, sub.push_minute,
                  sub.weekdays, sub.alert_mode, _dumps(sub.recipients), sub.title,
+                 sub.template_id or "daily",
                  _dumps(sub.last_snapshot), sub.last_pushed_at,
                  int(sub.enabled), now, now),
             )
@@ -238,11 +257,12 @@ class SubscriptionStore:
                 """UPDATE dashboard_subscriptions SET
                      owner_staff_id=?, owner_union_id=?, data_sources=?,
                      push_hour=?, push_minute=?, weekdays=?, alert_mode=?,
-                     recipients=?, title=?, updated_at=?
+                     recipients=?, title=?, template_id=?, updated_at=?
                    WHERE id=?""",
                 (sub.owner_staff_id, sub.owner_union_id, _dumps(sub.data_sources),
                  sub.push_hour, sub.push_minute, sub.weekdays, sub.alert_mode,
-                 _dumps(sub.recipients), sub.title, _now(), sub.id),
+                 _dumps(sub.recipients), sub.title, sub.template_id or "daily",
+                 _now(), sub.id),
             )
             self._get_conn().commit()
 
