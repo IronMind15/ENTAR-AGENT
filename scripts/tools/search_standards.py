@@ -1,5 +1,5 @@
 """
-⚠️ v1.11.5 已由通用 search_knowledge_base 替代（不再注册，本文件仅作参考）。
+⚠️ v1.11.5 起由通用 kb_search 替代（v1.12.0 改名；不再注册，本文件仅作参考）。
 
 工具：search_standards
 搜索储能变流器/光伏行业标准。
@@ -7,13 +7,16 @@
 覆盖安全要求、并网要求、检测方法、电气性能、绝缘配合等技术规范内容。
 当用户询问国家标准、行业规范、技术要求或标准编号时使用。
 不包含 PCS 故障代码。
-多库改造后标准检索由 search_knowledge_base(query, knowledge_base='标准知识库') 承担。
+多库改造后标准检索由 kb_search(query, knowledge_base='标准知识库') 承担。
+
+如需恢复为独立工具：用 v1.12.0 新签名 @register(DEFINITION, policy=..., sector="kb",
+display=..., user_desc=...)，DEFINITION["name"] 同步改新名（避免注册旧名与 kb_search 并存）。
 """
 
 import json
 import logging
 
-from tools import register
+from tools import register  # 恢复为独立工具时 @register 装饰器用（当前停用，未使用）
 
 logger = logging.getLogger("tool.standards")
 
@@ -38,7 +41,7 @@ DEFINITION = {
 }
 
 
-@register("search_standards", DEFINITION)
+# 已停用注册（v1.11.5）：原 @register 装饰器已删除，恢复指引见文件头 docstring。
 def execute(args: dict) -> str:
     """执行标准文档搜索（感知当前用户归属中心，按中心隔离 + 公共区回退）"""
     query = (args.get("query") or "").strip()

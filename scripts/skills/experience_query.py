@@ -1,7 +1,7 @@
 """
 经验查询模块 — Chroma experience_kb collection 搜索
 
-为 RAG Agent 提供 search_experience_kb 工具函数，
+为 RAG Agent 提供 search_kb 函数（供 kb_search 工具分发调用，v1.12.0 改名），
 用于搜索公司内部工程经验（维修记录、常见问题、故障排查经验）。
 
 经验条目为五段式模板：故障现象 → 排查步骤 → 根因 → 解决方案 → 验证结果。

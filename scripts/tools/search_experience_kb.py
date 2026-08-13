@@ -1,19 +1,22 @@
 """
-⚠️ v1.11.5 已由通用 search_knowledge_base 替代（不再注册，本文件仅作参考）。
+⚠️ v1.11.5 起由通用 kb_search 替代（v1.12.0 改名；不再注册，本文件仅作参考）。
 
 工具：search_experience_kb
 搜索公司内部工程经验知识库（维修记录、常见问题、故障排查经验）。
 
 经验条目为五段式：故障现象 → 排查步骤 → 根因 → 解决方案 → 验证结果。
 当用户询问"怎么排查/怎么解决/遇到过吗/维修经验/常见问题怎么处理"时使用。
-不包含 PCS 故障代码定义（用 search_knowledge_base）和行业标准规范（用 search_standards）。
-多库改造后经验检索由 search_knowledge_base(query, knowledge_base='经验知识库') 承担。
+不包含 PCS 故障代码定义与行业标准规范（统一由 kb_search 查询）。
+多库改造后经验检索由 kb_search(query, knowledge_base='经验知识库') 承担。
+
+如需恢复为独立工具：用 v1.12.0 新签名 @register(DEFINITION, policy=..., sector="kb",
+display=..., user_desc=...)，DEFINITION["name"] 同步改新名（避免注册旧名与 kb_search 并存）。
 """
 
 import json
 import logging
 
-from tools import register
+from tools import register  # 恢复为独立工具时 @register 装饰器用（当前停用，未使用）
 
 logger = logging.getLogger("tool.experience")
 
@@ -23,7 +26,7 @@ DEFINITION = {
         "搜索公司内部工程经验知识库（维修记录、常见问题、故障排查经验）。"
         "包含：故障现象、排查步骤、根因、解决方案、验证结果 五段式经验条目。"
         "当用户询问'怎么排查''怎么解决''遇到过吗''维修经验''常见问题怎么处理'时使用。"
-        "不包含 PCS 故障代码定义（用 search_knowledge_base）和行业标准规范（用 search_standards）。"
+        "不包含 PCS 故障代码定义与行业标准规范（统一由 kb_search 查询）。"
     ),
     "parameters": {
         "type": "object",
@@ -38,7 +41,7 @@ DEFINITION = {
 }
 
 
-@register("search_experience_kb", DEFINITION)
+# 已停用注册（v1.11.5）：原 @register 装饰器已删除，恢复指引见文件头 docstring。
 def execute(args: dict) -> str:
     """执行经验知识库搜索（本期不做部门隔离，全公司共享）"""
     query = (args.get("query") or "").strip()

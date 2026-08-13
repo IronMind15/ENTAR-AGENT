@@ -10,6 +10,8 @@
 6. **版本号由用户拍板，不自动写** — 完成实质性改动（新功能、修 bug、改配置等）后，只汇报改动 + **建议**升哪一位（major/minor/patch）+ 一句话理由，**等用户确认后才把版本号写进 CHANGELOG 并同步文档**；绝不自己定版本号写入文档（2026-08-11 用户明确要求）
 7. **发版固定动作：commit 和 tag 绑定** — 用户确认版本号 → 写 CHANGELOG/README/PROGRESS → `git commit` + `git tag vX.Y.Z` **同一次操作同步完成**（tag 指向本次提交），不再单独记，防止漏打（2026-08-11 曾漏打 v1.11.0 tag）
 8. **修 bug 先找根因，不许先改；skill 主动用，不等提醒**（2026-08-11）— 修 bug 调用 `awesome-bug-fix`（先建可复现 pass/fail 循环 → 定位根因 → 再改，禁止症状补丁）；改完代码补回归测试用 `awesome-test-writing`（tripwire 理念：每种可能的回归都有一条测试变红，新功能改动必须证明旧功能没被破坏）；发版前/复杂改动用 `awesome-code-review`（读被改行历史 + 切斯特顿栅栏：拆旧逻辑前先确认它当初挡着什么）；「为什么总是这样」类过程问题用 `awesome-root-cause`（5-Whys/PDCA）；老板/领导提模糊新功能用 `ent-feature-oracle`（能力映射 → 分层落地方案 → 天马行空发散，设计不实现，版本号只建议）。这些 skill 在项目 `.claude/skills/`，遇到对应场景主动调用，不等用户点名
+9. **改名/重构后注释与文档同步更新**（2026-08-13）— 工具/函数/模块改名或重构时，除功能代码外，**必须一并同步全仓引用点**：停用/参考文件的注释与 docstring、技能层 docstring、工具自述、README/CLAUDE.md 的功能描述与计数、测试文件名、`.claude/skills/` 文档、能力清单（自动生成则 `--write` 再生）。注释、docstring、文档虽不在代码执行路径，但滞后会**误导真人**（v1.12.0 工具改名后遗留 6 处描述层旧名残留，v1.12.1 后清理，详见 TODO「v1.12.0 改名后描述/注释层旧名残留清理」）。全仓 grep 旧名时**不要只扫 scripts/，.claude/skills/ 等技能目录也要扫**
+10. **审查改动对旧代码的影响，识别到即报告或安全更新**（2026-08-13）— 改代码/清理描述前，先检查是否影响旧代码路径：(a) 停用/保留文件的「恢复隐患」——如旧 `@register("名", DEFINITION)` 签名（v1.12.0 后旧签名 TypeError），处置时**直接删除装饰器 + 恢复指引并入文件头 docstring**——不要改成新签名（未来 import 会注册旧名工具与 kb_search 并存），也不要注释保留（注释掉的旧签名本身仍是残留，与清理目标自相矛盾）；(b) 旧名→新名迁移映射（如 agent.py 的 `_TOOL_NAME_MIGRATION`，是读侧幂等兜底 DB 遗留 prompt，**删了会破坏迁移，属合理保留勿删**）；(c) 测试对旧名的引用。识别到 (a) 类隐患 → 主动做安全更新并报告用户；(b) 类合理保留 → 标注「勿删」理由，不能顺手清理。记忆 doc-comment-outdated-v1120 有完整防复发清单
 
 ## 项目概述
 
@@ -37,7 +39,7 @@
 - ✅ 实测修复包（v1.11.2）：一次发多个文档链接不再丢（`urls[:5]` 放宽）；卡片/富文本消息也能识别「做每日看板」意图（`_handle_doc_link_with_kanban` 合并文档摘要 + 看板创建确认，接入文本/富文本/卡片三处路由）；「帮我学习」说明加强——入库进哪个库（企业知识库·标准文档库）、怎么检索（自然语言命中示例）、看板不受影响（实时拉取不进库），入库成功提示补块数/记录数/「我的文件」入口
 - ✅ 上传文件自动推荐入库（v1.11.0）：保存后回执主动推荐「要不要入库？回复『入库/确认』」→ 按路径入库（learn_file_path）；图片不支持不推荐
 - ✅ 多知识库注册表（v1.11.5）：SQLite 表 `knowledge_bases`（key/name/description/collection/department/enabled）注册管理，种子故障/标准/经验三库；钉钉自然语言创建（「创建知识库，名字叫产品手册，用来放产品说明书，研发部」）；「把这个文档学到XX」学习入库指定库（target_collection/department 从 KB 继承）；`department` 字段为分部门开权限预留（`get_visible_knowledge_bases` 按 centers 过滤，现全 public 不拦截）
-- ✅ 通用知识库查询工具（v1.11.5）：`kb_search(query, knowledge_base="")` 一个工具替代旧 3 个——指定库按 collection 分发（故障码精确/标准编号精确/经验语义/自定义 enhanced_query + department where 过滤），留空自动全可见库合并搜索，每条带 kb_name + source_label；旧 search_standards/search_experience_kb 文件保留不再注册（10→9 工具）
+- ✅ 通用知识库查询工具（v1.11.5）：`kb_search(query, knowledge_base="")` 一个工具替代旧 3 个——指定库按 collection 分发（故障码精确/标准编号精确/经验语义/自定义 enhanced_query + department where 过滤），留空自动全可见库合并搜索，每条带 kb_name + source_label；旧 search_standards/search_experience_kb 文件保留不再注册（现注册 10 工具）
 - ✅ 工具操作治理（v1.11.8）：工具注册支持 `policy`；查询/计算/识别等只读操作可直接执行，创建、删除、修改、启停、主动外发等写操作先冻结工具名和参数并要求用户再次确认；确认后以真实 handler 返回值决定成功/失败，禁止 LLM 把”准备执行”说成”已经执行”。覆盖创建知识库、主动推看板、总结后外发、上传文件删除/重学，以及看板订阅管理。
 - ✅ 工具板块化重构（v1.12.0）：注册中心成为工具唯一事实源——LLM prompt 工具段（`render_tool_prompt`）、流式显示映射（`get_tool_display_map`）、能力清单（`capability_manifest.py --write` → docs/能力清单.md）全部由注册中心生成，不再手写；8 个工具改名带板块前缀（`search_knowledge_base→kb_search` 等，旧名读侧幂等迁移兜底 DB 遗留）；`system_prompt.txt` 工具段抽离只留角色/规则；10 个新工具名无旧名残留（tripwire 测试守卫）。
 - ✅ 判定层治本框架（v1.12.0）：`scripts/routing.py` 三态判定（确定性直行/歧义交还用户/放行）——领域互斥让位（bot 删除学习正则接管前命中 kanban → 让位给看板技能，「删除看板订阅」不再被误抢）+ 操作歧义澄清（跨领域歧义句反问「回 1/2 或具体项」）+ 查询盲区不补枚举（CQC 3310 等落 LLM 走 `kb_search` 工具兜底）。三套确认 pending 结构统一优化已记 TODO（M3 后续）。

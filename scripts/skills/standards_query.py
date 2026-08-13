@@ -1,7 +1,7 @@
 """
 标准查询模块 — Chroma standards collection 搜索
 
-为 RAG Agent 提供 search_standards 工具函数，
+为 RAG Agent 提供 search_kb 函数（供 kb_search 工具分发调用，v1.12.0 改名），
 用于搜索储能变流器/光伏行业标准（GB、IEC、EN 等）。
 
 与 error_query.py 的 search_kb 一一对应，兼容同一调用约定。

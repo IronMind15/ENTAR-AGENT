@@ -282,7 +282,7 @@
 
 > 低频、远期或依赖前置条件
 
-- [ ] **v1.12.0 改名后描述/注释层旧名残留清理**（2026-08-13 检查发现，不影响运行）
+- [x] **v1.12.0 改名后描述/注释层旧名残留清理**（✅ v1.12.1 后清理完成）
   - 检查结论：核心功能代码/主文档（CHANGELOG/README 状态/PROGRESS/system_prompt/routing/能力清单）已全同步，以下均为纯描述/注释层残留 + 一个「恢复时会炸」的签名坑
   - ① 停用参考文件注释旧名：`tools/search_standards.py` L2/L10、`tools/search_experience_kb.py` L2/L10/L26 均写「已由 search_knowledge_base 替代」→ 替代者已改名 **kb_search**
   - ② ⚠️ 恢复隐患：两停用文件 L41 `@register("旧名", DEFINITION)` 仍是 v1.12.0 **前旧签名**——当前不 import 不触发，但 `tools/__init__.py:283` 注释「恢复时取消注释即可」若兑现会 TypeError，恢复时须同步改新签名 `@register(DEFINITION, policy=...)`
@@ -290,8 +290,10 @@
   - ④ `tools/kb_search.py:5` 自己 docstring 把前身名 search_knowledge_base 列为「被取代的工具」（轻微）
   - ⑤ 文档过时：README L60/L61「经验提交审核 | ✅ 可用 + 审核口令『同意同步 id 经验库』」——v1.10.2 已停审核、v1.12.0 已移除 sync_review，**最该改（防误导真人）**；README L68「3 个搜索工具」旧说法（现 1 个 kb_search）；CLAUDE.md L40「10→9 工具」为 v1.11.5 历史数字（现注册 10 个）
   - ⑥ `tests/test_search_knowledge_base.py` 文件名仍旧名（内容已是通用查询测试）
-  - 改法：纯注释/文档替换，无功能风险；优先级：⑤README 审核行 > ②旧 @register 签名 > 其余
-  - *来源：2026-08-13 v1.12.0 描述同步检查（已存记忆 doc-comment-outdated-v1120）*
+  - 已处理：① 停用文件 docstring 旧名→ kb_search；② 旧 @register 装饰器**直接删除**，恢复指引并入文件头 docstring（改新签名会注册旧名、注释保留仍是残留）；③ 技能层 docstring → search_kb（供 kb_search 分发）；④ kb_search.py 自述去旧名；⑤ README 审核行「⏸️ 已停用」+ L68「3 个搜索工具」→ kb_search + CLAUDE.md「现注册 10 工具」；⑥ `test_search_knowledge_base.py` git mv → `test_kb_search.py`
+  - 附带：`.claude/skills/ent-feature-oracle/SKILL.md` 能力映射表旧名（search_knowledge_base / describe_image）→ 新名（kb_search / image_describe）
+  - 验证：全量回归 829 项全绿；CHANGELOG/docs 历史记录中的旧名保留（历史事实）
+  - *来源：2026-08-13 v1.12.0 描述同步检查（记忆 doc-comment-outdated-v1120 已更新为清理完成）*
 
 - [x] **M3 统一确认路由（pending 归一）**（✅ v1.12.1 完成）
   - 落地：`scripts/pending_context.py` 统一 4 类 pending（tool/learn/kanban/clarify）单表 + TTL 惰性清除 + 跨类型覆盖记日志；四模块（tools / knowledge_review / subscription_commands / routing）改薄封装、对外 API 签名零变化；bot `_process_text` 单一确认路由（取消→澄清解析→工具确认→学习确认），窄拦截放行普通聊天；确认词按 pending 类型作用域（`is_confirm_text(text, ptype)`，「入库/要」只在 learn 生效）

@@ -44,11 +44,11 @@ metadata:
 |-----------|-----------|------|
 | 接收用户输入 | 钉钉 Stream bot（dingtalk_bot）| — |
 | 理解意图/聊天 | Agent 循环（agent.py）+ DeepSeek | — |
-| 查知识 | 通用 search_knowledge_base（指定库/全库合并）| — |
+| 查知识 | 通用 kb_search（v1.12.0 改名，指定库/全库合并）| — |
 | 存知识 | 多知识库注册表 + doc_mgr 入库管道 | — |
 | 定时推送 | dashboard_scheduler（订阅/alert_mode）| — |
 | 读文档 | dingtalk_doc_client（notable/workbook/doc）| — |
-| 识图 | tools/describe_image（qwen）| — |
+| 识图 | tools/image_describe（qwen，v1.12.0 改名）| — |
 | 收文件 | file_handler（uploads 按部门/员工/日期）| — |
 | 用户/权限 | SQLite user_store + 五中心 center_config | — |
 
