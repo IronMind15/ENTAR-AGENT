@@ -81,7 +81,16 @@ def _validate_args(args: dict) -> str | None:
     return None
 
 
-@register("calc_pcb_trace", DEFINITION)
+@register(
+    DEFINITION,
+    sector="calc",
+    display="🔧 PCB 走线计算...",
+    user_desc=(
+        "PCB 走线设计计算（IPC-2221）。用户问：走线宽度、载流能力、铜厚与温升、压降、功率损耗。\n"
+        "已知量不全先向用户确认（电流/线宽/铜厚/温升/内外层/线长），再按参数调用。\n"
+        '示例：10A 电流要多宽的线 → calc_pcb_trace(current_a=10)'
+    ),
+)
 def execute(args: dict) -> str:
     """执行 PCB 走线计算"""
     logger.info(f"  工具调用: calc_pcb_trace({args})")

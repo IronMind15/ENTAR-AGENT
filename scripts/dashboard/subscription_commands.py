@@ -22,10 +22,10 @@ from typing import Optional
 
 logger = logging.getLogger("dashboard.subscription_commands")
 
-# 与"操作订阅"无关的看板话题（不拦截，放行给 Agent 正常聊/调 query_dashboard 工具）
+# 与"操作订阅"无关的看板话题（不拦截，放行给 Agent 正常聊/调 dash_query 工具）
 # 「怎么用/怎么样/什么情况」等是求助或查询实时看板，不是订阅管理
 # v1.11.5 追加「功能/关系/干嘛/为什么」等反向词：质疑反问「这跟看板功能有什么关系」
-# 不是开通订阅，应放行给 Agent；「看看/想看看/看一下」是实时查询（Agent→query_dashboard）
+# 不是开通订阅，应放行给 Agent；「看看/想看看/看一下」是实时查询（Agent→dash_query）
 _NEGATIVE_RE = re.compile(
     r"文档|方案|方法论|学习|入库|设计|功能说明|怎么用|怎么配|怎么设|怎么操作|"
     r"怎么看|怎么查|怎么样|什么情况|什么进展|是什么|介绍|"
@@ -102,7 +102,7 @@ _TIME_RE = re.compile(r"\d{1,2}[点时:：]|半")
 _FREQ_RE = re.compile(r"每周|周一到|周[一二三四五六日天]|星期|周末|每隔|隔天|频率")
 # v1.11.5：明确的创建/开通意图才建订阅；否则含「看板」文本放行给 Agent
 # 「帮我推个看板/给我推个看板」= 开通订阅（前缀 帮/给/替 必填）；
-# 「现在推看板/马上推看板」无前缀 → 放行给 Agent 调 push_dashboard 工具（立即推送），不拦截。
+# 「现在推看板/马上推看板」无前缀 → 放行给 Agent 调 dash_push 工具（立即推送），不拦截。
 _CREATE_RE = re.compile(
     r"(?:帮我|给我|替我)\s*推.{0,6}看板|"
     r"做.{0,6}看板|建.{0,6}看板|开通.{0,6}看板|开.{0,6}看板|"
@@ -335,14 +335,58 @@ def _extract_template_desc(text: str) -> Optional[str]:
     return desc or None
 
 
+# ===== 看板意图登记表（v1.12.0：能力清单/文档单一事实源） =====
+# 每个 {id, name, trigger, regex, desc, status}。regex 引用上面定义的正则对象
+# （.pattern 复用，避免登记表与判定正则各自维护触发词导致漂移）。
+# 注：doc_create 由 parse_doc_dashboard_intent 独立判定（发文档动态做看板），
+# 不进 parse_subscription_command 的主意图链，但仍登记于此供能力清单展示。
+_INTENT_DEFS: list[dict] = [
+    {"id": "doc_create", "name": "文档动态看板", "trigger": "按这几个文档做每日看板",
+     "regex": _DOC_REF_RE, "desc": "发钉钉文档动态做看板（bot 带链接路径放宽引用词）",
+     "status": "enabled"},
+    {"id": "create", "name": "开通订阅", "trigger": "帮我推个看板 / 做每日看板",
+     "regex": _CREATE_RE, "desc": "创建订阅（须明确创建意图，防误建）", "status": "enabled"},
+    {"id": "stop", "name": "停用订阅", "trigger": "停掉看板",
+     "regex": _STOP_RE, "desc": "暂停订阅推送", "status": "enabled"},
+    {"id": "resume", "name": "恢复订阅", "trigger": "恢复看板 / 重新开通看板",
+     "regex": _RESUME_RE, "desc": "复用已停用订阅重新启用（不新建重复）", "status": "enabled"},
+    {"id": "delete", "name": "删除订阅", "trigger": "删除看板订阅",
+     "regex": _DELETE_RE, "desc": "彻底移除订阅（确认后，不可恢复）", "status": "enabled"},
+    {"id": "query", "name": "查询配置", "trigger": "看板几点推送 / 我的看板设置",
+     "regex": _QUERY_RE, "desc": "查订阅配置（不含「时间」防改时间被误判）", "status": "enabled"},
+    {"id": "change_time", "name": "改推送时间", "trigger": "改看板时间到10点",
+     "regex": _TIME_RE, "desc": "修改推送时间点", "status": "enabled"},
+    {"id": "change_freq", "name": "改推送频率", "trigger": "每周一和周五",
+     "regex": _FREQ_RE, "desc": "修改推送频率（周几/每天）", "status": "enabled"},
+    {"id": "change_recipients", "name": "增删接收人", "trigger": "也推给张工 / 不要推给李四",
+     "regex": _RECIPIENT_RE, "desc": "增加或移除订阅接收人（指代词/疑问句走 LLM 复核）",
+     "status": "enabled"},
+    {"id": "set_recipient_self", "name": "接收人设为自己", "trigger": "只推给我自己",
+     "regex": _SET_SELF_RE, "desc": "接收人本就是自己，不做加人操作", "status": "enabled"},
+    {"id": "describe_template", "name": "描述自定义模板", "trigger": "按这个格式做看板：…",
+     "regex": _TEMPLATE_DESCRIBE_RE, "desc": "用自然语言描述模板格式（LLM 生成模板）",
+     "status": "enabled"},
+    {"id": "submit_template", "name": "上传表头模板", "trigger": "上传/提交模板",
+     "regex": _TEMPLATE_SUBMIT_RE, "desc": "按表头提交确定性模板", "status": "enabled"},
+    {"id": "set_template", "name": "切换模板", "trigger": "看板用周报模板",
+     "regex": _TEMPLATE_SET_RE, "desc": "切换每日/周报/项目/自定义模板", "status": "enabled"},
+    {"id": "template", "name": "模板列表查询", "trigger": "有哪些看板模板",
+     "regex": _TEMPLATE_LIST_RE, "desc": "列出可选模板（避开「用周报模板」切换）", "status": "enabled"},
+    {"id": "choose_template", "name": "反问选模板", "trigger": "创建后回复 1/2/3 或模板名",
+     "regex": _TEMPLATE_CHOICE_NUM_RE, "desc": "创建订阅后的反问窗口回复（600s，绑上下文防误判）",
+     "status": "enabled"},
+]
+
+
 # ===== LLM 意图复核（v1.11.6）=====
 # 正则做快闸，LLM 兜住枚举盲区。正则命中 create/change_recipients 这类「重操作」，
 # 但文本带疑问/反问（"看板推送是不是要收费"）或捕获的是指代词（"别人"）时，
 # 调一次 LLM 确认是不是真的订阅管理操作。仅可疑才调，LLM 只用在刀刃上。
-_ALL_INTENTS = {"create", "stop", "delete", "query", "change_time",
-                "change_freq", "change_recipients", "set_recipient_self",
-                "template", "set_template", "describe_template",
-                "submit_template", "choose_template"}
+# _ALL_INTENTS 从 _INTENT_DEFS 派生；doc_create/resume/模板意图虽在登记表内，
+# 但 _llm_verify_subscription 的复核 prompt 只列出 8 个核心意图（create/stop/delete/
+# query/change_time/change_freq/change_recipients/set_recipient_self），LLM 不会返回
+# doc_create/resume/模板意图——派生全量只用于校验白名单，不影响复核语义。
+_ALL_INTENTS = {d["id"] for d in _INTENT_DEFS}
 _SUSPECT_QUESTION_RE = re.compile(
     r"是不是|是否|吗|？|\?|要不要|要收费|免费|多少钱|为啥|为什么|怎么|啥|干嘛|有没有")
 _SUSPECT_REFER_RE = re.compile(r"别人|他们|她们|大家|某人|任何人")

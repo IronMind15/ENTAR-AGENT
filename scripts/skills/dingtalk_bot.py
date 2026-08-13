@@ -64,8 +64,10 @@ def _is_fast_operation(text: str, user_id: str = "") -> bool:
     t = (text or "").strip()
     if t in ("查看我的审核ID", "我的审核ID", "查看我的钉钉ID"):
         return True
-    if t.startswith(("同意同步", "拒绝同步")):
-        return True
+    # v1.12.0 移除「同意同步/拒绝同步」审核口令秒回（v1.10.2 已停用上传审核，
+    # 文件改为「帮我学习」直接入库）。恢复审核时取消下面两行注释：
+    # if t.startswith(("同意同步", "拒绝同步")):
+    #     return True
     # v1.10.2：我的文件 / 删除 / 管理员切换为秒回；「帮我学习」「重新学习」
     # 可能走 MinerU 较慢，保留「正在处理」提示（不在此秒回）。
     if (_MY_FILES_RE.match(t) or _DELETE_RE.match(t) or _ADMIN_ENTER_RE.match(t)
@@ -129,6 +131,33 @@ _CONFIRM_LEARN_RE = re.compile(r"^(入库|确认|好的|可以|没问题|要|入
 def _is_confirm_learn(text: str) -> bool:
     t = (text or "").strip()
     return bool(_CONFIRM_LEARN_RE.fullmatch(t))
+
+
+# v1.12.0 判定层治本（M1/M2）：文件命令（删除/重学）接管前的领域互斥让位 + 多领域澄清。
+# 返回 ("defer"|"clarify"|"proceed", answer_or_None)：
+#   "defer"   → 命中看板且唯一业务领域 → bot 不拦截，让位给技能层（看板删除自带确认）
+#   "clarify" → 命中业务领域但语义跨域歧义 → 已反问澄清，answer 为反问文案
+#   "proceed" → 无业务领域冲突 → 照旧文件命令
+def _file_command_gate(text: str, user_id: str, action: str, target: str):
+    from routing import ask_clarification, detect_domains, render_clarification
+    domains = detect_domains(text)
+    if "kanban" in domains and len(domains) == 1:
+        return "defer", None
+    if domains:
+        verb = "删除" if action == "delete" else "重新学习"
+        ask_clarification(
+            user_id,
+            [
+                {"key": action, "label": f"{verb}学习内容「{target}」"},
+                {"key": "kanban", "label": "看板订阅相关操作"},
+            ],
+            ctx={"raw": text, "target": target, "action": action},
+        )
+        prompt = (f"「{text}」既像{verb}文件学习内容，又涉及看板/业务操作，"
+                  "我不确定你想做哪一个：")
+        return "clarify", render_clarification(user_id, prompt=prompt)
+    return "proceed", None
+
 
 
 # ===== 钉钉在线文档链接提取（v1.11.0） =====
@@ -435,8 +464,8 @@ class ErrorQueryHandler(ChatbotHandler):
         Args:
             on_chunk: 可选 callback(text, status)，用于 AI 卡片流式输出
         """
-        # 注入当前发起者 staff_id + user_id 到工具上下文（find_employee 敏感字段权限、
-        # summarize_doc 候选归属判断用）。asyncio.to_thread 会拷贝当前 context，
+        # 注入当前发起者 staff_id + user_id 到工具上下文（contact_find 敏感字段权限、
+        # doc_summarize 候选归属判断用）。asyncio.to_thread 会拷贝当前 context，
         # 本线程内工具执行能读到
         from tools import set_current_staff_id, set_current_user_id
         set_current_staff_id(staff_id)
@@ -470,6 +499,46 @@ class ErrorQueryHandler(ChatbotHandler):
                     on_chunk(answer, "done")
                 return {"answer": answer, "source": "tool_confirmation"}
 
+        # v1.12.0 判定层澄清（M2/M3）：上一轮反问澄清的用户回复 → 路由到对应确认流程。
+        # 无澄清 pending 或回复无法解析（普通消息）→ 不阻塞，继续正常流程。
+        from routing import get_clarification, resolve_clarification
+        if get_clarification(user_id):
+            resolved = resolve_clarification(user_id, stripped)
+            if resolved:
+                _ctx = resolved.get("_ctx") or {}
+                _key = resolved.get("key")
+                if _key == "cancel":
+                    answer = "已取消，刚才的操作没有执行。"
+                    if on_chunk:
+                        on_chunk(answer, "done")
+                    return {"answer": answer, "source": "clarification"}
+                _action = _ctx.get("action")
+                _target = _ctx.get("target", "")
+                if _key == "kanban":
+                    # 用户选看板侧 → 让位技能层处理（澄清已清，不拦截）
+                    pass
+                elif _action == "delete":
+                    from tools import execute_tool
+                    value = json.loads(execute_tool(
+                        "kb_file_manage", {"action": "delete", "target": _target}))
+                    answer = (f"⚠️ 准备删除「{_target}」及对应知识库内容。"
+                              "此操作不可恢复，回复「确认」执行，回复「取消」放弃。") \
+                        if value.get("confirmation_required") else f"❌ {value.get('error', '无法创建删除操作')}"
+                    if on_chunk:
+                        on_chunk(answer, "done")
+                    return {"answer": answer, "source": "knowledge_delete"}
+                elif _action == "relearn":
+                    from tools import execute_tool
+                    value = json.loads(execute_tool(
+                        "kb_file_manage", {"action": "relearn", "target": _target}))
+                    answer = (f"⚠️ 准备重新学习「{_target}」并更新知识库索引。"
+                              "回复「确认」执行，回复「取消」放弃。") \
+                        if value.get("confirmation_required") else f"❌ {value.get('error', '无法创建重学操作')}"
+                    if on_chunk:
+                        on_chunk(answer, "done")
+                    return {"answer": answer, "source": "knowledge_relearn"}
+                # 其他/未知目标 → 继续正常流程
+
         # 审核口令与普通技能路由
         if text in ("查看我的审核ID", "我的审核ID", "查看我的钉钉ID"):
             answer = (
@@ -481,17 +550,20 @@ class ErrorQueryHandler(ChatbotHandler):
                 on_chunk(answer, "done")
             return {"answer": answer, "source": "review_identity"}
 
-        from knowledge_review import handle_review_message
-        review_answer = handle_review_message(text, staff_id)
-        if review_answer is not None:
-            if on_chunk:
-                on_chunk(review_answer, "done")
-            return {"answer": review_answer, "source": "knowledge_review"}
+        # v1.12.0 移除「同意同步/拒绝同步」审核拦截（v1.10.2 已停用上传审核）。
+        # 恢复审核时取消下面 6 行注释，并恢复 handle_review_message import：
+        # from knowledge_review import handle_review_message
+        # review_answer = handle_review_message(text, staff_id)
+        # if review_answer is not None:
+        #     if on_chunk:
+        #         on_chunk(review_answer, "done")
+        #     return {"answer": review_answer, "source": "knowledge_review"}
 
         # ===== v1.10.2 上传学习 / 我的文件 / 删除 / 管理员模式 =====
+        # v1.12.0：删除/重学已走 kb_file_manage 工具（二次确认），bot 不再直接调
+        # delete_file_for_user / relearn_file_for_user，import 只保留 learn/list。
         from knowledge_review import (
-            delete_file_for_user, learn_file_for_user,
-            list_files_for_user, relearn_file_for_user,
+            learn_file_for_user, list_files_for_user,
         )
         t = text.strip()
 
@@ -535,31 +607,45 @@ class ErrorQueryHandler(ChatbotHandler):
                 on_chunk(answer, "done")
             return {"answer": answer, "source": "my_files"}
 
-        # 4. 删除学习内容 + 源文件
+        # 4. 删除学习内容 + 源文件（v1.12.0：命中看板领域先让位，跨域歧义先澄清）
         m = _DELETE_RE.match(t)
         if m:
-            from tools import execute_tool
-            value = json.loads(execute_tool(
-                "manage_uploaded_file", {"action": "delete", "target": m.group(1)}))
-            answer = (f"⚠️ 准备删除「{m.group(1)}」及对应知识库内容。"
-                      "此操作不可恢复，回复「确认」执行，回复「取消」放弃。") \
-                if value.get("confirmation_required") else f"❌ {value.get('error', '无法创建删除操作')}"
-            if on_chunk:
-                on_chunk(answer, "done")
-            return {"answer": answer, "source": "knowledge_delete"}
+            gate, clarify_answer = _file_command_gate(t, user_id, "delete", m.group(1))
+            if gate == "clarify":
+                if on_chunk:
+                    on_chunk(clarify_answer, "done")
+                return {"answer": clarify_answer, "source": "clarification"}
+            if gate == "proceed":
+                from tools import execute_tool
+                value = json.loads(execute_tool(
+                    "kb_file_manage", {"action": "delete", "target": m.group(1)}))
+                answer = (f"⚠️ 准备删除「{m.group(1)}」及对应知识库内容。"
+                          "此操作不可恢复，回复「确认」执行，回复「取消」放弃。") \
+                    if value.get("confirmation_required") else f"❌ {value.get('error', '无法创建删除操作')}"
+                if on_chunk:
+                    on_chunk(answer, "done")
+                return {"answer": answer, "source": "knowledge_delete"}
+            # gate == "defer"：让位给技能层（看板删除订阅），不拦截
 
-        # 5. 强制重新学习
+        # 5. 强制重新学习（v1.12.0：同上——命中看板领域先让位，跨域歧义先澄清）
         m = _RELEARN_RE.match(t)
         if m:
-            from tools import execute_tool
-            value = json.loads(execute_tool(
-                "manage_uploaded_file", {"action": "relearn", "target": m.group(1)}))
-            answer = (f"⚠️ 准备重新学习「{m.group(1)}」并更新知识库索引。"
-                      "回复「确认」执行，回复「取消」放弃。") \
-                if value.get("confirmation_required") else f"❌ {value.get('error', '无法创建重学操作')}"
-            if on_chunk:
-                on_chunk(answer, "done")
-            return {"answer": answer, "source": "knowledge_relearn"}
+            gate, clarify_answer = _file_command_gate(t, user_id, "relearn", m.group(1))
+            if gate == "clarify":
+                if on_chunk:
+                    on_chunk(clarify_answer, "done")
+                return {"answer": clarify_answer, "source": "clarification"}
+            if gate == "proceed":
+                from tools import execute_tool
+                value = json.loads(execute_tool(
+                    "kb_file_manage", {"action": "relearn", "target": m.group(1)}))
+                answer = (f"⚠️ 准备重新学习「{m.group(1)}」并更新知识库索引。"
+                          "回复「确认」执行，回复「取消」放弃。") \
+                    if value.get("confirmation_required") else f"❌ {value.get('error', '无法创建重学操作')}"
+                if on_chunk:
+                    on_chunk(answer, "done")
+                return {"answer": answer, "source": "knowledge_relearn"}
+            # gate == "defer"：让位给技能层，不拦截
 
         # 5.5 上传后「推荐入库」确认（v1.11.0）：有 file-pending 且确认词才拦截
         if _is_confirm_learn(t):
@@ -969,7 +1055,7 @@ class ErrorQueryHandler(ChatbotHandler):
                 except Exception as e:
                     logger.warning(f"登记推荐入库失败: {e}")
 
-            # v1.11.11：图片当作文件发（非图片消息）也能识图——复用 describe_image 能力
+            # v1.11.11：图片当作文件发（非图片消息）也能识图——复用 image_describe 能力
             img_desc = ""
             if result["success"]:
                 try:
@@ -978,7 +1064,7 @@ class ErrorQueryHandler(ChatbotHandler):
                     if get_file_type(file_name) in _IMAGE_EXTENSIONS and DASHSCOPE_API_KEY:
                         from tools import execute_tool
                         raw = execute_tool(
-                            "describe_image",
+                            "image_describe",
                             {"image_path": result.get("file_path", ""),
                              "question": "请用中文详细描述这张图片的内容"},
                         )
@@ -1060,7 +1146,7 @@ class ErrorQueryHandler(ChatbotHandler):
                     })
 
             # v1.11.5：图片保存路径写入会话记忆，让 Agent 后续能定位图片
-            #（如「帮我识别这个图片的内容」；describe_image 也支持按文件名查找）
+            #（如「帮我识别这个图片的内容」；image_describe 也支持按文件名查找）
             if saved_files:
                 try:
                     from skills import memory
@@ -1073,7 +1159,7 @@ class ErrorQueryHandler(ChatbotHandler):
                 except Exception as mem_err:
                     logger.warning(f"记录图片记忆失败: {mem_err}")
 
-            # 识图：已配置 key 时逐张调 describe_image（千问视觉）
+            # 识图：已配置 key 时逐张调 image_describe（千问视觉）
             from config import DASHSCOPE_API_KEY
             descriptions = []  # [{"name", "desc", "ok"}]
             if saved_files and DASHSCOPE_API_KEY:
@@ -1083,7 +1169,7 @@ class ErrorQueryHandler(ChatbotHandler):
                         continue
                     try:
                         raw = execute_tool(
-                            "describe_image",
+                            "image_describe",
                             {"image_path": item["path"], "question": "请用中文详细描述这张图片的内容"},
                         )
                         parsed = json.loads(raw) if isinstance(raw, str) else (raw or {})
@@ -1237,3 +1323,49 @@ def start_bot() -> threading.Thread | None:
     thread = threading.Thread(target=_run, daemon=True, name="dingtalk-bot")
     thread.start()
     return thread
+
+
+# ===== Bot 命令登记表（v1.12.0：能力清单/文档单一事实源） =====
+# 每个 {id, sector, name, trigger, regex, desc, status}。
+# regex 引用上面定义的正则对象（.pattern 复用，避免登记表与判定各自维护触发词漂移）。
+# status：enabled=秒回可用；removed=v1.12.0 移除拦截（代码保留注释可恢复）。
+# sector 语义分类：kb=文件/知识库、admin=管理、doc=文档。
+_BOT_COMMANDS: list[dict] = [
+    {"id": "learn", "sector": "kb", "name": "帮我学习",
+     "trigger": "帮我学习 / 学习一下 / 入库", "regex": _LEARN_RE,
+     "desc": "将最新待学习文件入库（文档→标准库，Excel→故障库，md→经验库）", "status": "enabled"},
+    {"id": "learn_to_kb", "sector": "kb", "name": "学习到指定库",
+     "trigger": "把这个文档学到产品手册", "regex": _LEARN_TO_KB_RE,
+     "desc": "入库到指定知识库（v1.11.5 多库）", "status": "enabled"},
+    {"id": "confirm_learn", "sector": "kb", "name": "确认学习",
+     "trigger": "入库 / 确认 / 好的", "regex": _CONFIRM_LEARN_RE,
+     "desc": "上传文件后推荐入库的确认词（有 file-pending 才拦截）", "status": "enabled"},
+    {"id": "my_files", "sector": "kb", "name": "我的文件",
+     "trigger": "我的文件 / 查看我的文件", "regex": _MY_FILES_RE,
+     "desc": "列出自己上传的文件（序号+文件名+学习状态）", "status": "enabled"},
+    {"id": "file_delete", "sector": "kb", "name": "删除学习",
+     "trigger": "删除学习 1 / 删掉 技术协议.pdf", "regex": _DELETE_RE,
+     "desc": "删除本人上传文件及知识库内容（kb_file_manage 二次确认）", "status": "enabled"},
+    {"id": "file_relearn", "sector": "kb", "name": "重新学习",
+     "trigger": "重新学习 1 / 重学 技术协议.pdf", "regex": _RELEARN_RE,
+     "desc": "强制重新解析入库覆盖索引（kb_file_manage 二次确认）", "status": "enabled"},
+    {"id": "admin_enter", "sector": "admin", "name": "进入管理员",
+     "trigger": "ENTARBOSS", "regex": _ADMIN_ENTER_RE,
+     "desc": "管理员模式（可查看全部文件、删改任意用户文件）", "status": "enabled"},
+    {"id": "admin_exit", "sector": "admin", "name": "退出管理员",
+     "trigger": "退出管理员 / 退出管理", "regex": _ADMIN_EXIT_RE,
+     "desc": "退出管理员模式", "status": "enabled"},
+    {"id": "admin_list_all", "sector": "admin", "name": "查看全部文件",
+     "trigger": "查看全部文件", "regex": _ADMIN_LIST_ALL_RE,
+     "desc": "管理员查看全部用户上传文件", "status": "enabled"},
+    {"id": "review_identity", "sector": "admin", "name": "查看审核ID",
+     "trigger": "查看我的审核ID", "regex": re.compile(r"^(?:查看我的审核ID|我的审核ID|查看我的钉钉ID)$"),
+     "desc": "返回当前发起者钉钉员工 ID", "status": "enabled"},
+    {"id": "doc_link", "sector": "doc", "name": "钉钉文档链接",
+     "trigger": "钉钉在线文档 URL", "regex": _ALIDOCS_URL_RE,
+     "desc": "识别钉钉文档链接 → 概要秒回/指令全读/做看板（类型自动探测）", "status": "enabled"},
+    {"id": "sync_review", "sector": "admin", "name": "审核口令",
+     "trigger": "同意同步 ABC123 / 拒绝同步 ABC123", "regex": re.compile(r"^(?:同意同步|拒绝同步)"),
+     "desc": "v1.10.2 停用上传审核（改「帮我学习」直接入库），v1.12.0 移除拦截，代码保留注释可恢复",
+     "status": "removed"},
+]

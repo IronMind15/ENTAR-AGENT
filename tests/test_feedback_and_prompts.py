@@ -4,7 +4,7 @@
 覆盖：
 1. Feedback CRUD（add_feedback、get_feedback_stats、get_last_conversation）
 2. Prompt 管理（get_prompt、set_prompt、list_prompts、upsert 覆盖）
-3. source_label 生成（search_knowledge_base、search_standards、search_experience_kb）
+3. source_label 生成（kb_search、search_standards、search_experience_kb）
 4. 便捷函数代理（add_feedback 等模块级函数）
 """
 
@@ -174,7 +174,7 @@ class TestSourceLabel(unittest.TestCase):
     """测试搜索工具的 source_label 字段生成逻辑（不依赖真实 Chroma）"""
 
     def test_knowledge_base_source_label(self):
-        """search_knowledge_base 的 source_label 包含故障代码和名称"""
+        """kb_search 的 source_label 包含故障代码和名称"""
         # 直接测试 label 生成逻辑，不走完整工具调用链
         fault_code = "d4-1"
         name = "急停告警"
@@ -222,13 +222,36 @@ class TestSourceLabel(unittest.TestCase):
 
 class TestAgentPromptLoading(_StoreTestBase):
     def test_load_from_db_when_available(self):
-        """DB 有 prompt 时优先从 DB 加载"""
+        """DB 有 prompt 时优先从 DB 加载为基础段，并追加注册中心生成的工具段"""
         self.store.set_prompt("system", "来自 DB 的提示词")
         # 清除 agent.py 的缓存
         from skills import agent as _agent_mod
         _agent_mod._prompt_cache.pop("system", None)
         content = _agent_mod._load_system_prompt()
-        self.assertEqual(content, "来自 DB 的提示词")
+        self.assertTrue(content.startswith("来自 DB 的提示词"))
+        # v1.12.0：工具段永远由注册中心生成，追加在基础段之后
+        self.assertIn(_agent_mod._TOOL_SECTION_MARKER, content)
+
+    def test_db_old_tool_section_stripped_and_names_migrated(self):
+        """DB 遗留带旧工具段（marker + 旧名）的 prompt → 归一化丢弃旧段并把旧名换成新名"""
+        # 注：旧名 search_knowledge_base / find_employee 刻意保留作输入，
+        # 验证 _TOOL_NAME_MIGRATION 把旧名迁成新名（勿被改名批替换误伤）。
+        stale = ("你是助手。\n\n"
+                 + "===== 工具能力（由注册中心自动生成，勿手动编辑）=====\n"
+                 + "1. search_knowledge_base（旧工具段）\n"
+                 + "2. find_employee（旧工具段）\n")
+        from skills import agent as _agent_mod
+        _agent_mod._prompt_cache.pop("system", None)
+        with mock.patch.object(_agent_mod, "_PROMPT_FILE",
+                               str(Path(__file__).parent / "not_exists.txt")):
+            base = _agent_mod._normalize_prompt_base(stale)
+        self.assertEqual(base, "你是助手。")
+        migrated = _agent_mod._normalize_prompt_base(
+            "请用 search_knowledge_base 查，或用 find_employee")
+        self.assertNotIn("search_knowledge_base", migrated)
+        self.assertNotIn("find_employee", migrated)
+        self.assertIn("kb_search", migrated)
+        self.assertIn("contact_find", migrated)
 
     def test_fallback_to_file(self):
         """DB 无 prompt 时回退到文件"""

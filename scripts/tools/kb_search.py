@@ -1,5 +1,5 @@
 """
-工具：search_knowledge_base（v1.11.5 通用知识库查询）
+工具：kb_search（v1.11.5 通用知识库查询，v1.12.0 改名）
 
 多知识库改造后统一的查询入口：可在不同知识库选择查询，取代原来的三个独立工具
 （search_knowledge_base=故障库 / search_standards=标准库 / search_experience_kb=经验库）。
@@ -23,7 +23,7 @@ from tools import register
 logger = logging.getLogger("tool.kb")
 
 DEFINITION = {
-    "name": "search_knowledge_base",
+    "name": "kb_search",
     "description": (
         "搜索企业知识库。统一入口，可在不同知识库之间选择查询。"
         "参数 knowledge_base 指定知识库名称或标识（如『故障知识库』『标准知识库』"
@@ -52,7 +52,17 @@ _PER_KB_LIMIT = 4
 _TOTAL_LIMIT = 8
 
 
-@register("search_knowledge_base", DEFINITION)
+@register(
+    DEFINITION,
+    sector="kb",
+    display="🔍 搜索知识库...",
+    user_desc=(
+        "搜索企业知识库（故障/标准/经验/自定义库）。用户问：故障代码（d4-1 等）、"
+        "报错/告警/停机、标准编号（GB/T 34133、IEC 60664）、技术要求、公司文档、维修经验。\n"
+        "参数 knowledge_base 指定库名（如「标准知识库」），拿不准留空自动全库搜。\n"
+        '示例：d4-1 是什么故障 → kb_search(query="d4-1")'
+    ),
+)
 def execute(args: dict) -> str:
     """通用知识库搜索"""
     query = (args.get("query") or "").strip()
@@ -62,7 +72,7 @@ def execute(args: dict) -> str:
             {"error": "搜索关键词为空，请提供要搜索的内容"}, ensure_ascii=False
         )
 
-    logger.info(f"  工具调用: search_knowledge_base(query={query}, kb={kb_arg or '全部'})")
+    logger.info(f"  工具调用: kb_search(query={query}, kb={kb_arg or '全部'})")
 
     from kb_registry import get_visible_knowledge_bases, resolve_kb
 

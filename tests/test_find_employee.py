@@ -1,5 +1,5 @@
 """
-find_employee / 钉钉通讯录客户端测试
+contact_find / 钉钉通讯录客户端测试
 
 覆盖：token 缓存、部门树 BFS、多部门去重、分页、匹配、敏感字段脱敏、
 contextvar 身份传递、部分失败降级、权限错误、缓存 TTL、无结果、工具注册。
@@ -22,7 +22,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from contact_api import DingTalkContactClient, ContactPermissionError  # noqa: E402
-from tools.find_employee import execute  # noqa: E402
+from tools.contact_find import execute  # noqa: E402
 
 
 # ── 测试数据（旧版 oapi 字段名）──────────────────────────
@@ -295,9 +295,9 @@ class FindEmployeeToolTests(unittest.TestCase):
 
     def test_tool_registered(self):
         from tools import get_tool_names, get_tool_definitions
-        self.assertIn("find_employee", get_tool_names())
+        self.assertIn("contact_find", get_tool_names())
         defs = get_tool_definitions()
-        self.assertTrue(any(d["function"]["name"] == "find_employee" for d in defs))
+        self.assertTrue(any(d["function"]["name"] == "contact_find" for d in defs))
 
     def test_execute_invalid_args(self):
         out = json.loads(execute({}))

@@ -3,6 +3,45 @@
 > 📌 **本文档是项目唯一的版本记录（单一事实源）**——README.md、PROGRESS.md 的版本历史均指向本文件，发版时只在这里追加记录。
 > 相关：待办清单见 [TODO.md](TODO.md)，进度看板见 [PROGRESS.md](PROGRESS.md)。
 
+## v1.12.0（2026-08-13）
+
+**🧰 工具板块化重构 + 判定层治本框架**——本次核心是**工具方面的重构与结构调整**：注册中心成为工具唯一事实源（LLM prompt 工具段、流式显示映射、能力清单全部由注册中心自动生成，不再手写）；8 个工具改名带板块前缀（kb/calc/dash/contact/image/doc）；判定层从「正则要么接管要么放行」改为三态（确定性直行 / 歧义交还用户 / 放行），「删除看板订阅」不再被文件删除正则误抢，查询盲区（CQC 3310 等）不补枚举统一走查知识库工具兜底。
+
+### 新增
+
+- **工具板块化（注册中心 = 唯一事实源）**
+  - `@register(DEFINITION, policy, sector, user_desc, display)` 新签名：工具名**只从 `definition["name"]` 读取**（消除定义/注册/import 三处冗余）；旧签名 `@register("name")` 抛 TypeError、缺 name 抛 ValueError 快速失败。
+  - 注册表值改 6 元组；新增 `render_tool_prompt()`（按 `SECTOR_ORDER` + 工具名确定性排序生成 LLM 工具段）/ `get_tool_display_map()`（流式显示映射）/ `get_tool_metadata()`（能力清单元数据）/ `SECTOR_LABELS` 六板块元信息。
+  - agent 加载 prompt 走 `_normalize_prompt_base`：切掉旧工具段（`_TOOL_SECTION_MARKER`）+ 旧名→新名幂等迁移（DB 遗留旧 prompt 读侧修复，不写回）——**工具段永远由注册中心生成**，`system_prompt.txt` 工具说明抽离只留角色/规则。
+  - **8 个工具改名带板块前缀**：`search_knowledge_base→kb_search`、`create_knowledge_base→kb_create`、`manage_uploaded_file→kb_file_manage`、`query_dashboard→dash_query`、`push_dashboard→dash_push`、`find_employee→contact_find`、`describe_image→image_describe`、`summarize_doc→doc_summarize`（calc 两工具保留原名）；文件随名 git mv，全仓引用同步（验证 agent 核对 0 遗漏）。
+- **判定层治本框架（三态化，用户拍板「全面治本」）**
+  - `scripts/routing.py`：`detect_domains(text)` 领域互斥探测（fault / standard / pcb / kanban / file_cmd，惰性 import 防循环依赖）——bot 文件删除/重学正则接管前命中 **kanban** 领域 → **让位**给 dashboard 技能（「删除看板订阅」不再被「删除学习」正则误抢）。
+  - `ask_clarification` 操作歧义澄清：跨领域歧义句（如「删除这个看板的学习」）→ 反问「你是想删除学习内容，还是删除看板订阅？回 1/2 或具体项」，不靠正则瞎猜；确认/取消/选项回复入口接入 bot 统一路由（按 user_id 隔离）。
+  - 三套确认 pending 结构（tools / 入库 / 看板）统一优化记入 TODO.md（本次只做澄清接入，不合并——避免破坏看板/治理既有确认流程）。
+- **查询盲区治本（不补枚举）**：`CQC 3310` 标准号前缀盲区 + 「看板设置是什么」否定词放行，**均不补正则枚举**——查询本属知识库查询，正则快速通道接不住 → 落 agent → LLM 调 `kb_search` / `dash_query` 工具兜底（链路已用测试验证，标准库语义搜索不依赖前缀枚举即命中）。
+- **登记表（能力清单数据源）**：`_BOT_COMMANDS`（12 项 bot 秒回命令登记，含 `removed` 的 sync_review）+ `_INTENT_DEFS`（15 项看板订阅意图登记，`_ALL_INTENTS` 从它派生）——regex 引用 `.pattern` 防触发词漂移。
+- **能力清单生成器**：`scripts/capability_manifest.py` 从注册中心/技能层/bot 命令/看板意图四入口聚合生成 `docs/能力清单.md`（LLM 工具按板块 / 技能层 priority / Bot 命令 / 看板意图 / 已停用残留 5 个 section），`python scripts/capability_manifest.py --write` 一键再生，避免能力表手写滞后。
+
+### 修复
+
+- **「删除看板订阅」「删掉我的看板」被误判成文件删除**：bot `_DELETE_RE` 抢在技能层前拦截看板删除句 → M1 领域互斥让位根治，看板删除归 dashboard 技能确认流程。
+- **测试工具污染全局注册中心**：`test_tool_governance` 注册的 2 个测试工具用 `addCleanup` 立即注销，能力清单/注册中心完整性断言不受污染。
+- **清 `MINERU_TOKEN` 死配置**（`config.py` 全仓无读取，真实读取在 `mineru_extract.load_token`）。
+- **移除 `sync_review` 审核口令残留拦截**（v1.10.2 停用上传审核后遗留的秒回死分支 + import 清理；`knowledge_review.py` 不动，恢复审核时取消注释即可）。
+
+### 测试
+
+- 新增 10 项：register fail-fast（旧签名 TypeError / 缺 name ValueError）、显示映射全覆盖、工具段含 10 工具 + 6 板块 + 确定性、definitions name 与注册 key 恒等、停用守卫（search_standards 不再注册）、**无旧名残留 tripwire**（8 旧名一个不剩）、能力清单完整性（10 工具 / 5 技能 / 15 意图 / enabled 命令 + regex 可编译）、清单 Markdown 5 section 无旧名。
+- 判定层回归：`detect_domains("删除看板订阅")→["kanban"]`、bot 层让位、多领域澄清、查询链路（CQC 3310 经 kb_search 语义命中、「看板设置是什么」落 agent 调 query_dashboard）。
+- 全量回归 **813 项通过**（此前 803 项）。
+
+### 已知限制
+
+- 工具名对 LLM 是内部调用标识（改名不改变能力）；DB 遗留旧 prompt 由读侧 `_TOOL_NAME_MIGRATION` 幂等迁移兜底，不做 DB 回写。
+- 三套确认 pending 结构（工具写操作 / 文件入库 / 看板订阅 + 本次澄清）仍各自为政，靠入口顺序分派——统一「pending 上下文」优化已记 TODO（M3 后续）。
+- 4 个测试文件名沿用旧名（`test_search_knowledge_base.py` / `test_find_employee.py` / `test_describe_image.py` / `test_summarize_doc_tool.py`），内容已全新名，不影响功能。
+- 本次改动需重启服务后生效。
+
 ## v1.11.14（2026-08-13）
 
 **📊 看板格式改版「总体结论先行」+ 上下文窗口扩容**——实测首推暴露两个问题（多文档结论混排、证据行 160 字硬截像没写完）本次根治；同时对话记忆窗口 20→50 轮且取消字数预算；看板模板要求按用户落盘本地文件夹，创建订阅时主动提醒可自定义格式、有旧模板时提醒复用。

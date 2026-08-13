@@ -118,7 +118,7 @@ class RegistryTests(_RegistryBase):
 
 
 class CreateToolTests(_RegistryBase):
-    """create_knowledge_base 工具（mock 注册表单例）"""
+    """kb_create 工具（mock 注册表单例）"""
 
     def setUp(self):
         super().setUp()
@@ -128,10 +128,10 @@ class CreateToolTests(_RegistryBase):
 
     def test_tool_registered(self):
         from tools import get_tool_names
-        self.assertIn("create_knowledge_base", get_tool_names())
+        self.assertIn("kb_create", get_tool_names())
 
     def test_create_ok(self):
-        from tools.create_knowledge_base import execute
+        from tools.kb_create import execute
         r = json.loads(execute({
             "name": "产品手册", "description": "产品说明书", "department": "rd"}))
         self.assertTrue(r["created"])
@@ -140,18 +140,18 @@ class CreateToolTests(_RegistryBase):
         self.assertIn("学到", r["message"])
 
     def test_empty_name(self):
-        from tools.create_knowledge_base import execute
+        from tools.kb_create import execute
         r = json.loads(execute({"name": "  "}))
         self.assertIn("error", r)
 
     def test_invalid_department(self):
-        from tools.create_knowledge_base import execute
+        from tools.kb_create import execute
         r = json.loads(execute({"name": "坏库", "department": "mars"}))
         self.assertIn("error", r)
         self.assertIn("不合法", r["error"])
 
     def test_duplicate(self):
-        from tools.create_knowledge_base import execute
+        from tools.kb_create import execute
         execute({"name": "重复库"})
         r = json.loads(execute({"name": "重复库"}))
         self.assertIn("error", r)

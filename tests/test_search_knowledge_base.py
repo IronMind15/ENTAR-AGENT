@@ -47,17 +47,17 @@ class SearchToolTests(_ToolBase):
     """通用工具 execute：分发 + 合并 + 可见性 + 错误"""
 
     def test_empty_query_error(self):
-        from tools.search_knowledge_base import execute
+        from tools.kb_search import execute
         r = json.loads(execute({"query": "   "}))
         self.assertIn("error", r)
 
     def test_tool_registered(self):
         from tools import get_tool_names
-        self.assertIn("search_knowledge_base", get_tool_names())
+        self.assertIn("kb_search", get_tool_names())
 
     def test_specific_kb_dispatch_to_experience(self):
         """指定「经验知识库」→ 分发到 experience_query.search_kb"""
-        from tools.search_knowledge_base import execute
+        from tools.kb_search import execute
         fake = [{
             "std_title": "经验条目：过温", "_content": "清理风扇",
             "chapter_title": "解决方案", "_score": 0.3, "_match_type": "semantic",
@@ -76,7 +76,7 @@ class SearchToolTests(_ToolBase):
 
     def test_specific_kb_dispatch_to_error_codes(self):
         """指定「故障知识库」→ error_query.search_kb（故障码精确通道）"""
-        from tools.search_knowledge_base import execute
+        from tools.kb_search import execute
         fake = [{
             "name": "急停告警", "fault_code": "d4-1", "fault_reason": "外部急停",
             "_score": 0.0, "_match_type": "exact",
@@ -89,14 +89,14 @@ class SearchToolTests(_ToolBase):
         self.assertIn("d4-1", r["results"][0]["source_label"])
 
     def test_unknown_kb_message(self):
-        from tools.search_knowledge_base import execute
+        from tools.kb_search import execute
         r = json.loads(execute({"query": "x", "knowledge_base": "不存在的库"}))
         self.assertFalse(r["found"])
         self.assertIn("未找到知识库", r["message"])
 
     def test_invisible_department(self):
         """部门权限预留：rd 库对 bz 用户不可见，给出明确提示"""
-        from tools.search_knowledge_base import execute
+        from tools.kb_search import execute
         self.reg.create_knowledge_base("研发库", department="rd")
         with mock.patch("tools.get_user_centers", return_value=["bz"]):
             r = json.loads(execute({"query": "x", "knowledge_base": "研发库"}))
@@ -105,7 +105,7 @@ class SearchToolTests(_ToolBase):
 
     def test_visible_department(self):
         """rd 用户能看到 rd 库并搜索"""
-        from tools.search_knowledge_base import execute
+        from tools.kb_search import execute
         self.reg.create_knowledge_base("研发库", department="rd")
         fake = [{"title": "电路设计", "_content": "xx", "_score": 0.5,
                  "_match_type": "semantic"}]
@@ -118,7 +118,7 @@ class SearchToolTests(_ToolBase):
 
     def test_all_visible_merge_sorted(self):
         """留空 knowledge_base → 全可见库搜，合并去重按 _score 升序"""
-        from tools.search_knowledge_base import execute
+        from tools.kb_search import execute
         err_fake = [{"name": "急停告警", "fault_code": "d4-1",
                      "fault_reason": "外部急停", "_score": 0.1,
                      "_match_type": "exact"}]
@@ -141,7 +141,7 @@ class SearchToolTests(_ToolBase):
         self.assertEqual(results[0]["source_label"].count("d4-1"), 1)
 
     def test_no_results_message(self):
-        from tools.search_knowledge_base import execute
+        from tools.kb_search import execute
         with mock.patch("skills.error_query.search_kb", return_value=[]), \
              mock.patch("skills.standards_query.search_kb", return_value=[]), \
              mock.patch("skills.experience_query.search_kb", return_value=[]):
@@ -151,7 +151,7 @@ class SearchToolTests(_ToolBase):
 
     def test_disabled_kb_not_visible(self):
         """已停用库：指定查询时提示已停用"""
-        from tools.search_knowledge_base import execute
+        from tools.kb_search import execute
         self.reg.create_knowledge_base("停用库")
         kb = self.reg.get_knowledge_base("停用库")
         self.reg.update_knowledge_base(kb["key"], enabled=0)

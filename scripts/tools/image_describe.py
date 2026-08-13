@@ -1,5 +1,5 @@
 """
-工具：describe_image
+工具：image_describe（原 describe_image，v1.12.0 改名）
 识别图片内容 — 把图片发给有视觉能力的模型（阿里云百炼千问 qwen3.7-flash），取回文字描述。
 底层模型（DeepSeek）无原生视觉，收到图片时通过本工具"借看"（参考 claude-vision-skill 思路）。
 """
@@ -53,7 +53,7 @@ def _resolve_image_path(image_path: str) -> str:
 
 
 DEFINITION = {
-    "name": "describe_image",
+    "name": "image_describe",
     "description": (
         "识别图片内容。当用户发送图片并询问图中内容、文字、参数时使用。"
         "image_path 为图片文件路径（绝对路径或上传目录内的文件名，如 image_1.png，"
@@ -126,7 +126,15 @@ def _call_vision(body: dict):
     return None
 
 
-@register("describe_image", DEFINITION)
+@register(
+    DEFINITION,
+    sector="image",
+    display="🖼️ 识别图片内容...",
+    user_desc=(
+        "识别图片内容（视觉大模型）。用户发送图片后，用其文件名即可查询内容描述。\n"
+        "图片由钉钉自动保存到上传目录，传文件名即可。"
+    ),
+)
 def execute(args: dict) -> str:
     """执行图片识别"""
     image_path = (args.get("image_path") or "").strip()

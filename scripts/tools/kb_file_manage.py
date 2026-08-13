@@ -5,7 +5,7 @@ import json
 from tools import get_current_user_id, register
 
 DEFINITION = {
-    "name": "manage_uploaded_file",
+    "name": "kb_file_manage",
     "description": "删除本人上传文件及知识库内容，或强制重新学习文件。两类操作都会先要求用户二次确认。",
     "parameters": {
         "type": "object",
@@ -18,11 +18,20 @@ DEFINITION = {
 }
 
 
-@register("manage_uploaded_file", DEFINITION, policy={
-    "confirm": True,
-    "risk": "delete_or_modify",
-    "summary": "删除上传文件/知识库内容，或强制重新学习并覆盖索引",
-})
+@register(
+    DEFINITION,
+    policy={
+        "confirm": True,
+        "risk": "delete_or_modify",
+        "summary": "删除上传文件/知识库内容，或强制重新学习并覆盖索引",
+    },
+    sector="kb",
+    display="🗂️ 管理上传文件...",
+    user_desc=(
+        "管理用户上传的文件：删除（action=delete，同时删源文件与知识库内容）、"
+        "重新学习（action=relearn，强制覆盖索引）。用户说「删除学习 X」「重新学习 X」时使用。"
+    ),
+)
 def execute(args: dict) -> str:
     from knowledge_review import delete_file_for_user, relearn_file_for_user
 

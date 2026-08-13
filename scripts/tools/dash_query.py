@@ -5,7 +5,7 @@ import json
 from tools import register
 
 DEFINITION = {
-    "name": "query_dashboard",
+    "name": "dash_query",
     "description": (
         "实时查询当前已登记的企业项目看板数据，自动适配新增、删除或更换的数据源，"
         "返回 Markdown 看板正文。用于回答『今天看板怎么样』『现在有哪些滞后项目/故障问题』等。"
@@ -17,7 +17,16 @@ DEFINITION = {
 }
 
 
-@register("query_dashboard", DEFINITION)
+@register(
+    DEFINITION,
+    sector="dash",
+    display="📊 查询项目看板...",
+    user_desc=(
+        "实时查询项目看板。用户问：今天看板怎么样、现在有哪些滞后项目/故障问题、"
+        "项目进展如何。\n"
+        "调用后把返回的 Markdown 看板内容展示给用户。"
+    ),
+)
 def execute(args: dict) -> str:
     from dashboard import service
     from tools import get_current_user_id

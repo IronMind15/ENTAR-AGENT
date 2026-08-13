@@ -1,7 +1,7 @@
 """
 RAG Agent 技能 — 大模型 + 知识库搜索工具
 
-当问题与故障相关时，LLM 主动调用 search_knowledge_base 工具检索本地知识库，
+当问题与故障相关时，LLM 主动调用 kb_search 工具检索本地知识库，
 结合检索结果进行推理和回答。非故障问题直接聊天，无需搜索。
 
 使用 DeepSeek API 的 function calling（tools 参数）实现原生工具调用。
@@ -24,7 +24,8 @@ import httpx
 from config import (DEEPSEEK_API_KEY, MAX_CONCURRENT_LLM,
                     MAX_CONTEXT_ROUNDS, KEEP_CONTEXT_ROUNDS)
 from skills import BaseSkill, register
-from tools import get_tool_definitions, execute_tool as _execute_registered_tool
+from tools import (get_tool_definitions, execute_tool as _execute_registered_tool,
+                   get_tool_display_map, render_tool_prompt)
 
 logger = logging.getLogger("agent")
 
@@ -60,30 +61,65 @@ def _with_operation_policy(content: str) -> str:
     return content if _OPERATION_POLICY_PROMPT in content else content + "\n\n" + _OPERATION_POLICY_PROMPT
 
 
+# ===== 工具段归一化（v1.12.0：工具段永远由注册中心生成） =====
+# 旧版 system prompt 里手写的工具段没有这个标记，无法定位删除；
+# 新版统一追加 _TOOL_SECTION_MARKER 包裹的注册中心生成段，读侧按标记切掉旧段。
+_TOOL_SECTION_MARKER = "===== 工具能力（由注册中心自动生成，勿手动编辑）====="
+
+# 旧工具名 → 新工具名（v1.12.0 改名映射，读侧幂等 replace）。
+# 用于归一化 DB 里遗留的旧 prompt：工具段会被强制生成覆盖，规则段里残留的旧名
+# 靠本表换新，避免与注册中心实际注册名（新名）不一致。幂等：新名里不会含旧名。
+_TOOL_NAME_MIGRATION = {
+    "search_knowledge_base": "kb_search",
+    "create_knowledge_base": "kb_create",
+    "manage_uploaded_file": "kb_file_manage",
+    "query_dashboard": "dash_query",
+    "push_dashboard": "dash_push",
+    "find_employee": "contact_find",
+    "describe_image": "image_describe",
+    "summarize_doc": "doc_summarize",
+}
+
+
+def _normalize_prompt_base(raw: str) -> str:
+    """归一化 prompt 基础段：丢弃旧工具段 + 旧工具名换新（幂等）。"""
+    text = raw.split(_TOOL_SECTION_MARKER)[0].strip()
+    for old, new in _TOOL_NAME_MIGRATION.items():
+        text = text.replace(old, new)
+    return text
+
+
 def _load_system_prompt() -> str:
-    """加载 system prompt：优先从 DB 读取 → 回退到文件 → 缓存到内存"""
+    """加载 system prompt：优先从 DB 读取 → 回退到文件 → 归一化 → 追加注册中心工具段 → 缓存
+
+    v1.12.0：prompt = 归一化基础段（角色/规则，含旧名迁移）+ 注册中心生成的工具段。
+    工具段永远由注册中心生成，DB/文件里任何旧工具段都会被 _normalize_prompt_base 丢弃。
+    """
     global _prompt_cache
     if "system" in _prompt_cache:
         return _prompt_cache["system"]
 
-    # 优先从 DB 读取
+    # 优先从 DB 读取基础段
+    base = ""
     try:
         from user_store import get_prompt
         db_prompt = get_prompt("system")
         if db_prompt:
-            _prompt_cache["system"] = db_prompt
-            return db_prompt
+            base = db_prompt
     except Exception as e:
         logger.debug(f"从 DB 加载 prompt 失败（回退到文件）: {e}")
 
     # 回退到文件
-    try:
-        with open(_PROMPT_FILE, "r", encoding="utf-8") as f:
-            content = f.read().strip()
-    except FileNotFoundError:
-        logger.warning(f"System prompt 文件不存在: {_PROMPT_FILE}，使用默认提示词")
-        content = "你是恩特小助手，恩特能源内部使用的 AI 助手。"
+    if not base:
+        try:
+            with open(_PROMPT_FILE, "r", encoding="utf-8") as f:
+                base = f.read()
+        except FileNotFoundError:
+            logger.warning(f"System prompt 文件不存在: {_PROMPT_FILE}，使用默认提示词")
+            base = "你是恩特小助手，恩特能源内部使用的 AI 助手。"
 
+    base = _normalize_prompt_base(base)
+    content = (base + "\n\n" + render_tool_prompt()).strip()
     _prompt_cache["system"] = content
     return content
 
@@ -314,16 +350,9 @@ def _call_deepseek_stream(
                                 # 不等参数累积完，减少用户感知空白期
                                 if idx not in final_tool_calls and on_chunk:
                                     fn_name = tc.get("function", {}).get("name", "")
-                                    _TOOL_DISPLAY = {
-                                        "search_knowledge_base": "🔍 搜索知识库...",
-                                        "calc_pcb_trace": "🔧 PCB 走线计算...",
-                                        "calc_copper_busbar": "🔧 铜排载流计算...",
-                                        "find_employee": "👥 查询同事信息...",
-                                        "describe_image": "🖼️ 识别图片内容...",
-                                        "query_dashboard": "📊 查询项目看板...",
-                                        "push_dashboard": "📊 推送项目看板...",
-                                    }
-                                    display = _TOOL_DISPLAY.get(fn_name, f"🔍 {fn_name}...")
+                                    # v1.12.0：显示映射由注册中心生成（display 字段），
+                                    # 不再在本文件手写清单
+                                    display = get_tool_display_map().get(fn_name, f"🔍 {fn_name}...")
                                     on_chunk(display, "tool_call")
                                 if idx not in final_tool_calls:
                                     final_tool_calls[idx] = {

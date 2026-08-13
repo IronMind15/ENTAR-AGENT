@@ -1,4 +1,4 @@
-"""钉钉文档总结工具（v1.11.3）— 总结用户最近发来的钉钉文档，可选主动推回本人
+"""钉钉文档总结工具（v1.11.3，v1.12.0 改名 doc_summarize）— 总结用户最近发来的钉钉文档，可选主动推回本人
 
 定位候选（doc_candidates）→ 全读（summary=False 走翻页/5000 块）→
 转 Markdown → call_deepseek 总结 → （可选）主动推回用户本人。
@@ -10,10 +10,10 @@ import logging
 
 from tools import register
 
-logger = logging.getLogger("tools.summarize_doc")
+logger = logging.getLogger("tools.doc_summarize")
 
 DEFINITION = {
-    "name": "summarize_doc",
+    "name": "doc_summarize",
     "description": (
         "总结用户最近发来的钉钉文档（AI表格/在线表格/普通文档）要点。"
         "用户要求『帮我总结刚发的文档』『总结成推送』时使用。"
@@ -38,11 +38,20 @@ DEFINITION = {
 }
 
 
-@register("summarize_doc", DEFINITION, policy={
-    "confirm": lambda args: bool(args.get("push_to_self")),
-    "risk": "external_send",
-    "summary": "总结文档并主动推送到用户钉钉单聊",
-})
+@register(
+    DEFINITION,
+    policy={
+        "confirm": lambda args: bool(args.get("push_to_self")),
+        "risk": "external_send",
+        "summary": "总结文档并主动推送到用户钉钉单聊",
+    },
+    sector="doc",
+    display="📄 总结文档...",
+    user_desc=(
+        "总结钉钉文档内容；push_to_self=True 时主动推送到用户单聊"
+        "（写操作，确认后执行）。"
+    ),
+)
 def execute(args: dict) -> str:
     try:
         from tools import get_current_staff_id, get_current_user_id
@@ -128,5 +137,5 @@ def execute(args: dict) -> str:
              "doc_name": doc_name, "pushed": False},
             ensure_ascii=False)
     except Exception as e:
-        logger.exception(f"summarize_doc 执行异常: {e}")
+        logger.exception(f"doc_summarize 执行异常: {e}")
         return json.dumps({"error": f"总结失败：{e}"}, ensure_ascii=False)

@@ -70,30 +70,60 @@ def get_current_user_id() -> str:
     return _current_user_id.get()
 
 
-# ===== 注册中心 =====
-# {(name, definition, handler)}
-_tool_registry: dict[str, tuple[dict, Callable[[dict], str], dict]] = {}
+# ===== 注册中心（v1.12.0：工具唯一事实源） =====
+# 值：6 元组 (definition, handler, policy, sector, user_desc, display)
+_tool_registry: dict[str, tuple[dict, Callable[[dict], str], dict, str, str, str]] = {}
 _pending_operations: dict[str, dict] = {}
 _pending_lock = threading.RLock()
 _PENDING_TTL = 10 * 60
 
+# 板块元信息（render_tool_prompt / 能力清单用）
+SECTOR_ORDER = ("kb", "calc", "dash", "contact", "image", "doc")
+SECTOR_LABELS = {
+    "kb": "📚 知识库",
+    "calc": "🧮 计算",
+    "dash": "📊 项目看板",
+    "contact": "👥 通讯录",
+    "image": "🖼️ 图片",
+    "doc": "📄 文档",
+}
 
-def register(name: str, definition: dict, policy: dict | None = None) -> Callable:
-    """装饰器：注册工具
+# system prompt 工具段标记：agent._normalize_prompt_base 用它切掉旧工具段，
+# 保证「工具段永远由注册中心生成」（v1.12.0）
+_TOOL_SECTION_MARKER = "===== 工具能力（由注册中心自动生成，勿手动编辑）====="
+
+
+def register(definition: dict, policy: dict | None = None, *,
+             sector: str = "", user_desc: str = "", display: str = "") -> Callable:
+    """装饰器：注册工具（v1.12.0：name 只从 definition["name"] 读取）
 
     Args:
-        name: 工具名称（与 LLM function calling 的 name 一致）
-        definition: 工具定义 dict（不含外层 {"type":"function","function":...} 壳）
+        definition: 工具定义 dict（须含 "name"；不含外层 {"type":"function",...} 壳）
+        policy: 操作治理策略 {confirm, risk, summary}
+        sector: 板块 key（见 SECTOR_LABELS，如 "kb"/"calc"）
+        user_desc: 给 LLM 看的工具说明（多行文本，render_tool_prompt 生成工具段）
+        display: 流式/展示名（如 "🔍 搜索知识库..."，agent 流式显示映射）
 
-    用法:
-        @register("search_foo", {"name": "search_foo", "description": "...", "parameters": {...}})
+    用法（v1.12.0）:
+        @register(DEFINITION, sector="kb", display="🔍 搜索知识库...",
+                  user_desc="...")
         def execute(args: dict) -> str:
             ...
     """
+    if isinstance(definition, str):
+        raise TypeError(
+            "register 旧签名已废弃：请改 @register(DEFINITION, policy=..., "
+            "sector=..., display=..., user_desc=...)，"
+            "name 只从 definition['name'] 读取。")
+    name = (definition or {}).get("name") or ""
+    if not name:
+        raise ValueError("register 要求 definition 包含 'name' 字段")
+
     def wrapper(func: Callable[[dict], str]) -> Callable:
         if name in _tool_registry:
             logger.warning(f"工具 [{name}] 重复注册，覆盖旧定义")
-        _tool_registry[name] = (definition, func, dict(policy or {}))
+        _tool_registry[name] = (definition, func, dict(policy or {}),
+                                sector, user_desc or "", display or "")
         return func
     return wrapper
 
@@ -102,8 +132,66 @@ def get_tool_definitions() -> list[dict]:
     """获取所有工具定义列表（供 DeepSeek API 的 tools 参数使用）"""
     return [
         {"type": "function", "function": defn}
-        for defn, _, _ in _tool_registry.values()
+        for defn, *_ in _tool_registry.values()
     ]
+
+
+def get_tool_registry() -> dict:
+    """只读工具注册表视图（v1.12.0，供能力清单/元数据消费）"""
+    return dict(_tool_registry)
+
+
+def get_tool_display_map() -> dict[str, str]:
+    """流式显示映射（v1.12.0：由注册中心生成，agent 不再手写 _TOOL_DISPLAY）"""
+    return {name: (entry[5] or f"🔍 {name}...")
+            for name, entry in _tool_registry.items()}
+
+
+def get_tool_metadata() -> list[dict]:
+    """全部工具的结构化元数据（v1.12.0，供 render_tool_prompt / 能力清单）"""
+    return [
+        {
+            "name": name,
+            "sector": entry[3],
+            "policy": entry[2],
+            "confirm": bool((entry[2] or {}).get("confirm")),
+            "description": (entry[0] or {}).get("description", ""),
+            "display": entry[5],
+            "user_desc": entry[4],
+        }
+        for name, entry in _tool_registry.items()
+    ]
+
+
+def render_tool_prompt() -> str:
+    """生成 LLM system prompt 的工具段（v1.12.0：由注册中心自动生成）。
+
+    按 SECTOR_ORDER + 工具名排序确定性输出（防前缀缓存抖动）；
+    confirm 工具加「需二次确认」提示行。
+    """
+    by_sector: dict[str, list[dict]] = {}
+    for meta in get_tool_metadata():
+        by_sector.setdefault(meta["sector"] or "_", []).append(meta)
+
+    lines = [_TOOL_SECTION_MARKER]
+    for sector in SECTOR_ORDER:
+        metas = by_sector.get(sector)
+        if not metas:
+            continue
+        metas.sort(key=lambda m: m["name"])
+        lines.append(f"【{SECTOR_LABELS.get(sector, sector)}】")
+        for i, meta in enumerate(metas, 1):
+            head = f"{i}. {meta['name']}"
+            if meta["display"]:
+                head += f"（{meta['display']}）"
+            if meta["confirm"]:
+                head += "（写操作：执行前须用户确认）"
+            lines.append(head)
+            for line in (meta["user_desc"] or "").splitlines():
+                line = line.strip()
+                if line:
+                    lines.append(f"   - {line}")
+    return "\n".join(lines)
 
 
 def get_tool_names() -> list[str]:
@@ -125,7 +213,7 @@ def execute_tool(name: str, args: dict) -> str:
     if not entry:
         logger.warning(f"未知工具调用: {name}")
         return json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False)
-    definition, handler, policy = entry
+    definition, handler, policy, *_ = entry
 
     require = policy.get("confirm", False)
     if callable(require):
@@ -179,7 +267,7 @@ def confirm_pending_operation(user_id: str) -> str:
     if not entry:
         cancel_pending_operation(user_id)
         return json.dumps({"error": "待确认工具已不可用"}, ensure_ascii=False)
-    _, handler, _ = entry
+    _, handler, *_ = entry
     try:
         result = handler(pending["args"])
     except Exception as exc:
@@ -191,14 +279,15 @@ def confirm_pending_operation(user_id: str) -> str:
 
 # ===== 自动导入工具模块（确保 @register 装饰器执行） =====
 # 注：search_standards / search_experience_kb 两个旧查询工具 v1.11.5 起不再注册，
-# 统一由 search_knowledge_base（通用查询，可按知识库选择）替代，文件保留作参考。
-from . import search_knowledge_base  # noqa: E402, F811 — 通用知识库查询（v1.11.5 多库）
-from . import create_knowledge_base  # noqa: E402, F811 — 创建知识库（v1.11.5 多库）
-from . import calc_pcb_trace         # noqa: E402, F811 — PCB 走线计算（IPC-2221）
-from . import calc_copper_busbar     # noqa: E402, F811 — 铜排/母线载流（v1.6.0）
-from . import find_employee          # noqa: E402, F811 — 钉钉通讯录员工查询（v1.7.0）
-from . import describe_image         # noqa: E402, F811 — 图片识别（千问视觉，v1.10.0）
-from . import query_dashboard        # noqa: E402, F811 — 看板实时查询（v1.11.0）
-from . import push_dashboard         # noqa: E402, F811 — 看板主动推送（v1.11.0）
-from . import summarize_doc          # noqa: E402, F811 — 钉钉文档总结（v1.11.3）
-from . import manage_uploaded_file   # noqa: E402, F811 — 文件删除/重学（统一二次确认）
+# 统一由 kb_search（通用查询，可按知识库选择）替代，文件保留作参考。
+# 注：v1.12.0 工具名带板块前缀（kb/calc/dash/contact/image/doc），文件随名 rename。
+from . import kb_search          # noqa: E402, F811 — 通用知识库查询（v1.11.5 多库，v1.12.0 改名）
+from . import kb_create          # noqa: E402, F811 — 创建知识库（v1.11.5 多库，v1.12.0 改名）
+from . import calc_pcb_trace     # noqa: E402, F811 — PCB 走线计算（IPC-2221）
+from . import calc_copper_busbar # noqa: E402, F811 — 铜排/母线载流（v1.6.0）
+from . import contact_find       # noqa: E402, F811 — 钉钉通讯录员工查询（v1.7.0，v1.12.0 改名）
+from . import image_describe     # noqa: E402, F811 — 图片识别（千问视觉，v1.10.0，v1.12.0 改名）
+from . import dash_query         # noqa: E402, F811 — 看板实时查询（v1.11.0，v1.12.0 改名）
+from . import dash_push          # noqa: E402, F811 — 看板主动推送（v1.11.0，v1.12.0 改名）
+from . import doc_summarize      # noqa: E402, F811 — 钉钉文档总结（v1.11.3，v1.12.0 改名）
+from . import kb_file_manage     # noqa: E402, F811 — 文件删除/重学（统一二次确认，v1.12.0 改名）

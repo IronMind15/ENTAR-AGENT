@@ -15,7 +15,7 @@
 
 恩特能源（天津恩特能源科技有限公司，Tianjin Entar Energy Technology Co., Ltd.，品牌 ENTAR）AI Agent 项目。目标是搭建面向中小企业的 AI Agent 全生命周期管理平台。
 
-### 当前进度：三步走计划 — 第一步稳定化 + 第二步经验知识库启动（v1.11.9）
+### 当前进度：三步走计划 — 第一步稳定化 + 第二步经验知识库启动（v1.12.0）
 
 **第一步：智能查询 + 标准文档检索 + 通用聊天 + 多技能（故障/标准/PCB 计算）——核心能力已完成，正在做真实环境验收与安全收尾**
 - 基于 RAG（检索增强生成）架构的内部工具
@@ -37,13 +37,15 @@
 - ✅ 实测修复包（v1.11.2）：一次发多个文档链接不再丢（`urls[:5]` 放宽）；卡片/富文本消息也能识别「做每日看板」意图（`_handle_doc_link_with_kanban` 合并文档摘要 + 看板创建确认，接入文本/富文本/卡片三处路由）；「帮我学习」说明加强——入库进哪个库（企业知识库·标准文档库）、怎么检索（自然语言命中示例）、看板不受影响（实时拉取不进库），入库成功提示补块数/记录数/「我的文件」入口
 - ✅ 上传文件自动推荐入库（v1.11.0）：保存后回执主动推荐「要不要入库？回复『入库/确认』」→ 按路径入库（learn_file_path）；图片不支持不推荐
 - ✅ 多知识库注册表（v1.11.5）：SQLite 表 `knowledge_bases`（key/name/description/collection/department/enabled）注册管理，种子故障/标准/经验三库；钉钉自然语言创建（「创建知识库，名字叫产品手册，用来放产品说明书，研发部」）；「把这个文档学到XX」学习入库指定库（target_collection/department 从 KB 继承）；`department` 字段为分部门开权限预留（`get_visible_knowledge_bases` 按 centers 过滤，现全 public 不拦截）
-- ✅ 通用知识库查询工具（v1.11.5）：`search_knowledge_base(query, knowledge_base="")` 一个工具替代旧 3 个——指定库按 collection 分发（故障码精确/标准编号精确/经验语义/自定义 enhanced_query + department where 过滤），留空自动全可见库合并搜索，每条带 kb_name + source_label；旧 search_standards/search_experience_kb 文件保留不再注册（10→9 工具）
-- ✅ 工具操作治理（v1.11.8）：工具注册支持 `policy`；查询/计算/识别等只读操作可直接执行，创建、删除、修改、启停、主动外发等写操作先冻结工具名和参数并要求用户再次确认；确认后以真实 handler 返回值决定成功/失败，禁止 LLM 把“准备执行”说成“已经执行”。覆盖创建知识库、主动推看板、总结后外发、上传文件删除/重学，以及看板订阅管理。
+- ✅ 通用知识库查询工具（v1.11.5）：`kb_search(query, knowledge_base="")` 一个工具替代旧 3 个——指定库按 collection 分发（故障码精确/标准编号精确/经验语义/自定义 enhanced_query + department where 过滤），留空自动全可见库合并搜索，每条带 kb_name + source_label；旧 search_standards/search_experience_kb 文件保留不再注册（10→9 工具）
+- ✅ 工具操作治理（v1.11.8）：工具注册支持 `policy`；查询/计算/识别等只读操作可直接执行，创建、删除、修改、启停、主动外发等写操作先冻结工具名和参数并要求用户再次确认；确认后以真实 handler 返回值决定成功/失败，禁止 LLM 把”准备执行”说成”已经执行”。覆盖创建知识库、主动推看板、总结后外发、上传文件删除/重学，以及看板订阅管理。
+- ✅ 工具板块化重构（v1.12.0）：注册中心成为工具唯一事实源——LLM prompt 工具段（`render_tool_prompt`）、流式显示映射（`get_tool_display_map`）、能力清单（`capability_manifest.py --write` → docs/能力清单.md）全部由注册中心生成，不再手写；8 个工具改名带板块前缀（`search_knowledge_base→kb_search` 等，旧名读侧幂等迁移兜底 DB 遗留）；`system_prompt.txt` 工具段抽离只留角色/规则；10 个新工具名无旧名残留（tripwire 测试守卫）。
+- ✅ 判定层治本框架（v1.12.0）：`scripts/routing.py` 三态判定（确定性直行/歧义交还用户/放行）——领域互斥让位（bot 删除学习正则接管前命中 kanban → 让位给看板技能，「删除看板订阅」不再被误抢）+ 操作歧义澄清（跨领域歧义句反问「回 1/2 或具体项」）+ 查询盲区不补枚举（CQC 3310 等落 LLM 走 `kb_search` 工具兜底）。三套确认 pending 结构统一优化已记 TODO（M3 后续）。
 - ✅ SQLite 用户、对话和权限存储（v1.2.4）
 - ✅ Web 同步管理、强制重学和任务进度追踪（v1.2.5）
 - ✅ SHA-256 内容指纹、安全版本替换和 MinerU 安全加固（v1.2.6）
 - ⏸️ 上传审核流程（v1.10.2 已停用）：固定审核人主动推送与审批口令代码保留注释，未来恢复部门划分与审核时取消 `queue_review_for_upload` 注释即可
-- ✅ 711 项自动化回归测试（含 65 项 PCB 计算 + 文档处理/版本替换/并发/路由/通讯录/反馈/Prompt/引用溯源/识图/PDF 路由 + 看板全量证据链、字段变化检测、自然确认与真实删除、重复订阅识别和调度抑制、真实标题、表格安全降级、语义分页 + 通用工具二次确认 + v1.11.9 审查修复 5 项回归）
+- ✅ 813 项自动化回归测试（含 65 项 PCB 计算 + 文档处理/版本替换/并发/路由/通讯录/反馈/Prompt/引用溯源/识图/PDF 路由 + 看板全量证据链、字段变化检测、自然确认与真实删除、重复订阅识别和调度抑制、真实标题、表格安全降级、语义分页 + 通用工具二次确认 + v1.11.9 审查修复 5 项回归 + v1.12.0 注册中心 tripwire/能力清单完整性/判定层领域让位与查询链路）
 - ✅ 局域网共享（防火墙放行端口 8000）
 - ✅ 同事实测通过
 - ⚠️ v1.4.1 尚未在正式知识库、真实 MinerU 和钉钉生产环境完成端到端回归
@@ -99,21 +101,27 @@ D:\ENTAR_AGENT\
 │   │   │   └── fallback.py                      #    滑动窗口回退
 │   │   └── extractors/                          #    文本提取（Excel + PyMuPDF）
 │   ├── kb_registry.py                           # 🆕 知识库注册表（v1.11.5：SQLite 表 + 部门可见性）
+│   ├── routing.py                               # 🆕 判定层（v1.12.0）：detect_domains 领域互斥 + ask_clarification 歧义澄清
+│   ├── capability_manifest.py                   # 🆕 能力清单生成器（v1.12.0）：注册中心/技能/登记表 → docs/能力清单.md
 │   ├── dashboard/                               # 📊 动态看板核心（采集/解析/证据链/订阅/推送）
 │   │   ├── collector.py, parser.py              #    全动态数据采集 + 完整非敏感字段解析
 │   │   ├── alerts.py, llm_pipeline.py           #    字段级变化 + DeepSeek map/reduce/证据校验/分页
 │   │   ├── subscription_store.py                #    订阅持久化、指纹与重复识别
 │   │   └── service.py, assembler.py             #    服务编排 + 钉钉 Markdown 安全渲染
-│   ├── tools/                                   # 🆕 工具注册中心（v1.2.7）
-│   │   ├── __init__.py                          #    @register 注册/分发 + v1.11.8 写操作二次确认
-│   │   ├── search_knowledge_base.py             # 🆕 通用知识库查询（v1.11.5：指定库分发/全库合并）
-│   │   ├── create_knowledge_base.py             # 🆕 钉钉自然语言创建知识库（二次确认）
-│   │   ├── query_dashboard.py, push_dashboard.py#    看板查询/主动推送（主动推送二次确认）
-│   │   ├── summarize_doc.py                     #    文档总结（外发时二次确认）
-│   │   ├── manage_uploaded_file.py              #    上传文件删除/重学（二次确认）
-│   │   ├── calc_pcb_trace.py                    #    PCB 走线计算工具（IPC-2221）
-│   │   ├── search_standards.py                  # ⚠️ 已停用注册（v1.11.5 由通用工具替代，文件保留）
-│   │   └── search_experience_kb.py              # ⚠️ 已停用注册（v1.11.5 由通用工具替代，文件保留）
+│   ├── tools/                                   # 🆕 工具注册中心（v1.2.7，v1.12.0 板块化唯一事实源）
+│   │   ├── __init__.py                          #    @register(definition, policy, sector, user_desc, display) 注册/分发 + 写操作二次确认 + render_tool_prompt/get_tool_display_map/get_tool_metadata
+│   │   ├── kb_search.py             # 📚 通用知识库查询（v1.11.5：指定库分发/全库合并）
+│   │   ├── kb_create.py             # 📚 钉钉自然语言创建知识库（二次确认）
+│   │   ├── kb_file_manage.py        # 📚 上传文件删除/重学（二次确认）
+│   │   ├── calc_pcb_trace.py        # 🧮 PCB 走线计算工具（IPC-2221）
+│   │   ├── calc_copper_busbar.py    # 🧮 铜排/母线载流计算（v1.6.0）
+│   │   ├── dash_query.py            # 📊 看板实时查询（保留来源链接）
+│   │   ├── dash_push.py             # 📊 看板主动推送（二次确认）
+│   │   ├── contact_find.py          # 👥 钉钉通讯录员工查询（v1.7.0）
+│   │   ├── image_describe.py        # 🖼️ 图片识别（qwen3.7-flash 视觉，v1.10.0）
+│   │   ├── doc_summarize.py         # 📄 文档总结（条件外发确认）
+│   │   ├── search_standards.py      # ⚠️ 已停用注册（v1.11.5 由 kb_search 替代，文件保留）
+│   │   └── search_experience_kb.py  # ⚠️ 已停用注册（v1.11.5 由 kb_search 替代，文件保留）
 │   └── skills/
 │       ├── __init__.py
 │       ├── agent.py                             # 🤖 Agent 循环路由（聊天托底）
@@ -138,6 +146,8 @@ D:\ENTAR_AGENT\
 │   ├── git-commands.md                           # Git 常用命令备忘
 │   ├── tech-stack-overview.md                    # 技术栈概览
 │   ├── AI_Agent_Workflow_Research_Report.md     # 深度调研报告
+│   ├── 能力清单.md                               # 🆕 能力快照（v1.12.0：capability_manifest.py --write 自动生成）
+│   ├── 20260813-意图识别验证报告.md               # 🆕 LLM 意图识别验证（v1.12.0 判定层决策依据）
 │   └── error_query_README_旧版归档.md           # 旧版 README（历史参考）
 │
 ├── deploy/                                      # 🐳 Docker 部署配置
@@ -154,13 +164,15 @@ D:\ENTAR_AGENT\
 浏览器 / 钉钉单聊
         │
         ▼
-FastAPI (main.py) → Agent 循环（agent.py）
+FastAPI (main.py) → 判定层 routing.py（领域互斥/歧义澄清）→ Agent 循环（agent.py）
         ├─ 精确故障代码 / 标准编号 → 快速通道（不调 LLM）
+        ├─ bot 秒回正则命令（_BOT_COMMANDS 登记表）
         └─ 其他问题 → DeepSeek Function Calling
-                       ├─ tools/ 工具注册中心
-                       │     ├─ search_knowledge_base（故障知识库）
-                       │     ├─ search_standards（标准知识库）
-                       │     └─ calc_pcb_trace（PCB 走线计算）
+                       ├─ tools/ 工具注册中心（板块化，v1.12.0）
+                       │     ├─ kb_search（故障/标准/经验统一查询）
+                       │     ├─ calc_pcb_trace / calc_copper_busbar（计算）
+                       │     ├─ dash_query / contact_find / image_describe
+                       │     └─ kb_create / dash_push / doc_summarize（写操作二次确认）
                        ├─ 技能：pcb_calc（54 类 PCB 计算器）
                        ├─ 增强检索 enhanced_search
                        │     ├─ 向量 + BM25 双路召回 → RRF 融合
@@ -246,17 +258,19 @@ FastAPI (main.py) → Agent 循环（agent.py）
 | Web 框架 | FastAPI | Web 页面 + HTTP API 入口（/admin 挂载） |
 | 钉钉 SDK | dingtalk-stream | Stream 模式，WebSocket 长连接，无需公网 IP |
 | Agent 路由 | agent.py | 统一 Agent 循环：路由、聊天托底、记忆管理 |
-| 工具注册与操作治理 | tools/ | `@register` 装饰器注册，新增工具无需改 agent.py；v1.11.5 查询工具收敛为通用 `search_knowledge_base`；v1.11.8 注册策略区分只读与写操作，写操作生成 10 分钟待确认状态，确认后执行冻结参数并按真实工具结果回报 |
-| 知识库注册表 | kb_registry.py（v1.11.5） | SQLite 表 `knowledge_bases`（key/name/description/collection/department/enabled）注册管理，种子三库（故障/标准/经验）；钉钉自然语言创建（tools/create_knowledge_base.py）；「把这个文档学到XX」学习入库指定库；`department` 字段 + `get_visible_knowledge_bases(centers)` 分部门开权限预留（现全 public 不拦截） |
-| 通用知识库查询 | tools/search_knowledge_base.py（v1.11.5） | `search_knowledge_base(query, knowledge_base="")` 指定库按 collection 分发（故障码精确/标准编号精确/经验语义/自定义 enhanced_query + department where 过滤），留空自动全可见库合并搜索，每条带 kb_name + source_label；旧 search_standards / search_experience_kb 文件保留不再注册 |
+| 工具注册与操作治理 | tools/ | `@register(DEFINITION, policy, sector, user_desc, display)` 装饰器注册（v1.12.0：name 只从 definition 读，旧签名 TypeError/缺 name ValueError 快速失败），新增工具无需改 agent.py；v1.11.5 查询工具收敛为通用 `kb_search`；v1.11.8 注册策略区分只读与写操作，写操作生成 10 分钟待确认状态，确认后执行冻结参数并按真实工具结果回报；v1.12.0 注册中心成为唯一事实源（prompt 工具段/流式显示/能力清单自动生成），10 工具带板块前缀（kb/calc/dash/contact/image/doc） |
+| 知识库注册表 | kb_registry.py（v1.11.5） | SQLite 表 `knowledge_bases`（key/name/description/collection/department/enabled）注册管理，种子三库（故障/标准/经验）；钉钉自然语言创建（tools/kb_create.py）；「把这个文档学到XX」学习入库指定库；`department` 字段 + `get_visible_knowledge_bases(centers)` 分部门开权限预留（现全 public 不拦截） |
+| 判定层治本框架 | routing.py（v1.12.0） | `detect_domains` 领域互斥探测（fault/standard/pcb/kanban/file_cmd，惰性 import 防循环依赖）——bot 文件删除/重学正则接管前命中 kanban → 让位给看板技能；`ask_clarification` 操作歧义澄清（跨领域歧义句反问交还用户，按 user_id 隔离）；查询盲区（CQC 3310 等）不补枚举，落 agent 走 `kb_search`/`dash_query` 工具兜底 |
+| 能力清单 | capability_manifest.py（v1.12.0） | 从注册中心/技能层/bot 命令登记表/看板意图登记表聚合生成 docs/能力清单.md（5 section），`python scripts/capability_manifest.py --write` 一键再生；bot 命令 `_BOT_COMMANDS`（12 项含 removed）+ 看板意图 `_INTENT_DEFS`（15 项）为数据源，regex 引用 `.pattern` 防触发词漂移 |
+| 通用知识库查询 | tools/kb_search.py（v1.11.5） | `kb_search(query, knowledge_base="")` 指定库按 collection 分发（故障码精确/标准编号精确/经验语义/自定义 enhanced_query + department where 过滤），留空自动全可见库合并搜索，每条带 kb_name + source_label；旧 search_standards / search_experience_kb 文件保留不再注册 |
 | 标准查询 | standards_query.py | 标准文档检索工具（含标准编号快速通道 v1.2.3） |
 | 增强检索 | enhanced_search.py | 向量 + BM25 双路召回 RRF 融合 + bge-reranker 重排（v1.3.0） |
 | PCB 计算 | pcb_calc.py + tools/calc_pcb_trace.py | 54 类 PCB 计算器，全本地秒回（v1.5.4 以 pcb-tools.cn 为基准） |
 | 文件接收 | file_handler.py | 钉钉文件/图片接收 → 自动下载保存到 data/uploads/ |
-| 识图能力 | describe_image.py + qwen3.7-flash | 钉钉发图自动识别描述（视觉外挂，v1.10.0）；tools/ 注册 + Claude Code vision skill；magic bytes + 路径白名单 + 5xx 重试 |
+| 识图能力 | image_describe.py + qwen3.7-flash | 钉钉发图自动识别描述（视觉外挂，v1.10.0）；tools/ 注册 + Claude Code vision skill；magic bytes + 路径白名单 + 5xx 重试 |
 | 上传直接学习 | knowledge_review.py + dingtalk_notifier.py + file_handler.py | ⏸️ 审核已停用（v1.10.2）：上传→回「帮我学习」直接入库；「我的文件」查看；v1.11.8 删除/重新学习改为二次确认；`ENTARBOSS` 管理员模式保留；旧审核代码可恢复 |
 | 崩溃恢复 | doc_mgr/recovery.py | 启动时清理/恢复遗留 staging/retired 版本数据 |
-| 自动化测试 | unittest | 711 项通过；覆盖文档引擎、同步追踪、PCB、安全/版本替换、并发路由、通讯录、反馈/Prompt/引用、识图、PDF 路由、看板完整证据链/变化优先/真实标题/安全渲染/语义分页/重复调度、通用工具二次确认，以及 v1.11.9 审查修复 5 项回归 |
+| 自动化测试 | unittest | 813 项通过；覆盖文档引擎、同步追踪、PCB、安全/版本替换、并发路由、通讯录、反馈/Prompt/引用、识图、PDF 路由、看板完整证据链/变化优先/真实标题/安全渲染/语义分页/重复调度、通用工具二次确认、v1.11.9 审查修复 5 项回归，以及 v1.12.0 注册中心 fail-fast/tripwire 无旧名残留/能力清单完整性/判定层领域让位与查询链路 |
 | 部署 | Docker + docker-compose | 可选容器化部署 |
 
 ## 运行方式

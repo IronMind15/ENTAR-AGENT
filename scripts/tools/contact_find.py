@@ -1,5 +1,5 @@
 """
-find_employee — 钉钉通讯录员工查询工具
+contact_find（原 find_employee，v1.12.0 改名）— 钉钉通讯录员工查询工具
 
 用户问「谁负责采购」「研发中心王工」「张三电话多少」等找人问题时，
 由 DeepSeek function calling 调用本工具：实时拉取钉钉通讯录 → 匹配 → 返回。
@@ -18,7 +18,7 @@ from tools import register
 logger = logging.getLogger("tools")
 
 DEFINITION = {
-    "name": "find_employee",
+    "name": "contact_find",
     "description": (
         "查询公司同事信息（姓名/部门/职位/工号）。当用户想找/问某个同事、"
         "某部门有哪些人、谁负责某事项（采购/研发/测试等）时使用。"
@@ -48,7 +48,16 @@ DEFINITION = {
 }
 
 
-@register("find_employee", DEFINITION)
+@register(
+    DEFINITION,
+    sector="contact",
+    display="👥 查询同事信息...",
+    user_desc=(
+        "查询公司同事信息。用户问：找某位同事、某个部门有哪些人、谁负责某事项"
+        "（采购/研发/测试等）、同事职位/工号。\n"
+        "手机号/邮箱仅在你有权限（审核人）时出现；没权限直接说明没有权限，不编造。"
+    ),
+)
 def execute(args: dict) -> str:
     """执行员工查询，返回 JSON 字符串结果。"""
     try:
@@ -69,7 +78,7 @@ def execute(args: dict) -> str:
         staff_id = get_current_staff_id()
         include_sensitive = is_contact_admin(staff_id)
         logger.info(
-            f"find_employee: keyword={keyword!r} dept={dept_name!r} "
+            f"contact_find: keyword={keyword!r} dept={dept_name!r} "
             f"userid={userid!r} staff={staff_id or '空'} sensitive={include_sensitive}"
         )
 
@@ -87,10 +96,10 @@ def execute(args: dict) -> str:
                 item.pop("email", None)
         return json.dumps(result, ensure_ascii=False)
     except ContactPermissionError as e:
-        logger.warning(f"find_employee 权限错误: {e}")
+        logger.warning(f"contact_find 权限错误: {e}")
         return json.dumps({"error": str(e)}, ensure_ascii=False)
     except Exception as e:
-        logger.exception(f"find_employee 执行异常: {e}")
+        logger.exception(f"contact_find 执行异常: {e}")
         return json.dumps(
             {"error": "查询员工信息失败，请稍后重试或联系管理员检查钉钉通讯录权限配置"},
             ensure_ascii=False,

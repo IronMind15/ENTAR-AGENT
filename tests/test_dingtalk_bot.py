@@ -33,10 +33,11 @@ class FastOperationTests(unittest.TestCase):
         self.assertTrue(_is_fast_operation("50Ω 微带 阻抗多少"))
 
     def test_review_commands_are_fast(self):
-        """审核指令 / 审核口令 → 秒回"""
+        """「查看我的审核ID」仍秒回；v1.12.0 移除审核口令拦截后不再秒回"""
         self.assertTrue(_is_fast_operation("查看我的审核ID"))
-        self.assertTrue(_is_fast_operation("同意同步 ABC12345"))
-        self.assertTrue(_is_fast_operation("拒绝同步 ABC12345 内容不对"))
+        # v1.12.0：同意/拒绝同步审核拦截已移除（v1.10.2 停用上传审核）→ 不再秒回
+        self.assertFalse(_is_fast_operation("同意同步 ABC12345"))
+        self.assertFalse(_is_fast_operation("拒绝同步 ABC12345 内容不对"))
 
     def test_agent_chat_is_slow(self):
         """普通聊天 / 复杂问题 → 走 Agent，需要提示"""
@@ -105,13 +106,10 @@ class ProcessTextRoutingTests(unittest.TestCase):
         self.assertEqual(result["source"], "review_identity")
         self.assertIn("没有携带", result["answer"])
 
-    @mock.patch("knowledge_review.handle_review_message")
-    def test_review_message_branch(self, mock_review):
-        """审核消息 → knowledge_review 分支"""
-        mock_review.return_value = "已同意同步 ABC123"
+    def test_review_message_branch(self):
+        """v1.12.0：同意/拒绝同步审核拦截已移除 → 落 Agent（不再是 knowledge_review 分支）"""
         result = self.handler._process_text("同意同步 ABC123", "u1", "s1")
-        self.assertEqual(result["source"], "knowledge_review")
-        self.assertEqual(result["answer"], "已同意同步 ABC123")
+        self.assertNotEqual(result["source"], "knowledge_review")
 
     @mock.patch("skills.get_matched_skill")
     def test_skill_routing(self, mock_get_skill):
@@ -569,7 +567,7 @@ class ImageMessageRecognitionTests(unittest.TestCase):
         m_tool.return_value = json.dumps({"description": "一张电路板照片"}, ensure_ascii=False)
         self.handler._handle_image_message(self._image_msg(), "u1", "测试")
         m_reply.assert_called_once()  # 先发"正在识别"提示
-        m_tool.assert_called_with("describe_image", mock.ANY)
+        m_tool.assert_called_with("image_describe", mock.ANY)
         self.assertEqual(m_md.call_count, 1)
         text = m_md.call_args[1]["text"]
         self.assertIn("一张电路板照片", text)
@@ -618,7 +616,7 @@ class ImageMessageRecognitionTests(unittest.TestCase):
 
 
 class FileMessageImageRecognitionTests(unittest.TestCase):
-    """v1.11.11 图片当作「文件消息」发也能识图（复用 describe_image 能力）"""
+    """v1.11.11 图片当作「文件消息」发也能识图（复用 image_describe 能力）"""
 
     def setUp(self):
         self.handler = ErrorQueryHandler()
@@ -650,7 +648,7 @@ class FileMessageImageRecognitionTests(unittest.TestCase):
         m_save.return_value = self._saved_file()
         m_tool.return_value = json.dumps({"description": "一张电路板照片"}, ensure_ascii=False)
         self.handler._handle_file_message(self._file_msg(), "u1", "测试")
-        m_tool.assert_called_with("describe_image", mock.ANY)
+        m_tool.assert_called_with("image_describe", mock.ANY)
         text = m_md.call_args[1]["text"]
         self.assertIn("图片识别", text)
         self.assertIn("一张电路板照片", text)

@@ -24,7 +24,7 @@ class ParseIntentTests(unittest.TestCase):
 
     def test_query_view_not_create(self):
         """v1.11.5：想看实时看板（我想看看板/现在推看板）→ 放行 Agent 调
-        query_dashboard/push_dashboard 工具，不建订阅、不误判"""
+        dash_query/dash_push 工具，不建订阅、不误判"""
         for text in ("我想看看板", "帮我看看板", "看板今天怎么样", "现在推看板", "马上推看板"):
             self.assertIsNone(sc.parse_subscription_command(text), text)
 

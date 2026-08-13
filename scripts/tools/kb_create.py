@@ -1,12 +1,12 @@
 """
-工具：create_knowledge_base
+工具：kb_create（原 create_knowledge_base，v1.12.0 改名）
 创建新的知识库（v1.11.5 多知识库改造）。
 
 以前知识库绑定具体内容（标准 PDF → standards、故障 Excel → error_codes），
 只能通过改代码扩展。现在把「创建知识库」做成独立功能：用户在钉钉说
 「创建知识库，名字叫产品手册，用来放产品说明书，研发部」→ Agent 调本工具
 注册新库。之后：
-  - 查询：通用 search_knowledge_base 工具可选择该库（或全库自动搜）
+  - 查询：通用 kb_search 工具可选择该库（或全库自动搜）
   - 学习：发文档后回复「把这个文档学到产品手册」入库到该库
   - 权限预留：创建时指定的 department 为该库归属部门（默认 public）
 
@@ -38,7 +38,7 @@ def _list_kb_summary() -> str:
 
 
 DEFINITION = {
-    "name": "create_knowledge_base",
+    "name": "kb_create",
     "description": (
         "创建新的知识库。当用户说「创建知识库」「新建一个库」「建个XX库放XX」"
         "（如『创建知识库，名字叫产品手册，用来放产品说明书，研发部』）时调用。"
@@ -70,11 +70,22 @@ DEFINITION = {
 }
 
 
-@register("create_knowledge_base", DEFINITION, policy={
-    "confirm": True,
-    "risk": "create",
-    "summary": "创建新的企业知识库（会写入知识库配置）",
-})
+@register(
+    DEFINITION,
+    policy={
+        "confirm": True,
+        "risk": "create",
+        "summary": "创建新的企业知识库（会写入知识库配置）",
+    },
+    sector="kb",
+    display="📚 创建知识库...",
+    user_desc=(
+        "用户说「创建知识库/新建一个库/建个XX库放XX」时使用。\n"
+        '示例：创建知识库，名字叫产品手册，用来放产品说明书，研发部 '
+        '→ kb_create(name="产品手册", description="产品说明书、规格书", department="rd")\n'
+        "注意：这只是注册库配置，不是把文档入库；创建后文档学到该库可回复「把这个文档学到产品手册」。"
+    ),
+)
 def execute(args: dict) -> str:
     """创建知识库"""
     name = (args.get("name") or "").strip()
@@ -85,7 +96,7 @@ def execute(args: dict) -> str:
         return json.dumps({"error": "知识库名称不能为空，请提供库名"},
                           ensure_ascii=False)
 
-    logger.info(f"  工具调用: create_knowledge_base(name={name}, dept={department})")
+    logger.info(f"  工具调用: kb_create(name={name}, dept={department})")
 
     from kb_registry import create_knowledge_base as do_create
 

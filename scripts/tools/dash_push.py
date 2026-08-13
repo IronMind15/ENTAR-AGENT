@@ -5,7 +5,7 @@ import json
 from tools import register
 
 DEFINITION = {
-    "name": "push_dashboard",
+    "name": "dash_push",
     "description": (
         "立即推送一次每日项目看板。只操作当前用户自己的订阅与数据源，"
         "推送给该用户启用的订阅接收人。用户明确要求『现在推看板』『推送看板』时使用；"
@@ -15,11 +15,20 @@ DEFINITION = {
 }
 
 
-@register("push_dashboard", DEFINITION, policy={
-    "confirm": True,
-    "risk": "external_send",
-    "summary": "立即向您启用的订阅接收人推送看板",
-})
+@register(
+    DEFINITION,
+    policy={
+        "confirm": True,
+        "risk": "external_send",
+        "summary": "立即向您启用的订阅接收人推送看板",
+    },
+    sector="dash",
+    display="📊 推送项目看板...",
+    user_desc=(
+        "立即推送一次看板给订阅接收人。用户明确要求「现在推看板」「推送看板」时使用。\n"
+        "看板订阅管理（帮我推个看板/改时间/停掉看板）由专门技能直接处理，不需要调用本工具。"
+    ),
+)
 def execute(args: dict) -> str:
     from dashboard import service
     from dashboard.subscription_store import get_subscription_store

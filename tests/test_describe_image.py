@@ -1,5 +1,5 @@
 """
-describe_image 工具测试（千问视觉识图）
+image_describe 工具测试（千问视觉识图）
 
 覆盖：工具注册、缺参数、文件不存在、路径白名单、magic bytes 格式识别、
 不支持格式、缺 key、请求体组装（base64 data URI / question 覆盖）、
@@ -19,7 +19,7 @@ SCRIPTS_DIR = PROJECT_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from tools import describe_image, get_tool_names, get_tool_definitions  # noqa: E402
+from tools import image_describe, get_tool_names, get_tool_definitions  # noqa: E402
 
 
 class _FakeResp:
@@ -45,11 +45,11 @@ MAGIC = {
 
 
 class DescribeImageToolTests(unittest.TestCase):
-    """describe_image 工具测试"""
+    """image_describe 工具测试"""
 
     def setUp(self):
         # 在真实上传目录下建临时子目录，保证路径白名单校验通过
-        upload_root = describe_image._UPLOAD_ROOT
+        upload_root = image_describe._UPLOAD_ROOT
         upload_root.mkdir(parents=True, exist_ok=True)
         import tempfile
         self.tmp = tempfile.TemporaryDirectory(dir=str(upload_root))
@@ -65,23 +65,23 @@ class DescribeImageToolTests(unittest.TestCase):
 
     # ── 注册 ──
     def test_tool_registered(self):
-        self.assertIn("describe_image", get_tool_names())
+        self.assertIn("image_describe", get_tool_names())
         defs = get_tool_definitions()
-        item = next(d for d in defs if d["function"]["name"] == "describe_image")
+        item = next(d for d in defs if d["function"]["name"] == "image_describe")
         self.assertEqual(item["function"]["parameters"]["required"], ["image_path"])
 
     # ── 参数校验 ──
     def test_missing_image_path(self):
-        out = json.loads(describe_image.execute({}))
+        out = json.loads(image_describe.execute({}))
         self.assertIn("image_path", out.get("error", ""))
 
     def test_file_not_found(self):
-        out = json.loads(describe_image.execute({"image_path": "/no/such/foo.png"}))
+        out = json.loads(image_describe.execute({"image_path": "/no/such/foo.png"}))
         self.assertIn("不存在", out.get("error", ""))
 
     def test_path_outside_upload_root(self):
         # 传 scripts/config.py（不在上传目录内）应被白名单拦截
-        out = json.loads(describe_image.execute({"image_path": str(SCRIPTS_DIR / "config.py")}))
+        out = json.loads(image_describe.execute({"image_path": str(SCRIPTS_DIR / "config.py")}))
         self.assertIn("上传目录", out.get("error", ""))
 
     def test_filename_lookup_in_uploads(self):
@@ -91,43 +91,43 @@ class DescribeImageToolTests(unittest.TestCase):
         nested.mkdir(parents=True, exist_ok=True)
         img = nested / "image_1.png"
         img.write_bytes(MAGIC["png"])
-        with mock.patch.object(describe_image, "_UPLOAD_ROOT", self.tmp_path), \
-             mock.patch.object(describe_image._HTTP_CLIENT, "post") as mpost:
+        with mock.patch.object(image_describe, "_UPLOAD_ROOT", self.tmp_path), \
+             mock.patch.object(image_describe._HTTP_CLIENT, "post") as mpost:
             mpost.return_value = _FakeResp(200, {"choices": [{"message": {"content": "电路板特写"}}]})
-            out = json.loads(describe_image.execute({"image_path": "image_1.png"}))
+            out = json.loads(image_describe.execute({"image_path": "image_1.png"}))
         self.assertEqual(out["description"], "电路板特写")
 
     # ── 格式识别 ──
     def test_mime_detection(self):
         for mime, magic in MAGIC.items():
-            self.assertEqual(describe_image.detect_image_mime(magic), mime, mime)
-        self.assertIsNone(describe_image.detect_image_mime(b"notanimage"))
-        self.assertIsNone(describe_image.detect_image_mime(b""))
+            self.assertEqual(image_describe.detect_image_mime(magic), mime, mime)
+        self.assertIsNone(image_describe.detect_image_mime(b"notanimage"))
+        self.assertIsNone(image_describe.detect_image_mime(b""))
 
     def test_unsupported_format(self):
         p = self._write_image(b"plain text content, not an image")
-        out = json.loads(describe_image.execute({"image_path": p}))
+        out = json.loads(image_describe.execute({"image_path": p}))
         self.assertIn("无法识别", out.get("error", ""))
 
     # ── 缺 key ──
     def test_missing_api_key(self):
         p = self._write_image(MAGIC["png"])
-        with mock.patch.object(describe_image._HTTP_CLIENT, "post") as mpost, \
-             mock.patch.object(describe_image, "DASHSCOPE_API_KEY", ""):
-            out = json.loads(describe_image.execute({"image_path": p}))
+        with mock.patch.object(image_describe._HTTP_CLIENT, "post") as mpost, \
+             mock.patch.object(image_describe, "DASHSCOPE_API_KEY", ""):
+            out = json.loads(image_describe.execute({"image_path": p}))
             self.assertIn("未配置", out.get("error", ""))
             mpost.assert_not_called()
 
     # ── 请求体组装 ──
     def test_request_body_assembled(self):
         p = self._write_image(MAGIC["png"])
-        with mock.patch.object(describe_image._HTTP_CLIENT, "post") as mpost:
+        with mock.patch.object(image_describe._HTTP_CLIENT, "post") as mpost:
             mpost.return_value = _FakeResp(200, {"choices": [{"message": {"content": "一张电路板照片"}}]})
-            out = json.loads(describe_image.execute({"image_path": p}))
+            out = json.loads(image_describe.execute({"image_path": p}))
             self.assertEqual(out["description"], "一张电路板照片")
             # 验证请求体
             req_body = mpost.call_args[1]["json"]
-            self.assertEqual(req_body["model"], describe_image.VISION_MODEL)
+            self.assertEqual(req_body["model"], image_describe.VISION_MODEL)
             content = req_body["messages"][0]["content"]
             self.assertEqual(content[0]["type"], "image_url")
             self.assertTrue(content[0]["image_url"]["url"].startswith("data:image/png;base64,"))
@@ -135,44 +135,44 @@ class DescribeImageToolTests(unittest.TestCase):
 
     def test_question_override(self):
         p = self._write_image(MAGIC["jpeg"], "photo.jpg")
-        with mock.patch.object(describe_image._HTTP_CLIENT, "post") as mpost:
+        with mock.patch.object(image_describe._HTTP_CLIENT, "post") as mpost:
             mpost.return_value = _FakeResp(200, {"choices": [{"message": {"content": "参数表"}}]})
-            describe_image.execute({"image_path": p, "question": "图里有什么参数"})
+            image_describe.execute({"image_path": p, "question": "图里有什么参数"})
             req_body = mpost.call_args[1]["json"]
             self.assertEqual(req_body["messages"][0]["content"][1]["text"], "图里有什么参数")
 
     # ── 重试与降级 ──
     def test_retry_on_5xx(self):
         p = self._write_image(MAGIC["png"])
-        with mock.patch.object(describe_image._HTTP_CLIENT, "post") as mpost, \
-             mock.patch.object(describe_image.time, "sleep"):
+        with mock.patch.object(image_describe._HTTP_CLIENT, "post") as mpost, \
+             mock.patch.object(image_describe.time, "sleep"):
             mpost.side_effect = [_FakeResp(500, {}), _FakeResp(500, {}), _FakeResp(500, {})]
-            out = json.loads(describe_image.execute({"image_path": p}))
+            out = json.loads(image_describe.execute({"image_path": p}))
             self.assertEqual(mpost.call_count, 3)
             self.assertIn("识别失败", out.get("error", ""))
 
     def test_success_after_retry(self):
         p = self._write_image(MAGIC["png"])
-        with mock.patch.object(describe_image._HTTP_CLIENT, "post") as mpost, \
-             mock.patch.object(describe_image.time, "sleep"):
+        with mock.patch.object(image_describe._HTTP_CLIENT, "post") as mpost, \
+             mock.patch.object(image_describe.time, "sleep"):
             mpost.side_effect = [_FakeResp(503, {}), _FakeResp(200, {"choices": [{"message": {"content": "成功"}}]})]
-            out = json.loads(describe_image.execute({"image_path": p}))
+            out = json.loads(image_describe.execute({"image_path": p}))
             self.assertEqual(mpost.call_count, 2)
             self.assertEqual(out["description"], "成功")
 
     def test_empty_choices(self):
         p = self._write_image(MAGIC["png"])
-        with mock.patch.object(describe_image._HTTP_CLIENT, "post") as mpost:
+        with mock.patch.object(image_describe._HTTP_CLIENT, "post") as mpost:
             mpost.return_value = _FakeResp(200, {"choices": []})
-            out = json.loads(describe_image.execute({"image_path": p}))
+            out = json.loads(image_describe.execute({"image_path": p}))
             self.assertIn("识别失败", out.get("error", ""))
 
     def test_request_timeout(self):
         p = self._write_image(MAGIC["png"])
-        with mock.patch.object(describe_image._HTTP_CLIENT, "post") as mpost, \
-             mock.patch.object(describe_image.time, "sleep"):
+        with mock.patch.object(image_describe._HTTP_CLIENT, "post") as mpost, \
+             mock.patch.object(image_describe.time, "sleep"):
             mpost.side_effect = httpx.TimeoutException("timeout")
-            out = json.loads(describe_image.execute({"image_path": p}))
+            out = json.loads(image_describe.execute({"image_path": p}))
             self.assertEqual(mpost.call_count, 3)
             self.assertIn("识别失败", out.get("error", ""))
 

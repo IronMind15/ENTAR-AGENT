@@ -1,4 +1,4 @@
-"""summarize_doc 工具测试（v1.11.3）—— 定位候选 → 全读 → 总结 → 可选推送本人
+"""doc_summarize 工具测试（v1.11.3）—— 定位候选 → 全读 → 总结 → 可选推送本人
 
 纯逻辑：mock 候选存储/文档客户端/LLM/notifier，不打真实 API。
 """
@@ -17,7 +17,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from dashboard.doc_candidates import DocCandidate, DocCandidateStore  # noqa: E402
-from tools.summarize_doc import DEFINITION, execute  # noqa: E402
+from tools.doc_summarize import DEFINITION, execute  # noqa: E402
 
 
 class SummarizeDocToolTests(unittest.TestCase):
@@ -56,9 +56,9 @@ class SummarizeDocToolTests(unittest.TestCase):
         self.addCleanup(patch_sid.stop)
 
     def test_definition_registered(self):
-        self.assertEqual(DEFINITION["name"], "summarize_doc")
+        self.assertEqual(DEFINITION["name"], "doc_summarize")
         from tools import get_tool_names
-        self.assertIn("summarize_doc", get_tool_names())
+        self.assertIn("doc_summarize", get_tool_names())
 
     def test_summarize_success_by_node_id(self):
         self._add()

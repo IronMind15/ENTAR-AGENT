@@ -1,7 +1,7 @@
 """
 钉钉通讯录客户端 — 员工查询数据源
 
-供 find_employee 工具调用，负责：
+供 contact_find 工具调用，负责：
   1. 获取并缓存 access token（旧版 oapi gettoken）
   2. 遍历部门树（钉钉不支持一次拿全部员工：子部门列表 → 逐部门用户，cursor 分页）
   3. 进程内短 TTL 全量缓存（规避钉钉 QPS 限流，不做磁盘持久化）

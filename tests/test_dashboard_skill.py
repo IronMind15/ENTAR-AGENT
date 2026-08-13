@@ -23,7 +23,7 @@ class MatchTests(unittest.TestCase):
             self.assertTrue(DashboardSkill.match(text), text)
 
     def test_real_time_query_not_match(self):
-        """实时查询看板（今天怎么样/什么情况）→ 放给 Agent 调 query_dashboard 工具"""
+        """实时查询看板（今天怎么样/什么情况）→ 放给 Agent 调 dash_query 工具"""
         with mock.patch("dashboard.subscription_commands.has_recent_kanban_activity",
                         return_value=False):
             for text in ("看板今天怎么样", "看板现在什么情况", "今天有哪些滞后项目"):
@@ -615,7 +615,7 @@ class PrecheckTests(unittest.TestCase):
 
 
 class QueryDashboardToolContractTests(unittest.TestCase):
-    """v1.11.10：query_dashboard 工具描述契约——必须显式要求保留数据来源链接。
+    """v1.11.10：dash_query 工具描述契约——必须显式要求保留数据来源链接。
 
     同事杨妍通过 Agent 实时查询看板时，LLM 转述丢掉了『## 数据来源』里的
     [查看原文](url) 链接，而她本人（订阅推送路径）能看到链接。工具描述
@@ -623,33 +623,33 @@ class QueryDashboardToolContractTests(unittest.TestCase):
     """
 
     def test_description_requires_preserving_source_links(self):
-        from tools.query_dashboard import DEFINITION
+        from tools.dash_query import DEFINITION
         desc = DEFINITION["description"]
         self.assertIn("数据来源", desc)
         self.assertIn("查看原文", desc)
         self.assertIn("原样保留", desc)
 
     def test_execute_scopes_sources_to_current_user(self):
-        """问题 4 回归：query_dashboard 必须按当前用户取数据源，防跨用户串看板"""
-        from tools.query_dashboard import execute
+        """问题 4 回归：dash_query 必须按当前用户取数据源，防跨用户串看板"""
+        from tools.dash_query import execute
         import inspect
         src = inspect.getsource(execute)
         self.assertIn("get_current_user_id()", src)
         self.assertIn("load_all_available_sources(user_id=", src)
 
-    def test_push_dashboard_scopes_to_current_user(self):
-        """v1.11.10：push_dashboard 主动推送必须按当前用户隔离——
+    def test_dash_push_scopes_to_current_user(self):
+        """v1.11.10：dash_push 主动推送必须按当前用户隔离——
         只采本人数据源、只推本人订阅，防『现在推看板』把别人的私人表格
         推给所有订阅接收人"""
-        from tools.push_dashboard import execute as push_exec
+        from tools.dash_push import execute as push_exec
         import inspect
         src = inspect.getsource(push_exec)
         self.assertIn("load_all_available_sources(user_id=uid)", src)
         self.assertIn("owner_user_id == uid", src)
         self.assertNotIn("load_all_available_sources()", src)
 
-    def test_push_dashboard_definition_mentions_own_subscription(self):
-        from tools.push_dashboard import DEFINITION
+    def test_dash_push_definition_mentions_own_subscription(self):
+        from tools.dash_push import DEFINITION
         self.assertIn("当前用户", DEFINITION["description"])
         self.assertIn("该用户启用的订阅", DEFINITION["description"])
 

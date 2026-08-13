@@ -90,9 +90,6 @@ ADMIN_PASSWORD: str = _get_config("ADMIN_PASSWORD")
 # 属内部工具轻量方案；未来上 SSO 可信身份后可移除。
 ADMIN_MASTER_CODE: str = _get_config("ADMIN_MASTER_CODE") or "ENTARBOSS"
 
-# MinerU API Token（精准解析）
-MINERU_TOKEN: str = _get_config("MINERU_TOKEN")
-
 # PDF 解析路由（v1.10.3）：
 #   auto  → 检测 PDF 文字层覆盖率，纯文字版走本地 PyMuPDF（免费高保真，省 MinerU 每日 1000 页额度），
 #           扫描版/混合版走 MinerU（保质量）

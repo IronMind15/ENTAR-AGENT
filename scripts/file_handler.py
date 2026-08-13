@@ -37,7 +37,7 @@ _AUTO_PROCESS_EXTENSIONS = {".pdf", ".xlsx", ".xls", ".md"}
 # 可「帮我学习」直接入库的文件类型（v1.10.2，比自动处理集合宽，含 Word/PPT/CSV；v1.11.11 补 .txt 纯文本）
 _LEARN_EXTENSIONS = {".pdf", ".xlsx", ".xls", ".md", ".docx", ".pptx", ".csv", ".txt"}
 
-# 图片扩展名：当作「文件消息」发来的图片也走识图（v1.11.11，复用 describe_image 能力）
+# 图片扩展名：当作「文件消息」发来的图片也走识图（v1.11.11，复用 image_describe 能力）
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 
 # 特殊不支持类型的引导文案（v1.11.11）：让用户知道该怎么做，而不是干等

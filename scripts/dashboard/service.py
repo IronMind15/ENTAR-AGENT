@@ -1,7 +1,7 @@
 """
 看板服务层（v1.11.0）— 采集→解析→组装→推送 的公共编排
 
-技能（立即推送样例）、工具（push_dashboard）、定时调度（scheduler）复用同一套
+技能（立即推送样例）、工具（dash_push）、定时调度（scheduler）复用同一套
 编排，避免三处各写一遍「collect_all → parse_source_records → assemble → send」。
 """
 

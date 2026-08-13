@@ -58,7 +58,16 @@ DEFINITION = {
 }
 
 
-@register("calc_copper_busbar", DEFINITION)
+@register(
+    DEFINITION,
+    sector="calc",
+    display="🔧 铜排载流计算...",
+    user_desc=(
+        "铜排/母线载流计算（牛顿散热 + ASTM B187）。用户问：铜排/紫铜/母线/汇流条"
+        "能过多少电流、要多大的铜排。\n"
+        "注意：PCB 走线载流用 calc_pcb_trace，本工具只管铜排/母线，两者不要混用。"
+    ),
+)
 def execute(args: dict) -> str:
     """执行铜排载流计算（复用 pcb_calc 的铜排技能）"""
     logger.info(f"  工具调用: calc_copper_busbar({args})")
