@@ -135,9 +135,9 @@ _CREATE_RE = re.compile(
 _CONTEXT_DELETE_RE = re.compile(
     r"(?:现在)?(?:帮我)?(?:把)?(?:这些|以上|前面|现有|我的)?(?:全部|都)?"
     r"(?:删除|删掉|移除|清除)(?:掉|了)?$")
-_CONFIRM_TEXT_RE = re.compile(
-    r"^(?:是的?|对|好的?|可以|没问题|确认|确定|就这样|就这么办|执行|继续)"
-    r"(?:[,， ]*(?:确认|执行|继续|删除|全部删除|都删除|删除全部|删掉全部))?[。！!]?$")
+# v1.12.4：_CONFIRM_TEXT_RE 已于 v1.13.0（M3）收口到 pending_context（确认词唯一
+# 事实源，is_confirmation_text 委托其 is_confirm_text），此处旧定义已无任何引用，
+# 删除防两表漂移——修改确认词只改 pending_context 一处。
 _CANCEL_TEXT_RE = re.compile(r"^(?:取消|算了|不要了|不执行|先不弄了)[。！!]?$")
 
 # 周次用 1-7（周一=1 … 周日=7），与 datetime.isoweekday() 对齐

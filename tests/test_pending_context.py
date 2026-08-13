@@ -95,9 +95,14 @@ class PendingContextTests(unittest.TestCase):
         for ptype in (PT_TOOL, PT_LEARN, PT_KANBAN, PT_CLARIFY):
             self.assertTrue(is_confirm_text("确认", ptype), ptype)
             self.assertTrue(is_confirm_text("好的，确认", ptype), ptype)
+        # v1.12.4：自然口语确认词（「对的」落 Agent 被 LLM 谎称已开通——真实回归）
+        for w in ("对的", "对呀", "对啊", "是的呀", "是呀", "好呀", "好啊", "可以的", "可以呀"):
+            for ptype in (PT_TOOL, PT_LEARN, PT_KANBAN, PT_CLARIFY):
+                self.assertTrue(is_confirm_text(w, ptype), (w, ptype))
         # 否定/普通句子不误判
         self.assertFalse(is_confirm_text("确认删除所有文件", PT_TOOL))
         self.assertFalse(is_confirm_text("我确认一下", PT_TOOL))
+        self.assertFalse(is_confirm_text("对了", PT_KANBAN))   # 「对了」是转折不是确认
 
     def test_cancel_words(self):
         for w in ("取消", "算了", "不要了", "不执行", "先不弄了"):

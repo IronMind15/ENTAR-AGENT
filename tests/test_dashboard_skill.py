@@ -76,6 +76,18 @@ class MatchTests(unittest.TestCase):
                         return_value=True):
             self.assertTrue(DashboardSkill.match("是的，全部删除"))
 
+    def test_natural_confirm_word_duide_matches(self):
+        """v1.12.4 回归：创建看板确认后用户回「对的」必须被 dashboard 承接，
+        不能落 Agent 被 LLM 谎称「已开通」而实际未建订阅（袁会荧实测冲突）。
+        有近期看板活动（有 pending）时「对的」是确认词。"""
+        with mock.patch("dashboard.subscription_commands.has_recent_kanban_activity",
+                        return_value=True):
+            for w in ("对的", "对呀", "是的呀", "好呀"):
+                self.assertTrue(DashboardSkill.match(w), w)
+        with mock.patch("dashboard.subscription_commands.has_recent_kanban_activity",
+                        return_value=False):
+            self.assertFalse(DashboardSkill.match("对的"))
+
     def test_unrelated_does_not_match(self):
         with mock.patch("dashboard.subscription_commands.has_recent_kanban_activity",
                         return_value=False):
@@ -358,6 +370,28 @@ class HandleDocCreateTests(unittest.TestCase):
         self.assertIn("整机测试问题", r["answer"])
         # 2. 确认 → 落地订阅（data_sources = doc_* keys）
         r2 = DashboardSkill.handle("确认", user_id="u1")
+        self.assertIn("开通", r2["answer"])
+        subs = self._store.list_for_owner("u1")
+        self.assertEqual(len(subs), 1)
+        self.assertEqual(sorted(subs[0].data_sources), ["doc_1", "doc_2"])
+        self.assertTrue(subs[0].enabled)
+
+    @mock.patch("skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
+    @mock.patch("skills.dashboard.DashboardSkill._push_sample", return_value="已推送")
+    @mock.patch("skills.dashboard.DashboardSkill._user_template_hint", return_value="")
+    def test_natural_confirm_word_duide_executes_pending(self, m_hint, m_push, mock_staff):
+        """v1.12.4 回归（袁会荧实测）：发链接+「做每日看板」意图 → 反问确认 →
+        用户回「对的」（自然口语确认）→ 必须执行 pending 建订阅。
+        修复前「对的」不在确认词表 → 落 Agent → LLM 无工具调用谎称已开通，
+        实际订阅从未创建 → 后续「示例看板在哪里」查询报「没有订阅」矛盾。"""
+        self._seed_candidates()
+        # 1. 模拟 bot 发链接后已创建 doc_create pending（反问确认）
+        r1 = DashboardSkill._handle_doc_create("u1", source_candidate_ids=[1, 2])
+        self.assertIn("确认", r1["answer"])
+        # 2. 用户回「对的」→ match 必须承接（有 pending）
+        self.assertTrue(DashboardSkill.match("对的", user_id="u1"))
+        # 3. handle 执行确认 → 真实创建订阅
+        r2 = DashboardSkill.handle("对的", user_id="u1")
         self.assertIn("开通", r2["answer"])
         subs = self._store.list_for_owner("u1")
         self.assertEqual(len(subs), 1)
