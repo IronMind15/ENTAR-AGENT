@@ -531,6 +531,83 @@ class ConfirmLearnBranchTests(unittest.TestCase):
         self.assertIsNotNone(result)
 
 
+class FeedbackNumberConflictTests(unittest.IsolatedAsyncioTestCase):
+    """v1.12.2 修复：存在会消费编号回复的 pending（澄清反问 / 看板选模板）时，
+    用户回「1」「2」是编号回复，不能被反馈钩子吞成满意/不满意。"""
+
+    def _handler(self):
+        handler = ErrorQueryHandler()
+        handler._sync_user_info = mock.MagicMock()
+        handler.reply_text = mock.MagicMock()
+        handler.reply_markdown = mock.MagicMock()
+        return handler
+
+    def _to_thread_calls(self, m, target):
+        return [
+            c for c in m.call_args_list
+            if c.args and c.args[0] == target
+        ]
+
+    async def _run_process(self, text, patch_return):
+        handler = self._handler()
+        msg = _make_text_msg(text, user_id="u1")
+        with mock.patch(
+            "asyncio.to_thread",
+            new=mock.AsyncMock(return_value=patch_return),
+        ) as m, mock.patch("skills.memory.add"), mock.patch(
+            "user_store.get_last_conversation",
+            return_value={"query": "上一条问题", "answer": "上一条回答"},
+        ), mock.patch("user_store.add_feedback"):
+            await handler.process(msg)
+        return handler, m
+
+    async def test_clarify_pending_skips_feedback_hook(self):
+        """有澄清反问 → 回「1」走编号解析（_process_text），不记反馈"""
+        from routing import ask_clarification
+        from pending_context import clear as pc_clear
+        ask_clarification("u1", [{"key": "delete", "label": "删除学习内容「x」"},
+                                 {"key": "kanban", "label": "看板订阅相关操作"}])
+        try:
+            handler, m = await self._run_process(
+                "1", {"answer": "已按澄清路由", "source": "knowledge_delete"})
+            proc_calls = self._to_thread_calls(m, handler._process_text)
+            self.assertEqual(len(proc_calls), 1)
+            self.assertEqual(proc_calls[0].args[1], "1")
+            for c in handler.reply_text.call_args_list:
+                self.assertNotIn("收到反馈", str(c))
+        finally:
+            pc_clear("u1")
+
+    async def test_choose_template_pending_skips_feedback_hook(self):
+        """选模板反问窗口内 → 回「1」走模板选择（_process_text），不记反馈"""
+        from dashboard.subscription_commands import set_pending
+        from pending_context import clear as pc_clear
+        set_pending("u1", {"intent": "choose_template", "sub_id": "s1"})
+        try:
+            handler, m = await self._run_process(
+                "1", {"answer": "已应用每日模板", "source": "dashboard"})
+            proc_calls = self._to_thread_calls(m, handler._process_text)
+            self.assertEqual(len(proc_calls), 1)
+            self.assertEqual(proc_calls[0].args[1], "1")
+        finally:
+            pc_clear("u1")
+
+    async def test_no_pending_keeps_feedback_hook(self):
+        """无消费编号的 pending → 「1」仍是反馈（原功能不破坏）"""
+        handler = self._handler()
+        msg = _make_text_msg("1", user_id="u1")
+        with mock.patch(
+            "asyncio.to_thread", new=mock.AsyncMock(),
+        ) as m, mock.patch("skills.memory.add"), mock.patch(
+            "user_store.get_last_conversation",
+            return_value={"query": "上一条问题", "answer": "上一条回答"},
+        ), mock.patch("user_store.add_feedback") as m_add:
+            await handler.process(msg)
+        proc_calls = self._to_thread_calls(m, handler._process_text)
+        self.assertEqual(len(proc_calls), 0)
+        m_add.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
 

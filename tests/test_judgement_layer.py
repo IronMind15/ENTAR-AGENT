@@ -143,11 +143,11 @@ class BotFileCommandGateTests(unittest.TestCase):
         self.assertIn("回复「确认」", result["answer"])
 
     def test_multi_domain_clarifies_then_routes(self):
-        """跨域歧义句（含故障码的删除句）→ 反问澄清，不直接删；回复编号路由"""
-        result = self.handler._process_text("删除 d4-1 的内容", "u1", "s1")
+        """跨域歧义句（含故障码 + 看板词，无「学习」动词）→ 反问澄清，不直接删；回复编号路由"""
+        result = self.handler._process_text("删除 d4-1 的看板", "u1", "s1")
         self.assertEqual(result["source"], "clarification")
         self.assertIn("1.", result["answer"])
-        self.assertIn("d4-1 的内容", result["answer"])
+        self.assertIn("d4-1 的看板", result["answer"])
         # 用户回复「1」→ 路由回删除学习确认流程（pending 待确认，未真删）
         result2 = self.handler._process_text("1", "u1", "s1")
         self.assertEqual(result2["source"], "knowledge_delete")
@@ -156,13 +156,31 @@ class BotFileCommandGateTests(unittest.TestCase):
         from tools import cancel_pending_operation
         cancel_pending_operation("u1")
 
+    @mock.patch("knowledge_review.delete_file_for_user")
+    def test_delete_learn_with_standard_id_proceeds(self, mock_delete):
+        """「删除学习 GB/T 34133-2023」→ 单标准领域只是文件名，带「学习」动词 → 照旧删除（v1.12.2 修复）"""
+        mock_delete.return_value = {"status": "ok", "file_name": "GB_T_34133-2023.pdf",
+                                    "deleted_chunks": 2, "source_deleted": True}
+        result = self.handler._process_text("删除学习 GB/T 34133-2023", "u1", "s1")
+        self.assertEqual(result["source"], "knowledge_delete")
+        self.assertIn("回复「确认」", result["answer"])
+
+    @mock.patch("knowledge_review.relearn_file_for_user")
+    def test_relearn_with_pcb_term_proceeds(self, mock_relearn):
+        """「重新学习 母线载流计算」→ 单 PCB 领域只是文件名 → 照旧重学（v1.12.2 修复）"""
+        mock_relearn.return_value = {"status": "ok", "file_name": "母线载流计算.md",
+                                     "collection": "experience_kb", "chunk_count": 3}
+        result = self.handler._process_text("重新学习 母线载流计算", "u1", "s1")
+        self.assertEqual(result["source"], "knowledge_relearn")
+        self.assertIn("回复「确认」", result["answer"])
+
     def test_clarify_cancel_via_bot(self):
         """澄清反问中用户回「取消」→ 已取消且不执行任何操作
 
         v1.13.0（M3）：取消走统一 pending 路由（先于 clarify 分派），
         source 为 pending_cancel，澄清被清空。
         """
-        result = self.handler._process_text("删除 d4-1 的内容", "u2", "s2")
+        result = self.handler._process_text("删除 d4-1 的看板", "u2", "s2")
         self.assertEqual(result["source"], "clarification")
         result2 = self.handler._process_text("取消", "u2", "s2")
         self.assertEqual(result2["source"], "pending_cancel")

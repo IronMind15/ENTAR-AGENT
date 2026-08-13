@@ -138,9 +138,13 @@ def _is_learn_command(text: str) -> bool:
 def _file_command_gate(text: str, user_id: str, action: str, target: str):
     from routing import ask_clarification, detect_domains, render_clarification
     domains = detect_domains(text)
-    if "kanban" in domains and len(domains) == 1:
-        return "defer", None
-    if domains:
+    if "kanban" in domains:
+        # 含看板领域：唯一领域 → 看板操作让位技能层（「删除看板订阅」）；
+        # 多领域 → 文件 vs 看板真歧义才反问澄清（「删除 d4-1 的看板」）。
+        # v1.12.2 修复：不再用 `if domains:` 兜底——单非看板领域（标准号/故障码/
+        # PCB 词）只是目标文件名，带「学习/重学」动词的命令意图明确，直接照旧文件命令。
+        if len(domains) == 1:
+            return "defer", None
         verb = "删除" if action == "delete" else "重新学习"
         ask_clarification(
             user_id,
@@ -368,18 +372,32 @@ class ErrorQueryHandler(ChatbotHandler):
             return AckMessage.STATUS_OK, "ok"
 
         # ---- 反馈指令检测：用户回复 "1" 或 "2" 作为上一条回答的反馈 ----
+        # v1.12.2 修复：澄清反问（PT_CLARIFY）与看板选模板（choose_template）都会
+        # 引导用户回编号 1/2/3，此时「1」「2」是编号回复，不能吞成满意/不满意反馈，
+        # 否则澄清/选模板永远无法用编号解除（R2：需回完整标签文字才能继续）。
         if text in ("1", "2"):
-            from user_store import get_last_conversation, add_feedback
-            last = get_last_conversation(user_id)
-            if last:
-                rating = "up" if text == "1" else "down"
-                add_feedback(user_id, last["query"], last["answer"][:500], "agent", rating)
-                fb_text = "收到反馈，感谢！👍" if text == "1" else "收到反馈，我会继续改进！🙏"
-                try:
-                    await asyncio.to_thread(self.reply_text, fb_text, bot_msg)
-                except Exception as fb_err:
-                    logger.warning(f"发送反馈回复失败: {fb_err}")
-                return AckMessage.STATUS_OK, "ok"
+            from pending_context import PT_CLARIFY, PT_KANBAN, get as pc_get
+            entry = pc_get(user_id)
+            consumes_number = False
+            if entry:
+                ptype = entry.get("type")
+                if ptype == PT_CLARIFY:
+                    consumes_number = True
+                elif ptype == PT_KANBAN and (
+                        (entry.get("payload") or {}).get("intent") == "choose_template"):
+                    consumes_number = True
+            if not consumes_number:
+                from user_store import get_last_conversation, add_feedback
+                last = get_last_conversation(user_id)
+                if last:
+                    rating = "up" if text == "1" else "down"
+                    add_feedback(user_id, last["query"], last["answer"][:500], "agent", rating)
+                    fb_text = "收到反馈，感谢！👍" if text == "1" else "收到反馈，我会继续改进！🙏"
+                    try:
+                        await asyncio.to_thread(self.reply_text, fb_text, bot_msg)
+                    except Exception as fb_err:
+                        logger.warning(f"发送反馈回复失败: {fb_err}")
+                    return AckMessage.STATUS_OK, "ok"
 
         # ---- 处理消息（整体捕获异常，返回错误码） ----
         # 慢操作（LLM/检索）先回一条提示，避免用户干等
