@@ -92,6 +92,21 @@ class SubscriptionStoreTests(unittest.TestCase):
         self.assertEqual(got.weekdays, "1,5")
         self.assertEqual(got.recipients, ["staff001", "staff002"])
 
+    def test_per_source_roundtrip_and_update(self):
+        # v1.14.0：每源独立总结字段持久化 + 可切换
+        sub_id = self.store.create(self._sub(per_source=True))
+        got = self.store.get(sub_id)
+        self.assertTrue(got.per_source)
+        got.per_source = False
+        self.store.update(got)
+        self.assertFalse(self.store.get(sub_id).per_source)
+
+    def test_per_source_in_fingerprint(self):
+        # v1.14.0：输出模式不同视为不同业务配置（合并 vs 逐源可并存）
+        merged = self._sub(per_source=False)
+        per_source = self._sub(per_source=True)
+        self.assertNotEqual(merged.fingerprint(), per_source.fingerprint())
+
     def test_set_snapshot(self):
         sub_id = self.store.create(self._sub())
         snap = [{"source_key": "s1", "total": 7, "status_counts": {"滞后": 4}}]

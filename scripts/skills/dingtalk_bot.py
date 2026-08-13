@@ -57,6 +57,39 @@ ERROR_MESSAGE = "❌ 处理出错了（错误码：{code}）。请稍后重试�
 # 故障查询(100)、PCB计算(90) 都是毫秒级；RAG Agent(50) 走 LLM 需要提示
 FAST_SKILL_PRIORITY = 50
 
+# 单条聊天 markdown 安全线（v1.13.0 消息流）：贴近看板 MAX_MARKDOWN_LEN=5000 的
+# 安全余量取 4500。普通聊天 reply_markdown 原本无长度处理，超长整体塞一条会被
+# 钉钉截断/渲染异常；以此为阈值把超长回复拆成多条顺序消息，保证完整送达。
+CHAT_MARKDOWN_LEN = 4500
+
+
+def _split_long_text(text: str, limit: int = CHAT_MARKDOWN_LEN) -> list[str]:
+    """按完整段落拆超长文本为多条（聊天兜底拆条，不带「第x/y页」标题）。
+
+    v1.13.0（消息流）：作为 bot 层兜底，任何超长 answer / 附加消息都先过这里，
+    保证钉钉单条安全线内完整送达。按 ``\\n\\n`` 段落切，不砍半行/半个 Markdown
+    结构；异常超长的单个段落退化为按完整行拆。与看板 _paginate_markdown 的区别：
+    这里不带「第 N/M 页」标题头——那是报告风格，聊天场景要干净。
+    """
+    if len(text) <= limit:
+        return [text]
+    blocks = [block.strip() for block in text.split("\n\n") if block.strip()]
+    parts, current = [], []
+    for block in blocks:
+        candidates = [block]
+        if len(block) > limit:
+            candidates = [line for line in block.splitlines() if line.strip()]
+        for candidate in candidates:
+            proposed = "\n\n".join(current + [candidate])
+            if current and len(proposed) > limit:
+                parts.append("\n\n".join(current))
+                current = [candidate]
+            else:
+                current.append(candidate)
+    if current:
+        parts.append("\n\n".join(current))
+    return parts
+
 
 def _is_fast_operation(text: str, user_id: str = "") -> bool:
     """判断是否为秒回操作（无需"正在处理"提示）
@@ -421,19 +454,32 @@ class ErrorQueryHandler(ChatbotHandler):
                 answer = result.get("answer", "") or "抱歉，我没有找到相关信息。"
                 logger.info(f"处理完成: {answer[:50]}...")
 
-                # 追加反馈提示
-                answer_with_feedback = (
-                    answer + "\n\n---\n回复 1 = 满意 👍 | 回复 2 = 不满意 👎")
+                # v1.13.0（消息流）：一次处理可产出多条顺序消息——answer 为第一条，
+                # result["messages"] 为附加条（技能/Agent/看板识别均可返回）。每条
+                # 再经 _split_long_text 兜底拆超长：聊天长回复自动多条、不被钉钉截断，
+                # 这是「其他回答也允许多次发送」的 bot 层兜底。
+                parts = _split_long_text(answer)
+                for extra in (result.get("messages") or []):
+                    parts.extend(_split_long_text(extra))
 
-                # 发送回复（普通 markdown）
-                await asyncio.to_thread(
-                    self.reply_markdown, "恩特小助手", answer_with_feedback, bot_msg)
+                # 发送回复：锁内逐条顺序发送（await 一条再发下一条保证顺序）。
+                # 反馈提示只加在最后一条——get_last_conversation 反馈语义依赖末条
+                # assistant 完整内容，避免每条都带「回复 1/2」。
+                for i, part in enumerate(parts, 1):
+                    if i == len(parts):
+                        part = part + "\n\n---\n回复 1 = 满意 👍 | 回复 2 = 不满意 👎"
+                    await asyncio.to_thread(
+                        self.reply_markdown, "恩特小助手", part, bot_msg)
 
-                # 记录到会话记忆（SQLite 写入，放线程池与处理对齐；v1.6.1）
+                # 记录到会话记忆（SQLite 写入，放线程池与处理对齐；v1.6.1）。
+                # 多条时拼接一条 assistant 记录：get_last_conversation 能取到完整
+                # 回答（反馈时 last["answer"] 完整），且不额外挤占 get_context 轮数。
                 try:
                     from skills import memory
                     await asyncio.to_thread(memory.add, user_id, "user", text)
-                    await asyncio.to_thread(memory.add, user_id, "assistant", answer)
+                    assistant_record = "\n\n".join(parts)
+                    await asyncio.to_thread(
+                        memory.add, user_id, "assistant", assistant_record)
                 except Exception as mem_err:
                     logger.warning(f"记录记忆失败: {mem_err}")
 

@@ -68,6 +68,30 @@ _RESUME_RE = re.compile(
 _DELETE_RE = re.compile(
     r"删除.*看板|删掉.*看板|解绑.*看板|注销.*看板|移除订阅.*看板|"
     r"看板.*删除|看板.*删掉|看板.*解绑|看板.*注销")
+# v1.14.0：调整订阅数据源（移除/添加）。「数据源」话题词放宽——用户说
+# 「测试ai表格的数据源帮我删掉」常不带「看板」，仍属订阅管理（防漏进 Agent 幻觉）。
+# 与删除订阅区分：删除订阅必含「看板」(_DELETE_RE)，此处只认「数据源/看板数据」。
+# 支持两种语序：名词在前（…数据源帮我删掉） / 动词在前（删掉…数据源）。
+_CHANGE_SOURCES_RE = re.compile(
+    r"(?:数据源|看板数据)[^，。！？\n]{0,12}?(?:删掉|删除|移除|去掉|去掉吧|别要|不要)"
+    r"|(?:删掉|删除|移除|去掉|去掉吧|别要|不要)[^，。！？\n]{0,12}?(?:数据源|看板数据)")
+_CHANGE_SOURCES_ADD_RE = re.compile(
+    r"(?:加个|加上|添加|增加|加一个)[^，。！？\n]{0,14}?(?:数据源|看板数据)")
+# v1.14.0：每源独立总结（per_source）。袁会荧实测需求「四份文件各自独立总结」——
+# 常不带「看板」也不带「数据源」，属订阅输出模式调整（防漏进 Agent 幻觉）。
+# 开启：各自/每个/单独/分开/独立 + 总结/出板/推送/汇报；关闭：否定/合并语。
+# 关闭须在开启之前判定（「不要分开总结」的「分开总结」会命中开启分支）。
+_PER_SOURCE_OFF_RE = re.compile(
+    r"(?:不|别|不要|取消|撤销)[^，。！？\n]{0,8}?"
+    r"(?:分开|单独|独立|各自)[^，。！？\n]{0,6}?(?:总结|出板|汇报|推送|发|来)"
+    r"|(?:合并|合在一起|放一起|整一份|汇总一条|合成一份)")
+_PER_SOURCE_ON_RE = re.compile(
+    r"(?:各自|每[个份]|单独|分开|独立)[^，。！？\n]{0,10}?"
+    r"(?:总结|出板|汇报|推送|分析|说明)"
+    r"|(?:总结|出板|汇报|推送)[^，。！？\n]{0,8}?"
+    r"(?:分开|单独|独立|各自)"
+    r"|每[个份][^，。！？\n]{0,6}?(?:数据源|文档|文件|表格)[^，。！？\n]{0,6}?"
+    r"(?:各自|单独|独立)")
 # v1.12.0：模板意图。顺序：describe > submit > set > list（「看板用周报模板」含
 # 「看板…模板」不能误判成列表查询；「按这个格式做看板：…」含「做看板」须在
 # _CREATE_RE 之前判定）。
@@ -181,10 +205,13 @@ def parse_subscription_command(text: str, ctx: Optional[dict] = None) -> Optiona
     if _NEGATIVE_RE.search(text):
         return None  # 讨论文档/方案等，不是操作订阅
     # 门槛：含「看板」或明确的接收人指令（"也推给张工"是订阅上下文内的追加指令），
-    # 或编辑模板意图（「编辑周报模板」可不含「看板」，v1.13.0 放宽）。
+    # 或编辑模板意图（「编辑周报模板」可不含「看板」，v1.13.0 放宽），
+    # 或数据源调整意图（「测试ai表格的数据源帮我删掉」不带「看板」，v1.14.0 放宽）。
     # 安全：_NEGATIVE_RE（160 行）已含「文档/设计/方案/学习/入库」等，误入只到引导，无写副作用。
     if not (_HAS_KANBAN_RE.search(text) or _RECIPIENT_RE.search(text)
-            or _EDIT_TEMPLATE_RE.search(text)):
+            or _EDIT_TEMPLATE_RE.search(text)
+            or _CHANGE_SOURCES_RE.search(text) or _CHANGE_SOURCES_ADD_RE.search(text)
+            or _PER_SOURCE_ON_RE.search(text) or _PER_SOURCE_OFF_RE.search(text)):
         return None
 
     if _STOP_RE.search(text):
@@ -195,6 +222,18 @@ def parse_subscription_command(text: str, ctx: Optional[dict] = None) -> Optiona
     if _DELETE_RE.search(text):
         # v1.11.6：删除订阅（确认后彻底移除）
         return {"intent": "delete", **(ctx or {})}
+    if _CHANGE_SOURCES_ADD_RE.search(text) or _CHANGE_SOURCES_RE.search(text):
+        # v1.14.0：调整订阅数据源（移除/添加；确认后落地）。须在 _QUERY_RE 之前——
+        # 「看板数据源删掉」含「数据源」不含 _QUERY_RE 触发词，放前安全；放 _DELETE_RE
+        # 之后（「删除XX看板」删除订阅仍是 delete）。
+        return {"intent": "change_sources", **(ctx or {})}
+    if _PER_SOURCE_OFF_RE.search(text):
+        # v1.14.0：每源独立总结关闭。OFF 独立判定并优先——否定句（「不要分开总结」
+        # 「合并成一份」）里的「分开总结」同时命中开启正则，须直接取 False 不再看 ON。
+        return {"intent": "set_per_source", "per_source": False, **(ctx or {})}
+    if _PER_SOURCE_ON_RE.search(text):
+        # v1.14.0：每源独立总结开启（确认后落地）
+        return {"intent": "set_per_source", "per_source": True, **(ctx or {})}
     # v1.12.0：模板意图（describe > submit > set > list）
     if _TEMPLATE_DESCRIBE_RE.search(text):
         desc = _extract_template_desc(text)
@@ -306,6 +345,19 @@ def is_cancel_text(text: str) -> bool:
     return pc_is_cancel(text)
 
 
+def is_change_sources_action(text: str) -> str:
+    """数据源调整动作：'add'（加个/添加）/ 'remove'（删掉/移除/去掉）/ ''（非数据源操作）
+
+    v1.14.0：供技能层区分增删语义（识别到的源名按动作归位到 add_keys / remove_keys）。
+    """
+    t = text or ""
+    if _CHANGE_SOURCES_ADD_RE.search(t):
+        return "add"
+    if _CHANGE_SOURCES_RE.search(t):
+        return "remove"
+    return ""
+
+
 # ===== 时间解析 =====
 def _parse_time(text: str) -> tuple[int, int]:
     """从文本提取 (小时, 分钟)。支持 '10点' '9点半' '10:30' '每天10:15'"""
@@ -402,6 +454,13 @@ _INTENT_DEFS: list[dict] = [
      "regex": _RESUME_RE, "desc": "复用已停用订阅重新启用（不新建重复）", "status": "enabled"},
     {"id": "delete", "name": "删除订阅", "trigger": "删除看板订阅",
      "regex": _DELETE_RE, "desc": "彻底移除订阅（确认后，不可恢复）", "status": "enabled"},
+    {"id": "change_sources", "name": "调整数据源", "trigger": "把XX数据源删掉 / 加个XX数据源",
+     "regex": _CHANGE_SOURCES_RE, "desc": "增删订阅的数据源（按名称匹配真实源，确认后落地）",
+     "status": "enabled"},
+    {"id": "set_per_source", "name": "每源独立总结", "trigger": "四份文件各自独立总结 / 合并成一份",
+     "regex": _PER_SOURCE_ON_RE,
+     "desc": "订阅输出模式：每个数据源单独一条 vs 合并成一份报告（确认后落地）",
+     "status": "enabled"},
     {"id": "query", "name": "查询配置", "trigger": "看板几点推送 / 我的看板设置",
      "regex": _QUERY_RE, "desc": "查订阅配置（不含「时间」防改时间被误判）", "status": "enabled"},
     {"id": "change_time", "name": "改推送时间", "trigger": "改看板时间到10点",
@@ -621,6 +680,30 @@ def render_confirmation(pending: dict, current=None) -> str:
         target = f" {count} 个" if count else ""
         lines.append(f"好的，将删除您的{target}看板订阅（此操作不可恢复，历史推送配置一并清除）。")
         lines.append("回复「确认」删除；如果只是想暂停，说「停掉看板」即可。")
+
+    elif intent == "change_sources":
+        # v1.14.0：调整订阅数据源（移除/添加，确认后按真实 update 结果落地）
+        removed = pending.get("remove_names") or []
+        added = pending.get("add_names") or []
+        lines.append("好的，将调整您的看板订阅数据源：")
+        if removed:
+            lines.append(f"❌ 移除：{'、'.join(removed)}")
+        if added:
+            lines.append(f"➕ 添加：{'、'.join(added)}")
+        if not removed and not added:
+            lines.append("（未识别出明确变更，保持当前数据源）")
+        lines.append("")
+        lines.append("回复「确认」生效；或告诉我其他调整（如「改到10点」「也推给张工」）。")
+
+    elif intent == "set_per_source":
+        # v1.14.0：每源独立总结（开启/关闭，确认后落地）
+        per_source = bool(pending.get("per_source"))
+        lines.append("好的，将调整订阅的输出方式：")
+        lines.append("📦 " + ("每个数据源单独总结一条（各自聚焦、互不混合）"
+                              if per_source else
+                              "所有数据源合并成一份看板报告（总体结论先行）"))
+        lines.append("")
+        lines.append("回复「确认」生效；或告诉我其他调整（如「改到10点」「也推给张工」）。")
 
     elif intent == "stop":
         count = len(pending.get("sub_ids") or [])

@@ -378,5 +378,90 @@ class FeatureRegressionTests(unittest.TestCase):
         self.assertIsNone(sc.parse_doc_dashboard_intent("把文档学习入库"))
 
 
+class ChangeSourcesTests(unittest.TestCase):
+    """v1.14.0：调整订阅数据源意图（数据源话题词，不带「看板」也识别）"""
+
+    def test_parse_remove_variants(self):
+        for text in ("测试ai表格的数据源帮我删掉",
+                     "删掉测试ai表格数据源",
+                     "把整机下线测试问题沟通数据源移除",
+                     "测试ai表格数据源别要了"):
+            r = sc.parse_subscription_command(text)
+            self.assertIsNotNone(r, text)
+            self.assertEqual(r["intent"], "change_sources", text)
+
+    def test_parse_add_variants(self):
+        for text in ("加个项目进度计划表数据源",
+                     "添加一个恩特能源研发项目现况表数据源"):
+            r = sc.parse_subscription_command(text)
+            self.assertIsNotNone(r, text)
+            self.assertEqual(r["intent"], "change_sources", text)
+
+    def test_not_change_sources(self):
+        # 不含「数据源」话题词或增删动词 → 放行（不误拦普通句）
+        for text in ("这个表格帮我删掉", "帮我删除文件",
+                     "测试ai表格是什么", "今天天气怎么样"):
+            self.assertIsNone(sc.parse_subscription_command(text), text)
+
+    def test_delete_subscription_still_delete(self):
+        # 删除订阅（含「看板」）仍是 delete，不被 change_sources 抢
+        self.assertEqual(sc.parse_subscription_command("删除看板订阅")["intent"], "delete")
+
+    def test_action_classifier(self):
+        self.assertEqual(sc.is_change_sources_action("测试ai表格的数据源帮我删掉"), "remove")
+        self.assertEqual(sc.is_change_sources_action("删掉测试ai表格数据源"), "remove")
+        self.assertEqual(sc.is_change_sources_action("加个项目进度计划表数据源"), "add")
+        self.assertEqual(sc.is_change_sources_action("这个看板今天怎么样"), "")
+
+    def test_render_confirmation(self):
+        text = sc.render_confirmation({
+            "intent": "change_sources",
+            "remove_names": ["整机下线测试问题沟通"],
+            "add_names": ["项目进度计划表"],
+        })
+        self.assertIn("❌ 移除：整机下线测试问题沟通", text)
+        self.assertIn("➕ 添加：项目进度计划表", text)
+        self.assertIn("确认", text)
+
+
+class SetPerSourceTests(unittest.TestCase):
+    """v1.14.0：每源独立总结意图（不带「看板」也识别；关开两态）"""
+
+    def test_parse_on_variants(self):
+        # 袁会荧实测需求「四份文件各自独立总结」——输出模式调整，无「看板」也能进
+        for text in ("四份文件各自独立总结",
+                     "每个数据源单独总结",
+                     "分开总结一下",
+                     "每份文件单独推送",
+                     "看板每个数据源单独分析"):
+            r = sc.parse_subscription_command(text)
+            self.assertIsNotNone(r, text)
+            self.assertEqual(r["intent"], "set_per_source", text)
+            self.assertTrue(r["per_source"], text)
+
+    def test_parse_off_variants(self):
+        for text in ("不要分开总结了，合并成一份",
+                     "还是合并成一份报告吧",
+                     "取消每份文件单独总结"):
+            r = sc.parse_subscription_command(text)
+            self.assertIsNotNone(r, text)
+            self.assertEqual(r["intent"], "set_per_source", text)
+            self.assertFalse(r["per_source"], text)
+
+    def test_not_per_source_released(self):
+        # 普通「总结/帮我总结」不带各自/单独/分开等 → 放行给 Agent，不误拦
+        for text in ("帮我总结一下这个文档",
+                     "总结一下这周的工作",
+                     "这个表格帮我删掉",
+                     "今天天气怎么样"):
+            self.assertIsNone(sc.parse_subscription_command(text), text)
+
+    def test_render_confirmation_on_off(self):
+        on = sc.render_confirmation({"intent": "set_per_source", "per_source": True})
+        self.assertIn("每个数据源单独总结一条", on)
+        off = sc.render_confirmation({"intent": "set_per_source", "per_source": False})
+        self.assertIn("合并成一份看板报告", off)
+
+
 if __name__ == "__main__":
     unittest.main()

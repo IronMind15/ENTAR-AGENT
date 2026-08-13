@@ -196,6 +196,103 @@ class ExecuteSubscriptionTests(unittest.TestCase):
         sent_text = m_push.call_args[0][2]  # push(recipients, title, text)
         self.assertTrue(sent_text.startswith("📌 今日无变化"))
 
+    def test_key_sources_expanded_into_messages(self):
+        """v1.13.0：汇总报告之外，变化最多 Top N 关键源单独展开一条；空变化不展开"""
+        from types import SimpleNamespace
+        sub_id = self._store.create(_sub(alert_mode="always"))
+        sub = self._store.get(sub_id)
+        sub.last_snapshot = [{
+            "source_key": "project_status", "table_name": "33周", "total": 1,
+            "status_counts": {"滞后": 1}, "attention": [], "normal": [],
+        }]
+        fake_report = SimpleNamespace(
+            messages=["汇总报告"], changes=[
+                {"source_key": "project_status", "source_name": "研发项目现况表",
+                 "change": "baseline", "record_changes": [
+                     {"change": "added", "source_key": "project_status",
+                      "record_id": "r1", "fields": {}, "evidence": {}}]},
+                # 空变化源（首次/baseline 无展开价值）→ 不单独展开
+                {"source_key": "other", "source_name": "源二",
+                 "change": "baseline", "record_changes": []},
+            ], verification={})
+        key_expand = SimpleNamespace(
+            messages=["🔍 研发项目现况表 详情"], changes=[], verification={})
+        with mock.patch("dashboard.service.resolve_subscription_sources",
+                        return_value=self._fake_sources()), \
+             mock.patch("dashboard.service.collect_and_parse",
+                        return_value=(_parsed(), [])), \
+             mock.patch("dashboard.service.assemble_report",
+                        side_effect=[fake_report, key_expand]), \
+             mock.patch("dashboard.service.push",
+                        return_value=(True, "")) as m_push, \
+             mock.patch("dashboard.service.now_str",
+                        return_value="2026-08-10 09:00:00"):
+            result = _execute_subscription(sub)
+        self.assertTrue(result["ok"])
+        texts = [c.args[2] for c in m_push.call_args_list]
+        self.assertGreaterEqual(len(texts), 2)   # 汇总报告 + 关键源展开条
+        self.assertIn("汇总报告", texts[0])
+        self.assertTrue(any("🔍 研发项目现况表 详情" in t for t in texts))
+        self.assertEqual(len(texts), 2)          # 空变化源不展开，共 2 条
+
+    def test_per_source_uses_per_source_messages(self):
+        """v1.14.0：per_source 订阅走逐源组装（不合并报告、不做关键源展开），
+        变化 banner 注入第一条"""
+        sub_id = self._store.create(_sub(alert_mode="always", per_source=True))
+        sub = self._store.get(sub_id)
+        sub.last_snapshot = [{
+            "source_key": "project_status", "table_name": "33周", "total": 9,
+            "status_counts": {}, "attention": [], "normal": [],
+        }]
+        per_source_msgs = ["【研发项目现况表】本周总结", "【整机下线】问题清单"]
+        with mock.patch("dashboard.service.resolve_subscription_sources",
+                        return_value=self._fake_sources()), \
+             mock.patch("dashboard.service.collect_and_parse",
+                        return_value=(_parsed(), [])), \
+             mock.patch("dashboard.service.assemble_per_source_messages",
+                        return_value=per_source_msgs) as m_ps, \
+             mock.patch("dashboard.service.assemble_report") as m_report, \
+             mock.patch("dashboard.service.push",
+                        return_value=(True, "")) as m_push, \
+             mock.patch("dashboard.service.now_str",
+                        return_value="2026-08-10 09:00:00"):
+            result = _execute_subscription(sub)
+        self.assertTrue(result["ok"])
+        m_ps.assert_called_once()            # 逐源组装被调用
+        m_report.assert_not_called()         # 不合并成一份报告
+        texts = [c.args[2] for c in m_push.call_args_list]
+        self.assertEqual(len(texts), 2)      # 两个源 → 两条独立消息
+        self.assertTrue(texts[0].startswith("📌 今日变化："))
+        self.assertIn(per_source_msgs[0], texts[0])   # banner 注入第一条
+        self.assertEqual(texts[1], per_source_msgs[1])
+
+    def test_non_per_source_does_not_call_per_source(self):
+        """v1.14.0：默认合并订阅不误走逐源组装"""
+        from types import SimpleNamespace
+        sub_id = self._store.create(_sub(alert_mode="always"))
+        sub = self._store.get(sub_id)
+        sub.last_snapshot = [{
+            "source_key": "project_status", "table_name": "33周", "total": 1,
+            "status_counts": {"滞后": 1}, "attention": [], "normal": [],
+        }]
+        with mock.patch("dashboard.service.resolve_subscription_sources",
+                        return_value=self._fake_sources()), \
+             mock.patch("dashboard.service.collect_and_parse",
+                        return_value=(_parsed(), [])), \
+             mock.patch("dashboard.service.assemble_per_source_messages") as m_ps, \
+             mock.patch("dashboard.service.assemble_report",
+                        return_value=SimpleNamespace(
+                            messages=["汇总报告"], changes=[], verification={})), \
+             mock.patch("dashboard.service.push",
+                        return_value=(True, "")) as m_push, \
+             mock.patch("dashboard.service.now_str",
+                        return_value="2026-08-10 09:00:00"):
+            result = _execute_subscription(sub)
+        self.assertTrue(result["ok"])
+        m_ps.assert_not_called()
+        # always 模式第一页带「📌 今日变化」banner，汇总报告在其后
+        self.assertTrue(m_push.call_args_list[0][0][2].endswith("汇总报告"))
+
     def test_always_change_injects_change_banner(self):
         """always：有变化顶部注入「📌 今日变化」+ 板块名（v1.11.4）"""
         sub_id = self._store.create(_sub(alert_mode="always"))

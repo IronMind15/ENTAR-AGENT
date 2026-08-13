@@ -11,6 +11,7 @@ V4 模型仅支持 tool_choice="auto"，由 LLM 自行判断是否调用工具�
 import json
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -59,6 +60,41 @@ _OPERATION_POLICY_PROMPT = """
 
 def _with_operation_policy(content: str) -> str:
     return content if _OPERATION_POLICY_PROMPT in content else content + "\n\n" + _OPERATION_POLICY_PROMPT
+
+
+# v1.14.0：Agent 幻觉护栏（硬校验，prompt 约束是软的）。
+# 真实写操作只能经工具执行（且带二次确认）；本轮零工具调用时，
+# 回答却以「✅ 已…」「已成功…」等完成态声明执行了写操作 → 必是幻觉，
+# 在回复末尾强制追加纠偏（用户是执行/确认指令的场景）。
+_FAKE_EXEC_DONE_RE = re.compile(
+    r"✅\s*已|已(?:成功|确认)?(?:创建|删除|移除|修改|调整|推送|发送|"
+    r"开通|订阅|设置|恢复|停止|保存|切换|更新|添加|启停)")
+# 用户下达执行/确认指令的触发词：确认/执行类 + 命令式写操作动词。
+# 动词要求命令式结构（帮我删/把XX删/删掉…），孤立动词字（「我昨天删的文件」）
+# 是陈述/询问历史，不算执行指令——防复述历史被误纠偏。
+_ACTION_CONFIRM_RE = re.compile(r"确认|执行|开始|好的|可以|就这么办|就这样")
+_ACTION_VERB_RE = re.compile(
+    r"(?:帮我|给我|请|麻烦|现在|马上)[^，。！？\n]{0,10}?(?:删|改|停|建|设|换|推|发|加|移|恢复|开通|订阅)"
+    r"|(?:把|将)[^，。！？\n]{0,12}?(?:删|改|停|建|设|换|推|发|加|移)"
+    r"|(?:删掉|删除|移除|去掉|停掉|停用|停止|开通|恢复|换成|改成|改为|发送|推送|加个|添加)")
+# 追加的纠偏说明（不得声称已执行未发生的写操作）
+_FAKE_EXEC_CORRECTION = (
+    "\n\n⚠️ 说明：本轮我没有执行任何写操作（未调用任何工具）。"
+    "以上如出现「已修改/已调整」等完成态表述，属错误描述。"
+    "如需调整（如看板数据源、订阅等），请明确说出要调整的内容，"
+    "我会通过正式确认流程执行。"
+)
+
+
+def _needs_fake_exec_correction(query: str, content: str, tools_used: bool) -> bool:
+    """零工具调用 + 完成态写操作声明 + 用户执行/确认指令 → 需要纠偏。"""
+    if tools_used:
+        return False  # 调过工具（哪怕只读）说明回答有执行依据，不硬拦
+    if not _FAKE_EXEC_DONE_RE.search(content):
+        return False
+    if not (_ACTION_CONFIRM_RE.search(query) or _ACTION_VERB_RE.search(query)):
+        return False
+    return True
 
 
 # ===== 工具段归一化（v1.12.0：工具段永远由注册中心生成） =====
@@ -575,6 +611,7 @@ def _handle_impl(query: str, user_id: str = "", on_chunk=None) -> dict:
     MAX_AGENT_LOOPS = 5  # 安全上限，防止死循环
     final_answer = ""
     source_tag = "agent"
+    tools_used = False  # v1.14.0：本轮是否真正调用过工具（幻觉护栏依据）
 
     for loop_i in range(MAX_AGENT_LOOPS):
         if on_chunk:
@@ -595,6 +632,11 @@ def _handle_impl(query: str, user_id: str = "", on_chunk=None) -> dict:
                 final_answer = content
                 source_tag = "agent(chat)" if loop_i == 0 else "agent(RAG)"
                 logger.info(f"  Agent 第 {loop_i + 1} 轮：无工具调用，直接回答")
+                # v1.14.0：零工具调用却声称「已执行写操作」→ 幻觉，强制追加纠偏
+                if _needs_fake_exec_correction(q, content, tools_used):
+                    final_answer = content + _FAKE_EXEC_CORRECTION
+                    logger.warning(
+                        f"  Agent 幻觉护栏：零工具调用却声称已执行写操作，已追加纠偏（{q[:30]}…）")
             break
 
         # 有工具调用 → 通知卡片「搜索中」+ 执行并追加结果
@@ -610,6 +652,7 @@ def _handle_impl(query: str, user_id: str = "", on_chunk=None) -> dict:
             if tc.get("type") == "function":
                 # 工具显示已在 _call_deepseek_stream 流式阶段触发（首次出现 tool_call 时）
                 # 此处不再重复显示
+                tools_used = True
                 tool_result = _execute_tool(tc)
                 messages.append({
                     "role": "tool",

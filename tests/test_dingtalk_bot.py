@@ -295,6 +295,62 @@ class ProcessToThreadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mem_calls[0].args[2], "user")  # 角色
         self.assertEqual(mem_calls[0].args[3], "你好")  # user 消息内容
 
+    async def test_multi_messages_sequential_feedback_last_only(self):
+        """v1.13.0 消息流：一次处理产出多条顺序消息 → 逐条发送、反馈只加末条、记忆拼接"""
+        handler = self._handler()
+        msg = _make_text_msg("你好")
+        with mock.patch(
+            "asyncio.to_thread",
+            new=mock.AsyncMock(
+                return_value={"answer": "第一段", "messages": ["第二段", "第三段"],
+                              "source": "x"}),
+        ) as m, mock.patch("skills.memory.add") as mem_add:
+            await handler.process(msg)
+        md_calls = self._to_thread_calls(m, handler.reply_markdown)
+        self.assertEqual(len(md_calls), 3)  # 三条顺序消息
+        # 前两条不带反馈尾巴，末条才追加「回复 1/2」
+        self.assertEqual(md_calls[0].args[2], "第一段")
+        self.assertEqual(md_calls[1].args[2], "第二段")
+        self.assertIn("第三段", md_calls[2].args[2])
+        self.assertIn("回复 1 = 满意", md_calls[2].args[2])
+        self.assertNotIn("回复 1 = 满意", md_calls[0].args[2])
+        # 记忆：user 一条 + assistant 拼接一条（保 get_last_conversation 完整语义）
+        mem_calls = self._to_thread_calls(m, mem_add)
+        self.assertEqual(len(mem_calls), 2)
+        self.assertEqual(mem_calls[1].args[3], "第一段\n\n第二段\n\n第三段")
+
+    async def test_single_message_unchanged_feedback_once(self):
+        """兼容回归：无 messages 时仍单条 + 反馈一次（与旧行为逐字一致）"""
+        handler = self._handler()
+        msg = _make_text_msg("你好")
+        with mock.patch(
+            "asyncio.to_thread",
+            new=mock.AsyncMock(return_value={"answer": "回复", "source": "x"}),
+        ) as m, mock.patch("skills.memory.add") as mem_add:
+            await handler.process(msg)
+        md_calls = self._to_thread_calls(m, handler.reply_markdown)
+        self.assertEqual(len(md_calls), 1)
+        self.assertIn("回复", md_calls[0].args[2])
+        self.assertIn("回复 1 = 满意", md_calls[0].args[2])
+        # 记忆仍两条（user + assistant），assistant 不重复
+        mem_calls = self._to_thread_calls(m, mem_add)
+        self.assertEqual(len(mem_calls), 2)
+
+    def test_split_long_text_breaks_paragraphs_without_page_header(self):
+        """v1.13.0 兜底拆条：超长文本按完整段落拆、拼接还原原文、不带「第x/y页」标题"""
+        from skills.dingtalk_bot import _split_long_text
+        # 15 段 × ~500 字 > 4500 安全线
+        long_text = "\n\n".join(f"段落{i}：" + "内容" * 200 for i in range(1, 16))
+        self.assertGreater(len(long_text), 4500)
+        parts = _split_long_text(long_text)
+        self.assertGreater(len(parts), 1)
+        self.assertEqual("\n\n".join(parts), long_text)  # 完整还原不丢内容
+        for part in parts:
+            self.assertLessEqual(len(part), 4500)
+            self.assertNotIn("第 1/", part)   # 不带看板「第x/y页」标题头
+        # 短文本原样单条
+        self.assertEqual(_split_long_text("短的回复"), ["短的回复"])
+
     async def test_file_message_runs_in_to_thread(self):
         handler = self._handler()
         msg = mock.MagicMock()

@@ -14,8 +14,8 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from dashboard.doc_candidates import DocCandidate, DocCandidateStore  # noqa: E402
 from dashboard.service import (  # noqa: E402
-    build_dynamic_source, load_all_available_sources, resolve_subscription_sources,
-    source_resolution_warnings,
+    assemble_per_source_messages, build_dynamic_source, load_all_available_sources,
+    resolve_subscription_sources, source_resolution_warnings,
 )
 from dashboard.subscription_store import Subscription  # noqa: E402
 
@@ -182,6 +182,51 @@ class LoadAllAvailableSourcesTests(unittest.TestCase):
         with mock.patch("dashboard.config_model.load_sources", return_value=[]):
             all_ = load_all_available_sources()
         self.assertEqual({s.key for s in all_}, {"doc_1", "doc_2"})
+
+
+class AssemblePerSourceMessagesTests(unittest.TestCase):
+    """v1.13.0：逐源组装——每个数据源单独一轮 LLM，各产出消息"""
+
+    def _parsed_item(self, source_key):
+        return {"source_key": source_key, "name": f"源{source_key}",
+                "table_name": "", "total": 1, "items": [], "detailed_items": [],
+                "status_counts": {}, "attention_items": [], "normal_items": [],
+                "other_items": []}
+
+    def test_each_source_reduced_separately(self):
+        parsed = [self._parsed_item("a"), self._parsed_item("b")]
+        fake_report = mock.MagicMock()
+        fake_report.messages = ["总结"]
+        build = mock.patch(
+            "dashboard.llm_pipeline.build_dashboard_report",
+            return_value=fake_report).start()
+        self.addCleanup(mock.patch.stopall)
+        msgs = assemble_per_source_messages(
+            parsed, title="T", date_str="2026-08-13", llm_func=lambda *a, **k: {})
+        self.assertEqual(msgs, ["总结", "总结"])
+        # 每个源独立调用一次 build_dashboard_report，且只传该源 item
+        self.assertEqual(build.call_count, 2)
+        for i, item in enumerate(parsed):
+            self.assertEqual(build.call_args_list[i][0][0], [item])
+        # 旧快照全量传入（field_diff 内部按 source_key 过滤），透传 title/template
+        self.assertEqual(build.call_args_list[0][1]["title"], "T")
+        self.assertEqual(build.call_args_list[0][0][1], None)  # 位置参数 = old_snapshot
+
+    def test_multi_page_source_all_appended(self):
+        # 单源超长时 report.messages 自带语义分页，全量追加（多条也算一条源）
+        parsed = [self._parsed_item("a")]
+        report = mock.MagicMock()
+        report.messages = ["第1页", "第2页"]
+        with mock.patch("dashboard.llm_pipeline.build_dashboard_report",
+                        return_value=report):
+            msgs = assemble_per_source_messages(parsed)
+        self.assertEqual(msgs, ["第1页", "第2页"])
+
+    def test_empty_parsed_returns_empty(self):
+        with mock.patch("dashboard.llm_pipeline.build_dashboard_report") as build:
+            msgs = assemble_per_source_messages([])
+        self.assertEqual(msgs, [])
+        build.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -214,6 +214,14 @@ class DashboardSkill(BaseSkill):
             sub_cmd.set_pending(uid, pending)
             return {"answer": sub_cmd.render_confirmation(pending), "source": "dashboard"}
 
+        if intent == "change_sources":
+            # v1.14.0：调整订阅数据源（按名称匹配真实源 → 确认 → 落地）
+            return cls._handle_change_sources(q, uid)
+
+        if intent == "set_per_source":
+            # v1.14.0：每源独立总结（开启/关闭 → 确认 → 落地）
+            return cls._handle_set_per_source(q, uid, parsed)
+
         if intent == "set_recipient_self":
             return {"answer": sub_cmd.render_confirmation({"intent": "set_recipient_self"}),
                     "source": "dashboard"}
@@ -242,6 +250,88 @@ class DashboardSkill(BaseSkill):
         return {"answer": _HELP_TEXT, "source": "dashboard"}
 
     # ===== 辅助 =====
+    @classmethod
+    def _handle_change_sources(cls, text: str, user_id: str) -> dict:
+        """v1.14.0：调整订阅数据源（按名称匹配真实源 → 确认 → 落地）
+
+        用户说「测试ai表格的数据源帮我删掉」「加个项目进度计划表数据源」——
+        不带「看板」也能进（parse 门槛已放宽）。只认订阅真实拥有的源，
+        识别不到或不在订阅时如实提示，不编造「已修改」。
+        """
+        store = get_subscription_store()
+        subs = store.list_for_owner(user_id)
+        if not subs:
+            return {"answer": "您还没有订阅看板。说「帮我推个看板」先开通，再调整数据源。",
+                    "source": "dashboard"}
+        parsed = cls._parse_change_sources(text, user_id, subs[0])
+        if not (parsed["remove_keys"] or parsed["add_keys"]):
+            return {"answer":
+                    "没识别出要调整的数据源。当前订阅数据源说「看板状态」查看；"
+                    "可说「把XX数据源删掉」或「加个XX数据源」（XX 为数据源名称）。",
+                    "source": "dashboard"}
+        pending = {"intent": "change_sources", "sub_id": subs[0].id, **parsed}
+        sub_cmd.set_pending(user_id, pending)
+        return {"answer": sub_cmd.render_confirmation(pending, current=subs[0]),
+                "source": "dashboard"}
+
+    @classmethod
+    def _parse_change_sources(cls, text: str, user_id: str, sub) -> dict:
+        """按展示名在订阅源/可选源里匹配文本，返回增删清单。
+
+        - remove：订阅当前拥有的源，名出现在文本 → 移除
+        - add：可选源（config + 该用户 enabled 候选）未在订阅，名出现在文本 → 添加
+        """
+        from dashboard.service import load_all_available_sources, resolve_subscription_sources
+        action = sub_cmd.is_change_sources_action(text)
+        name_by_key: dict[str, str] = {}
+        try:
+            for src in resolve_subscription_sources(sub):
+                name_by_key[src.key] = src.name
+        except Exception:
+            pass
+        candidate: dict[str, str] = {}
+        try:
+            for src in load_all_available_sources(user_id=user_id):
+                candidate[src.name] = src.key
+        except Exception:
+            pass
+
+        remove_keys, remove_names = [], []
+        add_keys, add_names = [], []
+        if action == "remove":
+            for key, name in name_by_key.items():
+                if name and name in text and key in sub.data_sources:
+                    if key not in remove_keys:
+                        remove_keys.append(key)
+                        remove_names.append(name)
+        elif action == "add":
+            for name, key in candidate.items():
+                if name and name in text and key not in sub.data_sources:
+                    if key not in add_keys:
+                        add_keys.append(key)
+                        add_names.append(name)
+        return {"remove_keys": remove_keys, "remove_names": remove_names,
+                "add_keys": add_keys, "add_names": add_names}
+
+    @classmethod
+    def _handle_set_per_source(cls, text: str, user_id: str, parsed: dict) -> dict:
+        """v1.14.0：每源独立总结（开启/关闭 → 确认 → 落地）
+
+        用户说「四份文件各自独立总结」「合并成一份」——不带「看板」也能进
+        （parse 门槛已放宽）。输出模式是订阅级配置，确认后按真实 update 结果回报，
+        不编造「已生效」。
+        """
+        store = get_subscription_store()
+        subs = store.list_for_owner(user_id)
+        if not subs:
+            return {"answer": "您还没有订阅看板。说「帮我推个看板」先开通，再调整输出方式。",
+                    "source": "dashboard"}
+        pending = {"intent": "set_per_source", "sub_id": subs[0].id,
+                   "per_source": bool(parsed.get("per_source"))}
+        sub_cmd.set_pending(user_id, pending)
+        return {"answer": sub_cmd.render_confirmation(pending, current=subs[0]),
+                "source": "dashboard"}
+
     @classmethod
     def _handle_doc_create(cls, user_id: str,
                            source_candidate_ids: list[int] | None = None) -> dict:
@@ -414,6 +504,57 @@ class DashboardSkill(BaseSkill):
             action = "恢复" if desired else "停止"
             return {"answer": f"✅ 已{action} {changed} 个看板订阅。", "source": "dashboard"}
 
+        if intent == "change_sources":
+            # v1.14.0：调整订阅数据源（按真实 update 结果回报，禁止吞错谎报）
+            sub = store.get(pending.get("sub_id") or 0)
+            if not sub:
+                sub_cmd.clear_pending(user_id)
+                return {"answer": "订阅不存在，可能是已删除。说「帮我推个看板」重新开通。",
+                        "source": "dashboard"}
+            owned_ids = {s.id for s in store.list_for_owner(user_id)}
+            if sub.id not in owned_ids:
+                sub_cmd.clear_pending(user_id)
+                return {"answer": "该订阅不属于您，无法调整数据源。", "source": "dashboard"}
+            removed, added = [], []
+            for key in pending.get("remove_keys") or []:
+                if key in sub.data_sources:
+                    sub.data_sources.remove(key)
+                    removed.append(key)
+            for key in pending.get("add_keys") or []:
+                if key not in sub.data_sources:
+                    sub.data_sources.append(key)
+                    added.append(key)
+            store.update(sub)
+            sub_cmd.clear_pending(user_id)
+            parts = []
+            if removed:
+                parts.append(f"移除 {len(removed)} 个数据源")
+            if added:
+                parts.append(f"添加 {len(added)} 个数据源")
+            return {"answer":
+                    f"✅ 已调整看板数据源：{'；'.join(parts)}。下次推送即按新数据源执行。",
+                    "source": "dashboard"}
+
+        if intent == "set_per_source":
+            # v1.14.0：每源独立总结（按真实 update 结果回报，禁止吞错谎报）
+            sub = store.get(pending.get("sub_id") or 0)
+            if not sub:
+                sub_cmd.clear_pending(user_id)
+                return {"answer": "订阅不存在，可能是已删除。说「帮我推个看板」重新开通。",
+                        "source": "dashboard"}
+            owned_ids = {s.id for s in store.list_for_owner(user_id)}
+            if sub.id not in owned_ids:
+                sub_cmd.clear_pending(user_id)
+                return {"answer": "该订阅不属于您，无法调整输出方式。", "source": "dashboard"}
+            per_source = bool(pending.get("per_source"))
+            sub.per_source = per_source
+            store.update(sub)
+            sub_cmd.clear_pending(user_id)
+            mode = "每个数据源单独总结一条" if per_source else "合并成一份看板报告"
+            return {"answer":
+                    f"✅ 已切换订阅输出方式：{mode}。下次推送即按新方式出板。",
+                    "source": "dashboard"}
+
         if intent == "set_template":
             # v1.12.0：切换模板到订阅（按真实 update 结果回报）
             tpl = cls._match_template_key(pending.get("template_key"), user_id)
@@ -523,21 +664,23 @@ class DashboardSkill(BaseSkill):
         if not parsed:
             msg = "；".join(errors[:2]) or "无数据"
             return f"（推送前准备失败：{msg}，配置好数据源后每日自动推送）"
-        # 样例推送与定时推送统一走 LLM 组装（失败规则兜底）；按订阅模板输出格式
+        # 样例推送（识别/预览场景）v1.13.0 改逐源多条：每个数据源单独 LLM 总结
+        # 发一条，逐源聚焦、全面识别不被单条字数限制压缩；而不是一份报告切页。
+        # 复用 LLM 组装（失败规则兜底）+ 订阅模板输出格式。
         template = service.resolve_template(sub)
         try:
             from skills.agent import call_deepseek_json
-            report = service.assemble_report(
+            msgs = service.assemble_per_source_messages(
                 parsed, title=sub.title, date_str=service.today_str(),
                 llm_func=call_deepseek_json, old_snapshot=sub.last_snapshot,
                 errors=errors, template=template)
         except Exception:
-            report = service.assemble_report(
+            msgs = service.assemble_per_source_messages(
                 parsed, title=sub.title, date_str=service.today_str(),
                 old_snapshot=sub.last_snapshot, errors=errors, template=template)
-        ok, msg = service.push_messages(sub.recipients, sub.title, report.messages)
+        ok, msg = service.push_messages(sub.recipients, sub.title, msgs)
         if ok:
-            return "已推送示例看板给您，可先查看效果！"
+            return "已推送示例看板给您（每个数据源一条），可先查看效果！"
         return f"（订阅已开通，但示例推送失败：{msg}）"
 
     @classmethod

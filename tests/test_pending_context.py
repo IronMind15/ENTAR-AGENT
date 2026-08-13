@@ -99,6 +99,15 @@ class PendingContextTests(unittest.TestCase):
         for w in ("对的", "对呀", "对啊", "是的呀", "是呀", "好呀", "好啊", "可以的", "可以呀"):
             for ptype in (PT_TOOL, PT_LEARN, PT_KANBAN, PT_CLARIFY):
                 self.assertTrue(is_confirm_text(w, ptype), (w, ptype))
+        # v1.12.5：动作后缀「推送/发送」——「确认推送」落 Agent 被 LLM 反复要求
+        # 再确认、推送永不执行（真实回归：dash_push 写操作确认死循环）
+        for w in ("确认推送", "好，推送", "好的，推送", "执行推送", "确认发送"):
+            for ptype in (PT_TOOL, PT_LEARN, PT_KANBAN, PT_CLARIFY):
+                self.assertTrue(is_confirm_text(w, ptype), (w, ptype))
+        # 单独动作词 / 模糊句不误判
+        self.assertFalse(is_confirm_text("推送", PT_TOOL))
+        self.assertFalse(is_confirm_text("发送", PT_TOOL))
+        self.assertFalse(is_confirm_text("帮我推送", PT_TOOL))
         # 否定/普通句子不误判
         self.assertFalse(is_confirm_text("确认删除所有文件", PT_TOOL))
         self.assertFalse(is_confirm_text("我确认一下", PT_TOOL))

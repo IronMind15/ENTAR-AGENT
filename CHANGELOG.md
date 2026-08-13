@@ -3,6 +3,38 @@
 > 📌 **本文档是项目唯一的版本记录（单一事实源）**——README.md、PROGRESS.md 的版本历史均指向本文件，发版时只在这里追加记录。
 > 相关：待办清单见 [TODO.md](TODO.md)，进度看板见 [PROGRESS.md](PROGRESS.md)。
 
+## v1.12.5（2026-08-13）
+
+**📨 消息流根治（v1.13.0）+ 袁会荧三项看板调整落地（v1.14.0）**——两批连续开发合并一发（用户拍板：都收进 v1.12.5，先不升 minor）：根治「单条回复有字数限制」，并落地实测发现的三层根因修复（改数据源意图/堵 Agent 幻觉/每源独立总结）。
+
+### 📨 v1.13.0 消息流根治（一次请求 → 多条顺序消息）
+
+数据源一多全塞一个 LLM reduce 复杂/质量差，单条钉钉 markdown 又有 5000 字安全线（`MAX_MARKDOWN_LEN`）——此前「语义分页第 x/y 页」只是切页不是根治。本次升级回复协议为「消息流」：
+
+- **L1 消息流协议**：`_process_text` 返回值支持可选 `messages`（answer 之外的附加条），bot `process()` 锁内顺序逐条 `to_thread` 发送，反馈尾巴（回复 1/2 满意度）只加最后一条，记忆拼接一条（不挤占轮数预算）；任何技能/Agent/看板识别都能返回多条，旧调用方行为逐字不变。
+- **L2 看板识别/预览逐源多条**：`service.assemble_per_source_messages` 每个数据源单独跑一轮组装 → 每条聚焦一个源（复用 `build_dashboard_report`/`collect_and_parse`，不侵入 llm_pipeline 核心）；样例预览（识别后立即推）从「一份报告」变「每源一条」。
+- **L3 定时推送「汇总 + 关键源展开」**：`dashboard_scheduler` 在汇总报告之外，把「记录变化最多」的 Top N（N=2，`KEY_SOURCE_EXPAND_N`）数据源单独展开一条详情（带完整证据），`record_changes` 为空（baseline 首次/新增源/快照升级）不展开。
+- **L4 聊天长回复兜底拆条**：`CHAT_MARKDOWN_LEN=4500` + `_split_long_text` 按 `\n\n` 段落拆条（不带「第 x/y 页」标题，聊天要干净），「其他回答也允许多条发送」的兜底落地。
+
+### 🛠️ v1.14.0 袁会荧三项看板调整落地（三层根因修复）
+
+实测：袁会荧要求 ①删测试ai表格 ②只留33周周报 ③四份文件各自独立总结——三项全没生效，小助手自称「看板数据源增删/切换这类订阅配置没有执行入口」。诊断三层根因逐一修复：
+
+- **A 新增「调整数据源」意图**（能力缺口）：`change_sources`——「XX数据源删掉/加个XX数据源」按名称匹配订阅**真实拥有的源**与可选源 → 二次确认 → 按真实 update 结果落地；识别不到/不在订阅如实提示，不编造「已修改」。parse 门槛放宽（不含「看板」也能进）。`_INTENT_DEFS` 16→17。
+- **B 堵 Agent 幻觉**（零工具调用声称已执行）：`agent.py` 幻觉护栏 `_needs_fake_exec_correction`——本轮零工具调用 + 回答含「✅ 已/已创建/已删除/已调整」等完成态声明 + 用户确为执行/确认指令 → 自动追加纠偏「本轮未执行任何写操作，走正式确认流程」；复述历史（「我昨天删的文件」）/正常聊天不误伤（`_ACTION_VERB_RE` 要求命令式结构，不做孤立单字匹配）。
+- **C 每源独立总结**（输出模式）：订阅模型加 `per_source` 字段（SQLite `_ensure_column` 迁移自动补列，老库零影响；fingerprint 区分合并/逐源，可并存）——「四份文件各自独立总结/每个数据源单独总结」开启、「合并成一份」关闭 → 二次确认 → 落地；定时推送 `per_source` 订阅逐源组装（复用 v1.13.0 `assemble_per_source_messages`），每个源单独一条、今日变化标注注入首条、跳过关键源展开（已是逐源粒度）；`_INTENT_DEFS` 17→18。
+
+### 测试
+
+- 消息流：多消息协议（answer+messages 逐条发送、反馈只加末条、记忆拼接）/兜底拆条（>4500 按段拆、无「第 x/y 页」标题）/兼容回归（单条行为逐字不变）（test_dingtalk_bot）+ `assemble_per_source_messages` 两源→2 条逐源调用（test_dashboard_service）+ 关键源展开 Top N/空变化不展开（test_dashboard_scheduler）+ `_push_sample` 逐源多条（test_dashboard_skill）。
+- 三修复：change_sources 解析变体/动作分类器/确认文案/技能层端到端落地/不在订阅如实提示（test_subscription_commands + test_dashboard_skill）+ 幻觉护栏单元 5 项与集成 2 项（test_agent_fake_exec 新建）+ per_source 解析开/关/非意图放行/技能层落地/scheduler 逐源与合并互斥（assemble_per_source_messages 被调 vs 不调）+ store 字段持久化与 fingerprint（test_subscription_commands/test_dashboard_skill/test_dashboard_scheduler/test_subscription_store）+ 能力清单完整性 18 意图。
+- 全量回归 **887 项通过**（851 基线 + 36）。
+
+### 已知限制
+
+- per_source 逐源模式每个源一次 LLM reduce（map+reduce），源多时总成本略增——正是「每条聚焦」的代价；未加源数上限（用户未提）。
+- 能力清单已再生（docs/能力清单.md，订阅意图 16→18 项）；本次改动需重启服务后生效（已重启加载，PID 35064）。
+
 ## v1.12.4（2026-08-13）
 
 **🐛 修复看板确认词「对的」漏接 → LLM 谎称已开通**——袁会荧实测冲突：发文件夹链接 + 「做每日看板」→ bot 正常反问确认 → 用户回「对的」确认，但「对的」不在确认词表（`对`+`的` 匹配不到 `^(?:对\|...)`）→ 看板确认词分支不拦截 → 落 Agent → LLM **无工具调用**凭空答「已开通每日看板推送」（实际订阅从未创建）→ 后续「示例看板在哪里」dashboard 查询真实状态报「没有订阅」，用户同时看到「已开通」和「没订阅」两个矛盾说法。数据库实锤：用户无订阅记录，LLM 的「已开通」是编造。

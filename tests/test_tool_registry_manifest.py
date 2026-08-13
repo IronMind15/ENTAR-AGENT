@@ -118,7 +118,7 @@ class CapabilityManifestTests(unittest.TestCase):
         self.assertFalse(any("error" in s for s in skills))
 
         intents = cm.collect_dashboard_intents()
-        self.assertEqual(len(intents), 16)  # v1.13.0：新增 edit_template 意图
+        self.assertEqual(len(intents), 18)  # v1.14.0：新增 change_sources + set_per_source
         self.assertFalse(any("error" in i for i in intents))
 
         cmds = cm.collect_bot_commands()

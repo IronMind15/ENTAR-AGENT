@@ -27,6 +27,35 @@ _scheduler: BackgroundScheduler | None = None
 
 _TS_FORMAT = "%Y-%m-%d %H:%M:%S"
 
+# v1.13.0（消息流）：定时推送在汇总报告之外，把「记录变化最多」的 Top N 数据源
+# 单独展开一条（每个关键源聚焦详情）。N 收敛在 2：变化源多时避免消息暴增。
+KEY_SOURCE_EXPAND_N = 2
+
+
+def _key_source_expansions(report, parsed, n: int = KEY_SOURCE_EXPAND_N):
+    """从报告变化里挑出要单独展开的关键数据源。
+
+    Returns:
+        list[(parsed_item, source_name)]，按 record_changes 数量降序取前 n。
+        record_changes 为空（baseline 首次 / source_added / snapshot_upgraded）
+        没有可展开的变化，直接跳过。
+    """
+    by_key = {item["source_key"]: item for item in parsed}
+    ranked = sorted(
+        report.changes,
+        key=lambda c: len(c.get("record_changes") or []), reverse=True)
+    picked = []
+    for change in ranked:
+        if not change.get("record_changes"):
+            continue
+        item = by_key.get(change.get("source_key"))
+        if item is not None:
+            name = change.get("source_name") or item.get("name") or "数据源"
+            picked.append((item, name))
+        if len(picked) >= n:
+            break
+    return picked
+
 
 def _admin_staff_ids() -> list[str]:
     """失败告警管理员名单（CONTACT_ADMIN_STAFF_IDS，逗号/空格/分号分隔）"""
@@ -130,24 +159,59 @@ def _execute_subscription(sub) -> dict:
 
     # LLM 组装 → 失败/超长规则兜底（service.assemble 内部处理）
     # v1.12.0：按订阅模板决定输出格式（daily 缺省=旧行为）
+    # v1.14.0：per_source 订阅改用逐源组装——每个数据源单独一条（复用 v1.13.0
+    # assemble_per_source_messages），不再合并成一份报告，也不再关键源展开
+    # （已是逐源粒度）。
     template = service.resolve_template(sub)
+    per_source = bool(getattr(sub, "per_source", False))
     try:
         from skills.agent import call_deepseek_json
-        report = service.assemble_report(
-            parsed, title=sub.title, date_str=service.today_str(),
-            llm_func=call_deepseek_json, old_snapshot=sub.last_snapshot,
-            errors=errors, template=template)
+        if per_source:
+            report = None
+            messages = list(service.assemble_per_source_messages(
+                parsed, title=sub.title, date_str=service.today_str(),
+                llm_func=call_deepseek_json, old_snapshot=sub.last_snapshot,
+                errors=errors, template=template))
+        else:
+            report = service.assemble_report(
+                parsed, title=sub.title, date_str=service.today_str(),
+                llm_func=call_deepseek_json, old_snapshot=sub.last_snapshot,
+                errors=errors, template=template)
+            messages = list(report.messages)
     except Exception:
-        report = service.assemble_report(
-            parsed, title=sub.title, date_str=service.today_str(),
-            old_snapshot=sub.last_snapshot, errors=errors, template=template)
-
-    messages = list(report.messages)
+        if per_source:
+            report = None
+            messages = list(service.assemble_per_source_messages(
+                parsed, title=sub.title, date_str=service.today_str(),
+                old_snapshot=sub.last_snapshot, errors=errors, template=template))
+        else:
+            report = service.assemble_report(
+                parsed, title=sub.title, date_str=service.today_str(),
+                old_snapshot=sub.last_snapshot, errors=errors, template=template)
+            messages = list(report.messages)
 
     # 每日必推：顶部注入变化标注（有变化列变更、无变化显式说明）
     if sub.alert_mode == "always":
         name_by_key = {s.key: s.name for s in sources}
         messages[0] = change_banner(sub.last_snapshot, snap, name_by_key) + "\n\n" + messages[0]
+
+    # v1.13.0（消息流）：汇总报告之外，把「变化最多」的 Top N 关键数据源单独
+    # 展开一条——每条聚焦详情（含完整证据），汇总报告仍给全局视角。复用同一套
+    # LLM 组装（失败规则兜底），按订阅模板输出格式；标题带源名区分于汇总。
+    # v1.14.0：per_source 逐源模式每条已是单源总结，跳过关键源展开。
+    for key_item, key_name in (_key_source_expansions(report, parsed)
+                               if not per_source and report else []):
+        try:
+            key_report = service.assemble_report(
+                [key_item], title=f"🔍 {key_name} 详情",
+                date_str=service.today_str(), llm_func=call_deepseek_json,
+                old_snapshot=sub.last_snapshot, errors=errors, template=template)
+        except Exception:
+            key_report = service.assemble_report(
+                [key_item], title=f"🔍 {key_name} 详情",
+                date_str=service.today_str(),
+                old_snapshot=sub.last_snapshot, errors=errors, template=template)
+        messages.extend(key_report.messages)
 
     ok, msg = service.push_messages(sub.recipients, sub.title, messages)
     if not ok:
@@ -157,8 +221,10 @@ def _execute_subscription(sub) -> dict:
 
     get_subscription_store().set_snapshot(
         sub.id, snap, last_pushed_at=service.now_str())
-    logger.info("[看板] 订阅 %s 已推送（%s 人，%s 页；核验=%s）",
-                sub.id, len(sub.recipients), len(messages), report.verification)
+    logger.info("[看板] 订阅 %s 已推送（%s 人，%s 页；核验=%s；per_source=%s）",
+                sub.id, len(sub.recipients), len(messages),
+                getattr(report, "verification", None) if report else "-",
+                per_source)
     return {"ok": True, "reason": ""}
 
 

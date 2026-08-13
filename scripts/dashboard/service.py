@@ -191,6 +191,32 @@ def assemble_report(parsed: list, title: str = "恩特能源每日项目看板",
         collection_errors=errors, template=template)
 
 
+def assemble_per_source_messages(parsed: list, title: str = "恩特能源每日项目看板",
+                                 date_str: str = "", llm_func=None,
+                                 old_snapshot=None, errors: list[str] | None = None,
+                                 template=None) -> list[str]:
+    """每个数据源单独跑一轮组装 → 每个源总结一条（识别/预览逐源聚焦）。
+
+    v1.13.0（消息流）：数据源多时一次性全塞 LLM reduce 复杂/超限。这里按源
+    拆分——LLM 每次只总结一个源（更聚焦、不超上下文），每个源的结果作为一条
+    消息返回，调用方顺序发送。
+
+    - ``parsed`` 为 collect_and_parse 结果（每项 = parse_source_records 返回）。
+    - 每个源单独走 build_dashboard_report（map/reduce 自然只含该源记录）。
+    - ``old_snapshot`` 传全量即可：field_diff 内部按 source_key 索引，自动过滤
+      出该源的旧快照做变化对比。
+    - 单源若仍超长，report.messages 自带语义分页，全量追加（多条也算一条源）。
+    """
+    from .llm_pipeline import build_dashboard_report
+    msgs: list[str] = []
+    for item in parsed:
+        report = build_dashboard_report(
+            [item], old_snapshot, llm_func, title=title, date_str=date_str,
+            collection_errors=errors, template=template)
+        msgs.extend(report.messages)
+    return msgs
+
+
 def today_str() -> str:
     return datetime.now().strftime("%Y-%m-%d")
 

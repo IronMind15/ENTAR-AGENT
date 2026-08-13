@@ -67,6 +67,7 @@ class Subscription:
     recipients: list = field(default_factory=list)     # batchSend staff_id，含 owner
     title: str = "恩特能源每日项目看板"
     template_id: str = "daily"           # 看板模板键（v1.12.0，输出格式）
+    per_source: bool = False   # v1.14.0：每源独立总结（True=每个数据源单独一条，False=合并一份报告）
     last_snapshot: Optional[list] = None   # alerts.make_snapshot 输出
     last_pushed_at: str = ""
     enabled: bool = True
@@ -78,6 +79,8 @@ class Subscription:
 
         v1.12.0 加入 template_id：同来源同时段不同格式不视为重复订阅——
         用户可能故意同时要「每日简报」和「周报总结」两个输出。
+        v1.14.0 加入 per_source：同一来源同时段「合并总结」与「每源独立总结」
+        是两种输出模式，允许并存（视为不同业务配置）。
         """
         return (
             self.owner_user_id,
@@ -86,6 +89,7 @@ class Subscription:
             self.alert_mode or "always",
             tuple(sorted(str(x) for x in self.recipients)),
             self.template_id or "daily",
+            int(self.per_source),
         )
 
 
@@ -149,6 +153,9 @@ class SubscriptionStore:
         # v1.12.0 迁移：老库补 template_id 列（默认 daily，等价于旧行为）
         self._ensure_column(conn, "dashboard_subscriptions", "template_id",
                             "TEXT DEFAULT 'daily'")
+        # v1.14.0 迁移：老库补 per_source 列（默认 0=合并总结，等价于旧行为）
+        self._ensure_column(conn, "dashboard_subscriptions", "per_source",
+                            "INTEGER DEFAULT 0")
         conn.commit()
 
     @staticmethod
@@ -172,6 +179,7 @@ class SubscriptionStore:
             recipients=_loads_list(row["recipients"]),
             title=row["title"],
             template_id=row["template_id"] or "daily",
+            per_source=bool(row["per_source"]),
             last_snapshot=_loads_json(row["last_snapshot"]),
             last_pushed_at=row["last_pushed_at"],
             enabled=bool(row["enabled"]),
@@ -188,13 +196,13 @@ class SubscriptionStore:
                 """INSERT INTO dashboard_subscriptions
                    (owner_user_id, owner_staff_id, owner_union_id, data_sources,
                     push_hour, push_minute, weekdays, alert_mode, recipients, title,
-                    template_id, last_snapshot, last_pushed_at, enabled, created_at,
-                    updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    template_id, per_source, last_snapshot, last_pushed_at, enabled,
+                    created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (sub.owner_user_id, sub.owner_staff_id, sub.owner_union_id,
                  _dumps(sub.data_sources), sub.push_hour, sub.push_minute,
                  sub.weekdays, sub.alert_mode, _dumps(sub.recipients), sub.title,
-                 sub.template_id or "daily",
+                 sub.template_id or "daily", int(sub.per_source),
                  _dumps(sub.last_snapshot), sub.last_pushed_at,
                  int(sub.enabled), now, now),
             )
@@ -257,12 +265,13 @@ class SubscriptionStore:
                 """UPDATE dashboard_subscriptions SET
                      owner_staff_id=?, owner_union_id=?, data_sources=?,
                      push_hour=?, push_minute=?, weekdays=?, alert_mode=?,
-                     recipients=?, title=?, template_id=?, updated_at=?
+                     recipients=?, title=?, template_id=?, per_source=?,
+                     updated_at=?
                    WHERE id=?""",
                 (sub.owner_staff_id, sub.owner_union_id, _dumps(sub.data_sources),
                  sub.push_hour, sub.push_minute, sub.weekdays, sub.alert_mode,
                  _dumps(sub.recipients), sub.title, sub.template_id or "daily",
-                 _now(), sub.id),
+                 int(sub.per_source), _now(), sub.id),
             )
             self._get_conn().commit()
 

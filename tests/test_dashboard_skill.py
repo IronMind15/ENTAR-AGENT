@@ -247,6 +247,152 @@ class HandleChangeTests(unittest.TestCase):
         self.assertIn("还没有订阅", r["answer"])
 
 
+class HandleChangeSourcesTests(unittest.TestCase):
+    """v1.14.0：调整订阅数据源（识别真实源 → 确认 → 落地）"""
+
+    def setUp(self):
+        import tempfile, os
+        from types import SimpleNamespace
+        from dashboard.subscription_store import Subscription, SubscriptionStore
+        self.SimpleNamespace = SimpleNamespace
+        self.patch_pending = mock.patch("pending_context._pending", {})
+        self.patch_pending.start()
+        self.addCleanup(self.patch_pending.stop)
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self._db_path = path
+        self._store = SubscriptionStore(db_path=path)
+        self.patch_store = mock.patch(
+            "skills.dashboard.get_subscription_store", return_value=self._store)
+        self.patch_store.start()
+        self.addCleanup(self.patch_store.stop)
+        self.addCleanup(self._cleanup_db)
+        sub = Subscription(owner_user_id="u1", owner_staff_id="staff001",
+                           owner_union_id="u1",
+                           data_sources=["project_status", "doc_2"],
+                           recipients=["staff001"])
+        self._sub_id = self._store.create(sub)
+
+    def _cleanup_db(self):
+        self._store.close()
+        for suffix in ("", "-wal", "-shm"):
+            p = self._db_path + suffix
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+
+    def _src(self, key, name):
+        return self.SimpleNamespace(key=key, name=name)
+
+    @mock.patch("dashboard.service.load_all_available_sources")
+    @mock.patch("dashboard.service.resolve_subscription_sources")
+    def test_remove_source_flow(self, mock_resolve, mock_load):
+        mock_resolve.return_value = [
+            self._src("project_status", "研发项目现况表"),
+            self._src("doc_2", "整机下线测试问题沟通"),
+        ]
+        mock_load.return_value = [
+            self._src("project_status", "研发项目现况表"),
+            self._src("doc_5", "项目进度计划表"),
+        ]
+        r = DashboardSkill.handle("把整机下线测试问题沟通数据源移除", user_id="u1")
+        self.assertIn("❌ 移除：整机下线测试问题沟通", r["answer"])
+        self.assertIn("确认", r["answer"])
+        r = DashboardSkill.handle("确认", user_id="u1")
+        self.assertIn("已调整", r["answer"])
+        self.assertEqual(self._store.get(self._sub_id).data_sources,
+                         ["project_status"])
+
+    @mock.patch("dashboard.service.load_all_available_sources")
+    @mock.patch("dashboard.service.resolve_subscription_sources")
+    def test_add_source_flow(self, mock_resolve, mock_load):
+        mock_resolve.return_value = [self._src("project_status", "研发项目现况表")]
+        mock_load.return_value = [
+            self._src("project_status", "研发项目现况表"),
+            self._src("doc_5", "项目进度计划表"),
+        ]
+        r = DashboardSkill.handle("加个项目进度计划表数据源", user_id="u1")
+        self.assertIn("➕ 添加：项目进度计划表", r["answer"])
+        DashboardSkill.handle("确认", user_id="u1")
+        self.assertIn("doc_5", self._store.get(self._sub_id).data_sources)
+
+    @mock.patch("dashboard.service.load_all_available_sources")
+    @mock.patch("dashboard.service.resolve_subscription_sources")
+    def test_remove_not_in_subscription_honest(self, mock_resolve, mock_load):
+        mock_resolve.return_value = [
+            self._src("project_status", "研发项目现况表"),
+            self._src("doc_2", "整机下线测试问题沟通"),
+        ]
+        mock_load.return_value = [self._src("project_status", "研发项目现况表")]
+        # 「测试ai表格」不在订阅里 → 如实提示，不编造「已修改」
+        r = DashboardSkill.handle("测试ai表格的数据源帮我删掉", user_id="u1")
+        self.assertIn("没识别出", r["answer"])
+        # 订阅未被误改
+        self.assertEqual(self._store.get(self._sub_id).data_sources,
+                         ["project_status", "doc_2"])
+
+
+class HandleSetPerSourceTests(unittest.TestCase):
+    """v1.14.0：每源独立总结（开启/关闭 → 确认 → 落地 per_source）"""
+
+    def setUp(self):
+        import tempfile, os
+        from dashboard.subscription_store import Subscription, SubscriptionStore
+        self.patch_pending = mock.patch("pending_context._pending", {})
+        self.patch_pending.start()
+        self.addCleanup(self.patch_pending.stop)
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self._db_path = path
+        self._store = SubscriptionStore(db_path=path)
+        self.patch_store = mock.patch(
+            "skills.dashboard.get_subscription_store", return_value=self._store)
+        self.patch_store.start()
+        self.addCleanup(self.patch_store.stop)
+        self.addCleanup(self._cleanup_db)
+        sub = Subscription(owner_user_id="u1", owner_staff_id="staff001",
+                           owner_union_id="u1",
+                           data_sources=["project_status", "doc_2"],
+                           recipients=["staff001"])
+        self._sub_id = self._store.create(sub)
+
+    def _cleanup_db(self):
+        self._store.close()
+        for suffix in ("", "-wal", "-shm"):
+            p = self._db_path + suffix
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+
+    def test_on_flow(self):
+        # 袁会荧实测场景：不带「看板」的「四份文件各自独立总结」→ 确认 → per_source=True
+        r = DashboardSkill.handle("四份文件各自独立总结", user_id="u1")
+        self.assertIn("每个数据源单独总结一条", r["answer"])
+        self.assertIn("确认", r["answer"])
+        self.assertFalse(self._store.get(self._sub_id).per_source)  # 未确认前不变
+        r = DashboardSkill.handle("确认", user_id="u1")
+        self.assertIn("已切换", r["answer"])
+        self.assertTrue(self._store.get(self._sub_id).per_source)
+
+    def test_off_flow(self):
+        r = DashboardSkill.handle("还是合并成一份报告吧", user_id="u1")
+        self.assertIn("合并成一份看板报告", r["answer"])
+        DashboardSkill.handle("确认", user_id="u1")
+        self.assertFalse(self._store.get(self._sub_id).per_source)
+
+    def test_no_subscription_honest(self):
+        # 无订阅时如实引导，不编造「已生效」
+        self._store.delete(self._sub_id)
+        r = DashboardSkill.handle("四份文件各自独立总结", user_id="u1")
+        self.assertIn("先开通", r["answer"])
+        r = DashboardSkill.handle("确认", user_id="u1")
+        self.assertIn("还没有待确认", r["answer"])
+
+
 class HandleStopAndQueryTests(unittest.TestCase):
     def setUp(self):
         import tempfile, os
@@ -792,6 +938,43 @@ class TemplateHintAndAdjustTests(unittest.TestCase):
         self.assertEqual(mock_sync.call_args[0][0].name, "文件模板")
         # 第二个参数是经 _staff_id_of 转换后的 staff_id
         self.assertEqual(mock_sync.call_args[0][1], "staff001")
+
+
+class PushSamplePerSourceTests(unittest.TestCase):
+    """v1.13.0：样例推送改逐源多条（识别/预览场景，每个数据源一条）"""
+
+    def _sub(self):
+        from dashboard.subscription_store import Subscription
+        return Subscription(owner_user_id="u1", owner_staff_id="staff001",
+                            owner_union_id="u1", data_sources=["a", "b"],
+                            recipients=["staff001"])
+
+    def test_push_sample_sends_per_source_messages(self):
+        two_sources = [
+            {"source_key": "a", "name": "源A", "table_name": "", "total": 1,
+             "items": [], "detailed_items": [], "status_counts": {},
+             "attention_items": [], "normal_items": [], "other_items": []},
+            {"source_key": "b", "name": "源B", "table_name": "", "total": 1,
+             "items": [], "detailed_items": [], "status_counts": {},
+             "attention_items": [], "normal_items": [], "other_items": []},
+        ]
+        with mock.patch("dashboard.service.resolve_subscription_sources",
+                        return_value=[mock.MagicMock()]), \
+             mock.patch("dashboard.service.collect_and_parse",
+                        return_value=(two_sources, [])), \
+             mock.patch("dashboard.service.source_resolution_warnings",
+                        return_value=[]), \
+             mock.patch("dashboard.service.resolve_template",
+                        return_value=None), \
+             mock.patch("dashboard.service.assemble_per_source_messages",
+                        return_value=["源A总结", "源B总结"]) as m_per_source, \
+             mock.patch("dashboard.service.push_messages",
+                        return_value=(True, "")) as m_push:
+            note = DashboardSkill._push_sample(self._sub())
+        self.assertIn("每个数据源一条", note)
+        # 逐源组装：两源各一条，交给 push_messages 顺序发送
+        m_per_source.assert_called_once()
+        self.assertEqual(m_push.call_args[0][2], ["源A总结", "源B总结"])
 
 
 if __name__ == "__main__":
