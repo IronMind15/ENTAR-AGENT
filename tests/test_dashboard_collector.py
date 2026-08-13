@@ -125,6 +125,37 @@ class CollectKindTests(unittest.TestCase):
         self.assertEqual(len(result["records"]), 2)
         self.assertEqual(result["records"][0]["内容"], "要求：每日汇报")
 
+    def test_folder_kind_reads_newest_child(self):
+        """v1.13.0：folder 数据源 → 枚举子文档按 updateTime 取最新一份读全文"""
+        client = MockDocClient()
+        client._folder_children = [
+            {"nodeId": "a1", "name": "33周部门周报", "nodeType": "file", "updateTime": 100},
+            {"nodeId": "a2", "name": "29-30周部门周报", "nodeType": "file", "updateTime": 50},
+        ]
+        client.list_folder_children = lambda base_id: client._folder_children
+        client._doc_content = {"ok": True, "blocks": [
+            {"blockType": "paragraph", "paragraph": {"text": "本周完成交付验收"}},
+        ]}
+        client.read_doc_content = lambda node_id, operator_id="": client._doc_content
+        client._doc_blocks_to_records = lambda blocks: [
+            {"类型": "段落", "内容": "本周完成交付验收"}]
+        result = Collector(client).collect(
+            _source(kind="folder", table_mode="fixed", table_id=""))
+        self.assertEqual(result["error"], "")
+        self.assertEqual(len(result["records"]), 1)
+        # 取 updateTime 最大的最新文档，name 标注（最新）
+        self.assertIn("33周部门周报", result["name"])
+        self.assertIn("最新", result["name"])
+
+    def test_folder_empty_children_returns_error(self):
+        """文件夹枚举失败/为空 → 记 error 不崩"""
+        client = MockDocClient()
+        client.list_folder_children = lambda base_id: []
+        result = Collector(client).collect(
+            _source(kind="folder", table_mode="fixed", table_id=""))
+        self.assertNotEqual(result["error"], "")
+        self.assertEqual(result["records"], [])
+
     def test_staff_id_fallback_to_union_id(self):
         """无显式 operator_id 时用 staff_id → unionId 兜底（定时/工具场景）"""
         client = MockDocClient(

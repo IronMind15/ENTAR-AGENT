@@ -22,6 +22,32 @@ class MatchTests(unittest.TestCase):
                      "停掉看板", "也推给张工", "我的看板几点推送"):
             self.assertTrue(DashboardSkill.match(text), text)
 
+    def test_concept_question_released_to_agent(self):
+        """v1.13.0：概念疑问句「看板数据源和看板任务是分开的吗」→ LLM 判非订阅管理
+        放行给 Agent 正常问答（修复 _QUERY_RE 的「看板.*任务」吞问题）"""
+        from dashboard import subscription_commands as sub_cmd
+        q = "现在的看板数据源和看板任务是分开的吗"
+        with mock.patch.object(sub_cmd, "_llm_verify_subscription",
+                               return_value=None):
+            self.assertFalse(DashboardSkill.match(q))
+
+    def test_concept_question_verified_query(self):
+        """同一句 LLM 判是真订阅查询 → 保底接管（match True）"""
+        from dashboard import subscription_commands as sub_cmd
+        q = "现在的看板数据源和看板任务是分开的吗"
+        with mock.patch.object(sub_cmd, "_llm_verify_subscription",
+                               return_value="query"):
+            self.assertTrue(DashboardSkill.match(q))
+
+    def test_clear_query_no_llm_fast_path(self):
+        """v1.13.0：明确查询（无疑问词）→ 正则快速路径，不付 LLM 成本"""
+        from dashboard import subscription_commands as sub_cmd
+        with mock.patch.object(sub_cmd, "_llm_verify_subscription",
+                               side_effect=AssertionError("不应调用 LLM")):
+            for text in ("帮我查看现在的看板任务有哪些",
+                         "我的看板几点推送", "停掉看板"):
+                self.assertTrue(DashboardSkill.match(text), text)
+
     def test_real_time_query_not_match(self):
         """实时查询看板（今天怎么样/什么情况）→ 放给 Agent 调 dash_query 工具"""
         with mock.patch("dashboard.subscription_commands.has_recent_kanban_activity",

@@ -52,6 +52,14 @@ class DashboardSkill(BaseSkill):
         if sub_cmd.parse_doc_dashboard_intent(q) is not None:
             return True
         if sub_cmd.is_kanban_topic(q):
+            # v1.13.0：概念疑问句（「看板数据源和看板任务是分开的吗」）→ LLM 判歧义，
+            # 判定非订阅管理 → 放行给 Agent 正常问答（修复 query 意图吞问题）。
+            # 明确管理动词/明确查询无疑问词 → 走正则快速路径，不付 LLM 成本。
+            if sub_cmd.needs_kanban_ambiguity_check(q):
+                verified = sub_cmd._llm_verify_subscription(
+                    q, fallback_intent="query")
+                if verified is None:
+                    return False
             return True
         # 订阅管理指令（含"也推给张工"这类不含"看板"的追加指令）
         if sub_cmd.parse_subscription_command(q) is not None:
@@ -248,7 +256,7 @@ class DashboardSkill(BaseSkill):
             if source_candidate_ids:
                 cands = [store.get(cid) for cid in source_candidate_ids]
                 cands = [c for c in cands if c and c.enabled
-                         and c.kind in ("notable", "workbook", "doc")]
+                         and c.kind in ("notable", "workbook", "doc", "folder")]
             else:
                 cands = store.list_dashboard_ready(user_id)
         except Exception as e:

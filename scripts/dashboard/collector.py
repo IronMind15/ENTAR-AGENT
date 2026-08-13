@@ -69,7 +69,7 @@ class Collector:
             document_name = get_name(source.base_id) if callable(get_name) else ""
             source_name = document_name or source.name
             kind = source.kind or "notable"
-            if kind not in ("notable", "workbook", "doc"):
+            if kind not in ("notable", "workbook", "doc", "folder"):
                 return {
                     "source_key": source.key, "name": source_name,
                     "table_name": "", "records": [],
@@ -89,6 +89,39 @@ class Collector:
                     "source_key": source.key, "name": source_name,
                     "table_name": "",
                     "records": self.client._doc_blocks_to_records(blocks) or [],
+                    "error": "",
+                }
+            # v1.13.0：文件夹数据源 → 每次采集枚举子文档，按修改时间取最新一份
+            # （动态跟随：文件夹里新增周报后下次采集自动换到最新，无需改订阅）。
+            if kind == "folder":
+                children = self.client.list_folder_children(source.base_id)
+                if not children:
+                    return {
+                        "source_key": source.key, "name": source_name,
+                        "table_name": "", "records": [],
+                        "error": "文件夹无可用文档（枚举失败或文件夹为空）",
+                    }
+                latest = max(children, key=lambda c: c.get("updateTime") or 0)
+                latest_id = str(latest.get("nodeId") or "")
+                if not latest_id:
+                    return {
+                        "source_key": source.key, "name": source_name,
+                        "table_name": "", "records": [],
+                        "error": "文件夹最新文档缺少 nodeId",
+                    }
+                doc = self.client.read_doc_content(latest_id, op)
+                if not doc.get("ok"):
+                    return {
+                        "source_key": source.key, "name": source_name,
+                        "table_name": "", "records": [],
+                        "error": doc.get("message", "文件夹最新文档读取失败"),
+                    }
+                return {
+                    "source_key": source.key,
+                    "name": str(latest.get("name") or source_name) + "（最新）",
+                    "table_name": "",
+                    "records": self.client._doc_blocks_to_records(
+                        doc.get("blocks") or []) or [],
                     "error": "",
                 }
             if source.table_mode == "latest_week" and kind == "notable":

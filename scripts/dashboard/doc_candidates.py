@@ -245,11 +245,15 @@ class DocCandidateStore:
 
     # ── 动态看板数据源（v1.11.0）──────────────────────────
     def list_dashboard_ready(self, user_id: str) -> list[DocCandidate]:
-        """取该用户可做看板数据源的文档（kind∈notable/workbook 且 enabled=1）"""
+        """取该用户可做看板数据源的文档（kind∈notable/workbook/doc/folder 且 enabled=1）
+
+        v1.13.0：folder 加入——文件夹做看板源动态取最新子文档。
+        """
         with self._lock:
             rows = self._get_conn().execute(
                 "SELECT * FROM dashboard_doc_candidates "
-                "WHERE user_id=? AND enabled=1 AND kind IN ('notable','workbook','doc') "
+                "WHERE user_id=? AND enabled=1 "
+                "AND kind IN ('notable','workbook','doc','folder') "
                 "ORDER BY id DESC", (user_id,)).fetchall()
         return [self._row_to_cand(r) for r in rows]
 

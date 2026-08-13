@@ -300,6 +300,19 @@ class LLMVerifyUnitTests(unittest.TestCase):
         self.assertTrue(sc._needs_llm_verify("不要推给别人", "change_recipients"))
         self.assertFalse(sc._needs_llm_verify("帮我推个看板", "create"))
         self.assertFalse(sc._needs_llm_verify("也推给张工", "change_recipients"))
+        # v1.13.0：概念疑问句命中 query 意图也复核（防被 _QUERY_RE 吞成查订阅状态）
+        self.assertTrue(sc._needs_llm_verify(
+            "现在的看板数据源和看板任务是分开的吗", "query"))
+        self.assertFalse(sc._needs_llm_verify("我的看板", "query"))
+
+    def test_needs_kanban_ambiguity_check(self):
+        """v1.13.0：看板话题 + 疑问词 → True；明确管理/查询无疑问词 → False"""
+        self.assertTrue(sc.needs_kanban_ambiguity_check(
+            "现在的看板数据源和看板任务是分开的吗"))
+        self.assertTrue(sc.needs_kanban_ambiguity_check("看板推送是不是要收费"))
+        self.assertFalse(sc.needs_kanban_ambiguity_check("我的看板几点推送"))
+        self.assertFalse(sc.needs_kanban_ambiguity_check("停掉看板"))
+        self.assertFalse(sc.needs_kanban_ambiguity_check("看板文档学习"))  # 否定词话题
 
 
 class LLMVerifyIntegrationTests(unittest.TestCase):

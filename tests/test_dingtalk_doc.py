@@ -933,5 +933,196 @@ class ReadDocumentUnknownKindTests(unittest.TestCase):
         self.assertIn("钉盘", result["message"])
 
 
+class DetectKindFolderTests(unittest.TestCase):
+    """v1.13.0：dws 权威元信息识别文件夹（nodeType=folder 前置探测，三类 API 不再白试）"""
+
+    def _client_with_meta(self, meta: dict):
+        from dingtalk_doc_client import DingTalkDocClient
+        client = object.__new__(DingTalkDocClient)
+        client._kind_cache = {}
+        client._metadata_cache = {}
+        client._allow_dws_metadata = True
+        client.get_document_metadata = lambda node_id: dict(meta)
+        client.list_sheets = lambda *a, **k: (_ for _ in ()).throw(
+            RuntimeError("notable 不符"))
+        client.list_workbook_sheets = lambda *a, **k: (_ for _ in ()).throw(
+            RuntimeError("workbook 不符"))
+        client.read_doc_content = lambda *a, **k: {"ok": False, "message": "doc 不符"}
+        return client
+
+    def test_folder_node_type_detected_first(self):
+        """元信息 nodeType=folder → detect_kind 直接返回 folder（三类 API 不调用）"""
+        client = self._client_with_meta(
+            {"nodeType": "folder", "name": "部门周报", "workspaceId": "ws1"})
+        calls = {"n": 0}
+
+        def boom(*a, **k):
+            calls["n"] += 1
+            raise RuntimeError("三类 API 不应被调用")
+        client.list_sheets = boom
+        client.list_workbook_sheets = boom
+        client.read_doc_content = boom
+        self.assertEqual(client.detect_kind("f1"), "folder")
+        self.assertEqual(calls["n"], 0)
+
+    def test_non_folder_falls_through_to_triple_api(self):
+        """元信息是文件/无 nodeType → 走原三类 API 探测"""
+        client = self._client_with_meta({"nodeType": "file", "name": "文档"})
+        self.assertEqual(client.detect_kind("n1"), "unknown")
+
+
+class ListFolderChildrenTests(unittest.TestCase):
+    """v1.13.0：dws drive list 枚举文件夹子节点（folder 参数用 nodeId 作 dentryUuid）"""
+
+    def test_parses_children_and_filters_file(self):
+        from dingtalk_doc_client import DingTalkDocClient
+        client = object.__new__(DingTalkDocClient)
+        client._metadata_cache = {}
+        client._allow_dws_metadata = True
+        client.get_document_metadata = lambda node_id: {
+            "nodeType": "folder", "name": "部门周报", "workspaceId": "ws1"}
+        captured = {}
+
+        class FakeCompleted:
+            returncode = 0
+            stdout = '{"nodes": [{"nodeId": "a1", "name": "33周部门周报", "nodeType": "file", "updateTime": 100}, {"nodeId": "f1", "name": "子文件夹", "nodeType": "folder"}, {"nodeId": "a2", "name": "29-30周部门周报", "nodeType": "file", "updateTime": 50}]}'
+
+        def fake_run(cmd, **kw):
+            captured["cmd"] = cmd
+            return FakeCompleted()
+        with patch("dingtalk_doc_client.shutil.which", return_value="dws"), \
+             patch("dingtalk_doc_client.subprocess.run", side_effect=fake_run):
+            children = client.list_folder_children("QBnd5ExVEvq")
+        # folder 参数须用文件夹 nodeId（dentryUuid），非 folderId
+        self.assertIn("--folder", captured["cmd"])
+        self.assertIn("QBnd5ExVEvq", captured["cmd"])
+        self.assertIn("--workspace", captured["cmd"])
+        self.assertEqual(len(children), 2)
+        self.assertEqual(children[0]["nodeId"], "a1")
+        self.assertEqual(children[0]["name"], "33周部门周报")
+        # nodeType!=file 的子文件夹被过滤
+        self.assertNotIn("f1", [c["nodeId"] for c in children])
+
+    def test_non_folder_returns_empty(self):
+        from dingtalk_doc_client import DingTalkDocClient
+        client = object.__new__(DingTalkDocClient)
+        client._metadata_cache = {}
+        client._allow_dws_metadata = True
+        client.get_document_metadata = lambda node_id: {"nodeType": "file"}
+        self.assertEqual(client.list_folder_children("n1"), [])
+
+    def test_failure_degrades_to_empty(self):
+        from dingtalk_doc_client import DingTalkDocClient
+        client = object.__new__(DingTalkDocClient)
+        client._metadata_cache = {}
+        client._allow_dws_metadata = True
+        client.get_document_metadata = lambda node_id: {
+            "nodeType": "folder", "workspaceId": "ws1"}
+
+        class FakeFailed:
+            returncode = 1
+            stdout = ""
+            stderr = "RESOURCE_NOT_FOUND"
+
+        with patch("dingtalk_doc_client.shutil.which", return_value="dws"), \
+             patch("dingtalk_doc_client.subprocess.run",
+                   return_value=FakeFailed()):
+            self.assertEqual(client.list_folder_children("f1"), [])
+
+
+class ReadDocumentFolderTests(unittest.TestCase):
+    """v1.13.0：read_document folder 分支返回子节点枚举 + 文件夹名"""
+
+    def test_folder_branch_returns_children_and_name(self):
+        from dingtalk_doc_client import DingTalkDocClient
+        client = object.__new__(DingTalkDocClient)
+        client.parse_doc_url = lambda url: {"node_id": "f1", "sheet_id": ""}
+        client.get_document_name = lambda node_id: "部门周报"
+        client.resolve_operator_id = lambda *a, **k: ""
+        client.detect_kind = lambda node_id, operator_id="": "folder"
+        client.list_folder_children = lambda node_id: [
+            {"nodeId": "a1", "name": "33周部门周报", "nodeType": "file", "updateTime": 100},
+            {"nodeId": "a2", "name": "29-30周部门周报", "nodeType": "file", "updateTime": 50},
+        ]
+        result = client.read_document("https://alidocs.dingtalk.com/i/nodes/f1")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["kind"], "folder")
+        self.assertEqual(result["name"], "部门周报")
+        self.assertEqual(len(result["children"]), 2)
+        # children 按 updateTime 降序（最新在前）
+        self.assertEqual(result["children"][0]["name"], "33周部门周报")
+        self.assertIn("共 2 份文档", result["message"])
+        self.assertIn("33周部门周报", result["message"])
+
+    def test_folder_empty_children_message(self):
+        from dingtalk_doc_client import DingTalkDocClient
+        client = object.__new__(DingTalkDocClient)
+        client.parse_doc_url = lambda url: {"node_id": "f1", "sheet_id": ""}
+        client.get_document_name = lambda node_id: "部门周报"
+        client.resolve_operator_id = lambda *a, **k: ""
+        client.detect_kind = lambda node_id, operator_id="": "folder"
+        client.list_folder_children = lambda node_id: []
+        result = client.read_document("https://alidocs.dingtalk.com/i/nodes/f1")
+        self.assertTrue(result["ok"])
+        self.assertEqual(len(result["children"]), 0)
+        self.assertNotIn("最新", result["message"])
+
+
+class BotFolderLinkTests(unittest.TestCase):
+    """v1.13.0 bot 识别文件夹链接：回复文件夹概要 + 登记看板源（enabled）"""
+
+    def setUp(self):
+        from dashboard.doc_candidates import DocCandidateStore
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self._db_path = path
+        self._cand = DocCandidateStore(db_path=path)
+        self._patch_cand = patch("dashboard.doc_candidates.get_candidate_store",
+                                 return_value=self._cand)
+        self._patch_cand.start()
+        self.addCleanup(self._patch_cand.stop)
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self):
+        self._cand.close()
+        for suffix in ("", "-wal", "-shm"):
+            p = self._db_path + suffix
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+
+    def _make_handler(self):
+        from skills import dingtalk_bot
+        return object.__new__(dingtalk_bot.ErrorQueryHandler)
+
+    def test_folder_link_replies_and_registers_enabled(self):
+        handler = self._make_handler()
+        fake = {"ok": True, "kind": "folder", "node_id": "f1",
+                "name": "部门周报", "message": "识别到文件夹「部门周报」，共 2 份文档",
+                "children": [
+                    {"nodeId": "a1", "name": "33周部门周报", "nodeType": "file", "updateTime": 100},
+                    {"nodeId": "a2", "name": "29-30周部门周报", "nodeType": "file", "updateTime": 50},
+                ]}
+        with patch("dingtalk_doc_client.get_doc_client") as mock_get:
+            mock_get.return_value.resolve_operator_id.return_value = "union1"
+            mock_get.return_value.read_document.return_value = fake
+            answer, _ = handler._handle_dingtalk_doc_link(
+                "https://alidocs.dingtalk.com/i/nodes/f1", "u1", "s1")
+        self.assertIsNotNone(answer)
+        self.assertIn("文件夹", answer)
+        self.assertIn("部门周报", answer)
+        self.assertIn("2 份文档", answer)
+        # 文件夹不逐条预览，也不提示「帮我学习」入库（本次只做看板）
+        self.assertNotIn("帮我学习", answer)
+        # 登记为看板源（enabled + kind=folder + list_dashboard_ready 可见）
+        cand = self._cand.get_pending("u1")
+        self.assertIsNotNone(cand)
+        self.assertEqual(cand.kind, "folder")
+        self.assertTrue(cand.enabled)
+        self.assertEqual(self._cand.list_dashboard_ready("u1")[0].kind, "folder")
+
+
 if __name__ == "__main__":
     unittest.main()

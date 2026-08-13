@@ -3,6 +3,35 @@
 > 📌 **本文档是项目唯一的版本记录（单一事实源）**——README.md、PROGRESS.md 的版本历史均指向本文件，发版时只在这里追加记录。
 > 相关：待办清单见 [TODO.md](TODO.md)，进度看板见 [PROGRESS.md](PROGRESS.md)。
 
+## v1.12.3（2026-08-13）
+
+**📁 钉钉文件夹做看板数据源 + 看板意图识别混合方案**——本次是**看板两个实际场景问题的落地**：同事袁会荧发「部门周报」文件夹链接 + 「根据这个文件的最新内容每天早晨八点总结看板」——此前文件夹三类文档 API 全 400 识别不了，本次支持文件夹作为看板数据源（每次采集动态取最新一份，下周新周报自动跟随）；同时修复「现在的看板数据源和看板任务是分开的吗」这类概念疑问句被看板 query 意图吞掉、答非所问的问题。
+
+### 新增
+
+- **钉钉文件夹做看板数据源（动态取最新一份）**
+  - `detect_kind` 最先查 dws 元信息（`get_document_metadata`），`nodeType == "folder"` 直接判定文件夹（三类文档 API 对文件夹必 400，dws 是唯一正确入口、已有缓存零成本）。
+  - 新增 `list_folder_children(node_id)`：`dws drive list --workspace {ws} --folder {folderNodeId}` 枚举子文档（关键：folder 参数必须是 nodeId 而非 folderId、必须带 workspace 否则权限错），失败静默降级返回 `[]`。
+  - `read_document` 新增 folder 分支：返回文件夹名 + 子文档列表 + 「共 N 份文档」消息。
+  - `collector.collect` 新增 folder 分支：每次采集枚举子文档 → 按 `updateTime` 动态取最新一份 → 读其内容生成看板（下周新周报自动跟随，无需改订阅）；空文件夹/枚举失败返回明确 error 不拖累整体。
+  - `service.load_all_available_sources` / `doc_candidates` / bot `_register_doc_candidate` 的 kind 白名单放开 folder。
+  - bot 收到文件夹链接回复「📁 文件夹『部门周报』· 4 份文档 · 最新：33周部门周报」+ 可做每日看板提示；**显式不提示「帮我学习」**（文件夹入库留后续，本次只做看板）。
+- **看板意图识别混合方案（正则快速路径 + LLM 判歧义）**
+  - `_needs_llm_verify` 可疑复核范围扩展 `query` 意图：概念疑问句（吗/是不是/为什么/怎么，`_SUSPECT_QUESTION_RE`）命中 query 时也交 LLM 复核——修复「现在的看板数据源和看板任务是分开的吗」命中 `_QUERY_RE` 的 `看板.*任务` 被直接渲染订阅状态、不回答问题。
+  - 新增 `needs_kanban_ambiguity_check(text)`：看板话题 + 疑问词 → True（供技能层复用）。
+  - `dashboard.match()` is_kanban_topic 分支：命中概念疑问句 → 调 `_llm_verify_subscription` 判歧义，判定非订阅管理 → 放行给 Agent 正常问答；LLM 失败回退 query 兜底。明确管理/查询动词（删除/停用/改时间/我的看板/几点推送）无疑问词 → 零延迟快路径不变。
+
+### 测试
+
+- 新增 15 项：文件夹探测（mock metadata → "folder"）/ `list_folder_children` 解析与失败降级 / `read_document` folder 分支 / `collector` folder 取最新与空文件夹 error / bot 文件夹回复与候选登记 / `load_all_available_sources` 含 folder / 概念疑问句放行 Agent / 真订阅查询保底 / 明确查询零 LLM 调用 / `_needs_llm_verify` query 扩展与 `needs_kanban_ambiguity_check`。
+- 全量回归 **849 项通过**（此前 834 项）。
+
+### 已知限制
+
+- 文件夹数据源每次采集调 `dws drive list` 枚举（dws CLI 首启偶发瞬时失败已静默降级为「文件夹无可用文档」，下次采集自动恢复）。
+- 文件夹「帮我学习」入库未做，留后续。
+- 本次改动需重启服务后生效。
+
 ## v1.12.2（2026-08-13）
 
 **🐛 修复 v1.12.0 判定层引入的 2 处交互回归**——本次是纯 bug 修复（无新功能）：v1.12.0 判定层治本框架在解决「删除看板订阅被文件删除正则误抢」的同时，给日常文件命令带来两个新问题——删除/重学目标名恰像业务领域词（标准号/故障码/PCB 词）时被误送语义不通的澄清；澄清反问与看板选模板的「1/2」编号回复被既有的满意/不满意反馈钩子吞掉。两项均不影响数据安全，但影响员工实际交互手感，本次一并根治。

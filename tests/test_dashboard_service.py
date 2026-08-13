@@ -159,6 +159,17 @@ class LoadAllAvailableSourcesTests(unittest.TestCase):
         self.assertEqual({s.key for s in sources}, {"doc_1"})
         self.assertEqual(sources[0].kind, "doc")
 
+    def test_folder_kind_included(self):
+        # v1.13.0：folder 纳入看板数据源（动态取最新子文档）
+        self._store.add(DocCandidate(user_id="u1", url="u", node_id="f1",
+                                     kind="folder", enabled=True,
+                                     name="部门周报"))
+        with mock.patch("dashboard.config_model.load_sources", return_value=[]):
+            sources = load_all_available_sources()
+        self.assertEqual({s.key for s in sources}, {"doc_1"})
+        self.assertEqual(sources[0].kind, "folder")
+        self.assertEqual(sources[0].name, "部门周报")
+
     def test_load_all_sources_user_scoped(self):
         """v1.11.10：query 按当前用户过滤动态源，不把别人的文档候选混入"""
         self._store.add(DocCandidate(user_id="u1", url="u", node_id="n1",

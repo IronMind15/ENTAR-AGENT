@@ -448,10 +448,23 @@ _SUSPECT_REFER_RE = re.compile(r"别人|他们|她们|大家|某人|任何人")
 def _needs_llm_verify(text: str, intent: str) -> bool:
     """重操作 + 可疑文本 → 需要 LLM 复核；普通指令直接走正则，零成本"""
     if _SUSPECT_QUESTION_RE.search(text):
-        return intent in ("create", "change_recipients", "doc_create")
+        # v1.13.0：query 加入——「看板数据源和看板任务是分开的吗」命中 _QUERY_RE
+        # 的「看板.*任务」被吞成查订阅状态，概念疑问句须 LLM 判歧义后放行 Agent。
+        return intent in ("create", "change_recipients", "doc_create", "query")
     if intent == "change_recipients" and _SUSPECT_REFER_RE.search(text):
         return True
     return False
+
+
+def needs_kanban_ambiguity_check(text: str) -> bool:
+    """看板话题 + 概念疑问句 → match 层需 LLM 判歧义（v1.13.0）
+
+    明确管理动词/明确查询（无「吗/是不是/为什么/怎么」等疑问词）→ False，
+    走正则快速路径秒回；只有含疑问词的看板话题才付一次 LLM 判歧义成本。
+    """
+    if not is_kanban_topic(text):
+        return False
+    return bool(_SUSPECT_QUESTION_RE.search(text))
 
 
 def _llm_verify_subscription(text: str, fallback_intent: str,

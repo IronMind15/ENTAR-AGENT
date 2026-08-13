@@ -142,6 +142,50 @@ class DingTalkDocClient:
     def get_document_name(self, node_id: str) -> str:
         return str(self.get_document_metadata(node_id).get("name") or "").strip()
 
+    def list_folder_children(self, node_id: str) -> list[dict]:
+        """枚举文件夹子节点（v1.13.0，做看板数据源动态取最新用）。
+
+        调 `dws drive list --workspace {ws} --folder {nodeId}`——folder 参数须用
+        文件夹的 **nodeId**（dentryUuid），不是 folderId；且必须带 workspace
+        （实测 2026-08-13：单 --folder 走 drive/list_files 权限错）。
+
+        返回 [{nodeId, name, nodeType, updateTime}]（过滤 nodeType=='file'）；
+        失败静默返回 []（dws 缺失/权限不足/无子文件都不抛异常）。
+        """
+        meta = self.get_document_metadata(node_id)
+        if meta.get("nodeType") != "folder":
+            return []
+        ws = str(meta.get("workspaceId") or "").strip()
+        if not ws or not self._allow_dws_metadata:
+            return []
+        command = shutil.which("dws.cmd") or shutil.which("dws")
+        if not command:
+            return []
+        try:
+            kwargs = {}
+            if hasattr(subprocess, "CREATE_NO_WINDOW"):
+                kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+            completed = subprocess.run(
+                [command, "drive", "list", "--workspace", ws,
+                 "--folder", node_id, "--limit", "50", "--format", "json"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=12, check=False, **kwargs)
+            if completed.returncode != 0:
+                logger.warning("枚举文件夹子节点失败(node=%s): %s",
+                               node_id[:12], (completed.stderr or "")[:160])
+                return []
+            value = json.loads(completed.stdout) if completed.stdout else {}
+            nodes = value.get("nodes") or []
+            return [
+                {"nodeId": n.get("nodeId", ""), "name": n.get("name", ""),
+                 "nodeType": n.get("nodeType", ""), "updateTime": n.get("updateTime", 0)}
+                for n in nodes
+                if isinstance(n, dict) and n.get("nodeType") == "file"
+            ]
+        except Exception as exc:
+            logger.warning("枚举文件夹子节点异常(node=%s): %s", node_id[:12], exc)
+            return []
+
     # ── 认证（新版 API token，提前 60s 刷新）──────────────────
     def _get_access_token(self) -> str:
         """获取并缓存新版 API access token，提前 60 秒刷新。"""
@@ -615,6 +659,12 @@ class DingTalkDocClient:
 
     def _detect_kind_uncached(self, node_id: str, operator_id: str = "") -> str:
         """detect_kind 无缓存本体（探测 API 实际调用处）"""
+        # v1.13.0：先试 dws 权威元信息——文件夹（nodeType=folder）三类 API 必 400，
+        # 直接用 dws doc info 识别（已有缓存，零额外成本）；dws 不可用时自然落回三类 API。
+        meta = self.get_document_metadata(node_id)
+        if meta.get("nodeType") == "folder":
+            logger.info(f"文件夹探测命中：{meta.get('name', node_id[:12])}")
+            return "folder"
         # v1.11.5：聚合三类接口探测失败原因，unknown 时一次性输出，
         # 便于判断是权限缺失、接口版本不符，还是文档类型确实不支持（可能是视图/子表）。
         reasons: list[str] = []
@@ -799,6 +849,21 @@ class DingTalkDocClient:
                     "ok": False, "kind": "doc", "node_id": node_id,
                     "message": f"普通文档读取暂不可用，可先『帮我学习』入库（{str(e)[:100]}）",
                 }
+        if kind == "folder":
+            # v1.13.0：文件夹不直接读内容，枚举子节点供 bot 预览 + 看板采集动态取最新。
+            children = self.list_folder_children(node_id)
+            children.sort(key=lambda c: c.get("updateTime") or 0, reverse=True)
+            folder_name = document_name or "文件夹"
+            latest = children[0].get("name", "") if children else ""
+            msg = (f"识别到文件夹「{folder_name}」，共 {len(children)} 份文档"
+                   + (f"（最新：{latest}）" if latest else ""))
+            return {
+                "ok": True, "kind": "folder", "node_id": node_id,
+                "sheet_id": "", "children": children,
+                "field_names": {}, "sheet_name": folder_name,
+                "name": folder_name, "document_name": document_name,
+                "message": msg,
+            }
         return {
             "ok": False,
             "kind": kind,

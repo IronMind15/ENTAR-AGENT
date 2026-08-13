@@ -798,13 +798,24 @@ class ErrorQueryHandler(ChatbotHandler):
                 continue
             records = result.get("records") or []
             kind = result.get("kind", "")
-            kind_name = {"notable": "AI表格", "workbook": "在线表格", "doc": "文档"}.get(kind, kind)
+            kind_name = {"notable": "AI表格", "workbook": "在线表格",
+                         "doc": "文档", "folder": "文件夹"}.get(kind, kind)
             node_id = result.get("node_id", "")
             cand_id = self._register_doc_candidate(
                 user_id, url, result, operator_union=operator)
             if cand_id:
                 cand_ids.append(cand_id)
             summary = self._doc_summary(result)
+            if kind == "folder":
+                # v1.13.0：文件夹不逐条预览，展示 message（子文档数 + 最新文档名）
+                # 看板数据源为「动态取最新一份」，创建看板走 _handle_doc_link_with_kanban。
+                children = result.get("children") or []
+                replies.append(
+                    f"📁 {result.get('name') or kind_name}（文件夹）"
+                    f"· {len(children)} 份文档"
+                    + (f"\n{summary}" if summary else "")
+                    + "\n回复「把这个文件夹做成每日看板」可按最新一份每日推送。")
+                continue
             replies.append(
                 f"📑 {result.get('name') or kind_name}（{kind_name}）· 概要 · 共 {len(records)} 条记录"
                 + (f"\n{summary}" if summary else ""))
@@ -885,12 +896,23 @@ class ErrorQueryHandler(ChatbotHandler):
         return "\n".join(lines)
 
     def _doc_summary(self, result: dict) -> str:
-        """文档概要（v1.11.3）：notable/workbook 预览前几条字段；doc 取 markdown 前 150 字"""
+        """文档概要（v1.11.3）：notable/workbook 预览前几条字段；doc 取 markdown 前 150 字
+
+        v1.13.0：folder 枚举子文档名（最新在前，取前 5 个），无子文档返回 message。
+        """
         if result.get("kind") == "doc":
             md = (result.get("markdown") or "").strip()
             if md:
                 return md[:150] + ("…" if len(md) > 150 else "")
             return ""
+        if result.get("kind") == "folder":
+            children = result.get("children") or []
+            if not children:
+                return ""
+            names = [str(c.get("name") or c.get("nodeId") or "")[:24]
+                     for c in children[:5]]
+            hint = "（更新中…）" if len(children) > 5 else ""
+            return "包含：" + "、".join(names) + hint
         return self._doc_preview(result.get("records") or [])
 
     @staticmethod
@@ -923,7 +945,8 @@ class ErrorQueryHandler(ChatbotHandler):
                 name=result.get("document_name") or result.get("name")
                 or result.get("sheet_name") or "",
                 # v1.11.1：doc 也做看板源（文档内容不齐，采集 Markdown 全文由 LLM 提炼）
-                enabled=kind in ("notable", "workbook", "doc"),
+                # v1.13.0：folder 也做看板源（动态取最新子文档），enabled 放开
+                enabled=kind in ("notable", "workbook", "doc", "folder"),
                 field_map=json.dumps(field_map, ensure_ascii=False),
             ))
             return cand_id or 0
