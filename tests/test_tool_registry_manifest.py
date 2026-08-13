@@ -7,7 +7,7 @@ v1.12.0 注册中心 + 能力清单测试
 - 改名断言：10 个新名注册、8 个旧名排除（tripwire）
 - definitions name 与注册 key 恒等
 - 停用守卫：search_standards / search_experience_kb 不再注册
-- 能力清单完整性：10 工具 / 5 技能 / 15 意图 / enabled 命令 + regex 可编译
+- 能力清单完整性：10 工具 / 5 技能 / 16 意图 / enabled 命令 + regex 可编译
 """
 
 import json
@@ -118,7 +118,7 @@ class CapabilityManifestTests(unittest.TestCase):
         self.assertFalse(any("error" in s for s in skills))
 
         intents = cm.collect_dashboard_intents()
-        self.assertEqual(len(intents), 15)
+        self.assertEqual(len(intents), 16)  # v1.13.0：新增 edit_template 意图
         self.assertFalse(any("error" in i for i in intents))
 
         cmds = cm.collect_bot_commands()

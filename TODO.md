@@ -75,15 +75,15 @@
   - *来源：checkpoint / progress-snapshot*
 
 - [x] **Chroma standards 历史重复数据清理**（v1.11.9 外部审查发现，2026-08-12 已清 4 组 988 块）
-  - 已清理（按 std_id + file_name 分组、块级精确匹配 + 30-char n-gram 双指标确认重复后删）：
+  - 已清理（按 std\_id + file\_name 分组、块级精确匹配 + 30-char n-gram 双指标确认重复后删）：
     - EN62109（删 uuid 版 434 块，与保留版 100% 相同）
     - GBT16935（删 uuid 版 182 块，100% 相同）
     - GB/T 34120（删 uuid 版 113 块，100% 相同）
     - CQC 3310（删非 uuid 版 259 块，uuid 版覆盖其 99.9%）
     - 4507 → 3519 块；删除清单备份 `data/dup_cleanup_v1.11.9.json`；删后语义查询验证正常
   - 存疑未删（内容重叠 <85% 且各有独有内容，删除会丢信息）：
-    - EN 50178：本地版 336 块 vs MinerU 版 425 块（重叠 67%，互补，本地版有 doc_id 可版本化）
-    - IEC 60664-1 vs I60664-1E2：同一 PDF 两条管线（重叠 61%，且 std_id 被提取成两个）
+    - EN 50178：本地版 336 块 vs MinerU 版 425 块（重叠 67%，互补，本地版有 doc\_id 可版本化）
+    - IEC 60664-1 vs I60664-1E2：同一 PDF 两条管线（重叠 61%，且 std\_id 被提取成两个）
     - CNCA/CTS 0022-2013 vs CQC 3310：同名文件但标题不同（重叠 35%，疑似两个不同文档）
   - *来源：v1.11.9 审查 + 实测探针*
 
@@ -122,7 +122,7 @@
 
 - [ ] **每日看板 LLM 多阶段工作流**（用户 2026-08-11 提出，v1.11.2 已记录设计输入，单独排期实现）
   - **背景**：现在看板 LLM 单次调用 `call_deepseek`（单条 user 消息）直接组装，用户「看不到细节、质量不稳定」，希望大模型分角色、分阶段整理
-  - **内容级快照**：`alerts.make_snapshot` 现在只存去噪 status+title（不含 other_items/内容），无法做内容级 diff → 改为存完整 items
+  - **内容级快照**：`alerts.make_snapshot` 现在只存去噪 status+title（不含 other\_items/内容），无法做内容级 diff → 改为存完整 items
   - **内容级 diff 引擎**：昨天 vs 今天逐项对比 → 新增/变更/消失项 + 变化字段
   - **LLM 多阶段组装**：`call_deepseek` 支持 system 角色消息；prompt 注入 diff；**角色模板预设 3 个**——PMO 项目助理（默认）/ 项目总监 / 技术主管；Subscription 表加 `role` 字段
   - **推送策略**：每天固定推（用户已选）+ 变化独立成「📌 今日变化」小节（`changes_only` 保留为可选项）
@@ -138,16 +138,17 @@
   - 后果：上传直接学习/删除/重新学习的新文档，向量检索能查到、但 BM25 混合检索永远是旧索引 → 混合排序边缘化新文档，与 v1.10.2 上传学习功能直接冲突
   - 修法（二选一）：文档变更后清对应 collection 缓存键；或 `enhanced_query` 加 `force_rebuild` 参数
 - [ ] **rerank 配置开关**（`RERANK_ENABLED`）
-  - 现状：error_query / standards_query / experience_query 均默认 `use_rerank=True`，1.1GB 模型全链路常驻内存
+  - 现状：error\_query / standards\_query / experience\_query 均默认 `use_rerank=True`，1.1GB 模型全链路常驻内存
   - 基线数据支撑：rerank 收益微弱（MRR 仅 +0.02）；既定结论「轻量环境默认关、仅服务器部署启用」尚无开关落地
 - [ ] **跨语言检索缺口**（评估集 S10/S12 全 miss）
   - 中文查英文标准失效；方向：英文标准（EN 50438 / EN 50178 等）入库时补中文别名/摘要元数据后重索引
 - [ ] **评估集修正与扩充**
-  - 修 fault_code 5 条失真：改模拟真实路由（快速通道 + 检索两步），否则整体 Recall 虚低
-  - 标准条款 std_clause 从 8 条扩到 20 条，专攻真缺口
-  - 改检索逻辑后跑 `python scripts/eval_rag.py --mode full` 对比基线（见 [scripts/eval_rag.py](scripts/eval_rag.py)）
 
-> 相关增强（已在下方「Agent 学习落地」列出，不重复）：MQE 查询扩展开关、标准分块 Contextual Retrieval 上下文前缀、Agent 层评估 eval_agent.py
+  - 修 fault\_code 5 条失真：改模拟真实路由（快速通道 + 检索两步），否则整体 Recall 虚低
+  - 标准条款 std\_clause 从 8 条扩到 20 条，专攻真缺口
+  - 改检索逻辑后跑 `python scripts/eval_rag.py --mode full` 对比基线（见 [scripts/eval\_rag.py](scripts/eval_rag.py)）
+
+> 相关增强（已在下方「Agent 学习落地」列出，不重复）：MQE 查询扩展开关、标准分块 Contextual Retrieval 上下文前缀、Agent 层评估 eval\_agent.py
 
 ---
 
@@ -277,17 +278,28 @@
 
 ---
 
-## 🐛 其他待办（9 项）
+## 🐛 其他待办（10 项）
 
 > 低频、远期或依赖前置条件
 
-- [ ] **M3 统一确认路由（pending 归一）**（v1.12.0 只做了「澄清接入」，pending 结构归一记此）
-  - 现确认 pending 各为独立结构，靠入口顺序分派、现有测试兜住：`tools._pending_operations`（工具写操作二次确认）、`knowledge_review._pending_learn`（文件入库确认）、看板 `sub_cmd._pending`（订阅确认）、v1.12.0 新增 `routing._clarifications`（操作歧义澄清）
-  - 归一方向：统一为「pending 上下文」表（user_id + 上下文类型 + 选项），bot 入口单一「确认/取消/选项」路由；需同步迁移 `test_dashboard_skill` 大量 `handle("确认")`、`test_tool_governance` confirm 流程等测试
+- [ ] **v1.12.0 改名后描述/注释层旧名残留清理**（2026-08-13 检查发现，不影响运行）
+  - 检查结论：核心功能代码/主文档（CHANGELOG/README 状态/PROGRESS/system_prompt/routing/能力清单）已全同步，以下均为纯描述/注释层残留 + 一个「恢复时会炸」的签名坑
+  - ① 停用参考文件注释旧名：`tools/search_standards.py` L2/L10、`tools/search_experience_kb.py` L2/L10/L26 均写「已由 search_knowledge_base 替代」→ 替代者已改名 **kb_search**
+  - ② ⚠️ 恢复隐患：两停用文件 L41 `@register("旧名", DEFINITION)` 仍是 v1.12.0 **前旧签名**——当前不 import 不触发，但 `tools/__init__.py:283` 注释「恢复时取消注释即可」若兑现会 TypeError，恢复时须同步改新签名 `@register(DEFINITION, policy=...)`
+  - ③ 技能层 docstring 旧名：`skills/standards_query.py:4`「提供 search_standards 工具函数」、`skills/experience_query.py:4`「提供 search_experience_kb 工具函数」（后者现为 kb_search 内部 `search_kb` 实现，kb_search.py:175）
+  - ④ `tools/kb_search.py:5` 自己 docstring 把前身名 search_knowledge_base 列为「被取代的工具」（轻微）
+  - ⑤ 文档过时：README L60/L61「经验提交审核 | ✅ 可用 + 审核口令『同意同步 id 经验库』」——v1.10.2 已停审核、v1.12.0 已移除 sync_review，**最该改（防误导真人）**；README L68「3 个搜索工具」旧说法（现 1 个 kb_search）；CLAUDE.md L40「10→9 工具」为 v1.11.5 历史数字（现注册 10 个）
+  - ⑥ `tests/test_search_knowledge_base.py` 文件名仍旧名（内容已是通用查询测试）
+  - 改法：纯注释/文档替换，无功能风险；优先级：⑤README 审核行 > ②旧 @register 签名 > 其余
+  - *来源：2026-08-13 v1.12.0 描述同步检查（已存记忆 doc-comment-outdated-v1120）*
+
+- [x] **M3 统一确认路由（pending 归一）**（✅ v1.12.1 完成）
+  - 落地：`scripts/pending_context.py` 统一 4 类 pending（tool/learn/kanban/clarify）单表 + TTL 惰性清除 + 跨类型覆盖记日志；四模块（tools / knowledge_review / subscription_commands / routing）改薄封装、对外 API 签名零变化；bot `_process_text` 单一确认路由（取消→澄清解析→工具确认→学习确认），窄拦截放行普通聊天；确认词按 pending 类型作用域（`is_confirm_text(text, ptype)`，「入库/要」只在 learn 生效）
+  - 测试：新增 `tests/test_pending_context.py` 9 项；技能层 6 处 mock patch 迁移到 `pending_context._pending`；全量回归 829 项全绿
   - *来源：v1.12.0 治本框架 M3（用户拍板：本次只做澄清接入，归一本记 TODO）*
 
 - [ ] **恢复部门划分与主管审核**（v1.10.2 已停用，代码保留注释）
-  - v1.10.2 起上传文件「回复『帮我学习』」直接入库（department=`public`）；审核流程代码（knowledge_review 的 create_request/handle_command/notify_*）一律保留未删除
+  - v1.10.2 起上传文件「回复『帮我学习』」直接入库（department=`public`）；审核流程代码（knowledge\_review 的 create\_request/handle\_command/notify\_\*）一律保留未删除
   - 未来启用时：取消 `dingtalk_bot._handle_file_message` 中 `queue_review_for_upload` 注释；`learn_for_user` 的 `process_file(department=...)` 改为用户主部门；回执文案改回提示审核
   - *来源：v1.10.2 上传学习流程改造对话*
 
@@ -330,8 +342,8 @@
 | 🎯 第二步经验库 | 5 | 3 完成 + 2 待办 |
 | 🏢 v2.0 企业中枢 | 6 | 全部待办（依赖第二步） |
 | 🔭 第三步研发探索 | 3 | 全部待办（远期） |
-| 🐛 其他 | 9 | 1 完成 + 8 待办 |
-| **合计** | **50** | **8 完成 + 42 待办** |
+| 🐛 其他 | 10 | 1 完成 + 9 待办 |
+| **合计** | **51** | **8 完成 + 43 待办** |
 
 ---
 

@@ -3,6 +3,33 @@
 > 📌 **本文档是项目唯一的版本记录（单一事实源）**——README.md、PROGRESS.md 的版本历史均指向本文件，发版时只在这里追加记录。
 > 相关：待办清单见 [TODO.md](TODO.md)，进度看板见 [PROGRESS.md](PROGRESS.md)。
 
+## v1.12.1（2026-08-13）
+
+**🎨 看板模板内容编辑 + M3 确认 pending 归一**——本次核心是**看板模板的完善与确认流程的治理重构**：模板系统补上「创建后改内容」的明确入口（整体重述：说「编辑看板模板周报改成：…」→ AI 生成新结构 → 确认覆盖，另修复「把周报模板改成：…」被 set 误抢成切换的潜在 bug）；同时把散落在 4 个模块的独立确认 pending（工具写操作 / 文件入库 / 看板订阅 / 操作歧义澄清）统一成单一 pending 上下文 + bot 单一确认路由，确认词按 pending 类型作用域（「入库/要」只在入库场景生效，不再全局误确认）。
+
+### 新增
+
+- **看板模板内容编辑（整体重述）**：新增「编辑模板XX」入口——说「编辑看板模板周报改成：先写总体结论」→ 提取目标模板（仅本人私有模板可编辑，系统模板拒绝）→ LLM 按描述生成新结构 → 回复「确认」覆盖保存、回复「取消」不改动；无描述时先展示当前模板内容并引导。`_INTENT_DEFS` 15→16 项（edit_template），能力清单自动再生。
+- **统一 pending 上下文（M3，`scripts/pending_context.py`）**：4 类 pending（tool / learn / kanban / clarify）合并为单表 + TTL 惰性清除（默认 600s）+ 跨类型覆盖记日志；四模块（tools / knowledge_review / subscription_commands / routing）改为薄封装，对外 API 签名零变化，技能层调用点零改动。
+- **确认词类型作用域**：`is_confirm_text(text, ptype)`——「入库/入库吧/要」只在 learn 类型生效，避免 pending 合并后「入库」全局误确认其他操作；取消词（取消/算了/不要了/不执行/先不弄了）fullmatch 防误拦普通聊天。
+- **bot 单一确认路由**：`_process_text` 删除原 3 块独立分派（工具确认 / 澄清分派 / 学习确认），在 `set_current_user_id` 后统一入口——取消（非看板）→ 澄清解析 → 工具确认 → 学习确认；窄拦截只有取消/确认/可解析澄清文本才拦，其余放行；看板 pending 完全让位技能层（行为不变）。
+
+### 修复
+
+- **「把周报模板改成：先写结论」被误判成模板切换**：`edit_template` 意图解析置于 set 之前（原为潜在 bug：描述带冒号时会被 `_TEMPLATE_SET_RE` 抢成切换）。
+- **learn pending 下回「取消」现在会清 pending**（原放行，属改进，不再残留）。
+
+### 测试
+
+- 新增 `test_pending_context.py` 9 项（set/get/clear 往返、跨类型覆盖、TTL 过期、`clear_type` 类型守卫、确认词类型作用域、并发 set）+ 模板编辑冲突矩阵（edit/set/describe/submit 不互抢）+ 编辑流程端到端（确认覆盖字段/key 不变/系统模板拒绝/无描述展示引导）。
+- 测试迁移：技能层 6 处 mock patch 目标改为 `pending_context._pending`；`ConfirmLearnBranchTests` 改为真实 `set_pending_learn`；`test_clarify_cancel_via_bot` 取消源改为 `pending_cancel`（统一路由预期）。
+- 全量回归 **829 项通过**（此前 813 项）。
+
+### 已知限制
+
+- 单 pending 覆盖：同一用户新 pending 会覆盖旧（跨类型覆盖记日志）——learn pending 被其他 pending 覆盖后，回「入库」仍走 `_is_learn_command` 兜底学最新文件，学习能力不丢。
+- 本次改动需重启服务后生效。
+
 ## v1.12.0（2026-08-13）
 
 **🧰 工具板块化重构 + 判定层治本框架**——本次核心是**工具方面的重构与结构调整**：注册中心成为工具唯一事实源（LLM prompt 工具段、流式显示映射、能力清单全部由注册中心自动生成，不再手写）；8 个工具改名带板块前缀（kb/calc/dash/contact/image/doc）；判定层从「正则要么接管要么放行」改为三态（确定性直行 / 歧义交还用户 / 放行），「删除看板订阅」不再被文件删除正则误抢，查询盲区（CQC 3310 等）不补枚举统一走查知识库工具兜底。

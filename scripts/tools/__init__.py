@@ -15,8 +15,6 @@
 
 import json
 import logging
-import threading
-import time
 from typing import Any, Callable
 
 logger = logging.getLogger("tools")
@@ -73,9 +71,6 @@ def get_current_user_id() -> str:
 # ===== 注册中心（v1.12.0：工具唯一事实源） =====
 # 值：6 元组 (definition, handler, policy, sector, user_desc, display)
 _tool_registry: dict[str, tuple[dict, Callable[[dict], str], dict, str, str, str]] = {}
-_pending_operations: dict[str, dict] = {}
-_pending_lock = threading.RLock()
-_PENDING_TTL = 10 * 60
 
 # 板块元信息（render_tool_prompt / 能力清单用）
 SECTOR_ORDER = ("kb", "calc", "dash", "contact", "image", "doc")
@@ -223,16 +218,18 @@ def execute_tool(name: str, args: dict) -> str:
         if not user_id:
             return json.dumps({"error": "该操作需要用户身份和二次确认，当前无法执行"},
                               ensure_ascii=False)
-        with _pending_lock:
-            _pending_operations[user_id] = {
-                "tool": name, "args": dict(args or {}), "created_at": time.time(),
-                "summary": policy.get("summary") or definition.get("description", name),
-                "risk": policy.get("risk", "write"),
-            }
+        # v1.13.0（M3）：pending 统一收口到 pending_context（type=tool）
+        from pending_context import PT_TOOL, set as pc_set
+        payload = {
+            "tool": name, "args": dict(args or {}),
+            "summary": policy.get("summary") or definition.get("description", name),
+            "risk": policy.get("risk", "write"),
+        }
+        pc_set(user_id, PT_TOOL, payload)
         return json.dumps({
             "confirmation_required": True,
             "operation": name,
-            "summary": _pending_operations[user_id]["summary"],
+            "summary": payload["summary"],
             "arguments": args,
             "message": "操作尚未执行。请向用户清楚说明目标和影响，并要求再次确认。",
         }, ensure_ascii=False)
@@ -245,17 +242,18 @@ def execute_tool(name: str, args: dict) -> str:
 
 
 def get_pending_operation(user_id: str) -> dict | None:
-    with _pending_lock:
-        pending = _pending_operations.get(user_id)
-        if pending and time.time() - pending["created_at"] <= _PENDING_TTL:
-            return dict(pending)
-        _pending_operations.pop(user_id, None)
+    """取未过期工具 pending（type=tool 才返回 payload）"""
+    from pending_context import PT_TOOL, get as pc_get
+    entry = pc_get(user_id)
+    if entry and entry["type"] == PT_TOOL:
+        return dict(entry["payload"])
     return None
 
 
 def cancel_pending_operation(user_id: str) -> bool:
-    with _pending_lock:
-        return _pending_operations.pop(user_id, None) is not None
+    """取消工具 pending（仅当当前还是 tool 类型才清）"""
+    from pending_context import PT_TOOL, clear_type
+    return clear_type(user_id, PT_TOOL)
 
 
 def confirm_pending_operation(user_id: str) -> str:

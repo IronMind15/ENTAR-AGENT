@@ -575,6 +575,49 @@ class SubscriptionCommandTemplateTests(unittest.TestCase):
             "按这个格式做看板：负责人/今日进展/明日计划")
         self.assertEqual(parsed["description"], "负责人/今日进展/明日计划")
 
+    def test_edit_template_intents(self):
+        """v1.13.0 冲突矩阵：编辑 vs 切换 vs 描述/提交/列表"""
+        from dashboard import subscription_commands as sc
+        cases = [
+            # (文本, 期望意图, 期望 description)
+            ("编辑看板模板周报", "edit_template", ""),
+            ("编辑周报看板模板", "edit_template", ""),
+            ("编辑看板模板", "edit_template", ""),
+            ("编辑看板模板周报改成：先写总体结论", "edit_template", "先写总体结论"),
+            ("把周报模板改成：先写结论", "edit_template", "先写结论"),
+            ("编辑周报模板，改成：先写结论", "edit_template", "先写结论"),
+            # 无冒号格式 = 切换（set 不被编辑误抢）
+            ("把看板模板改成周报", "set_template", None),
+            ("用周报模板做看板", "set_template", None),
+            # describe/submit/list 不受影响
+            ("按这个格式做看板：负责人/进展", "describe_template", "负责人/进展"),
+            ("把这个当看板模板", "submit_template", None),
+            ("有哪些看板模板", "template", None),
+        ]
+        for text, expected, desc in cases:
+            parsed = sc.parse_subscription_command(text)
+            self.assertIsNotNone(parsed, text)
+            self.assertEqual(parsed["intent"], expected, text)
+            if desc is None:
+                self.assertNotIn("description", parsed, text)
+            else:
+                self.assertEqual(parsed.get("description", ""), desc, text)
+
+    def test_extract_edit_description_only_with_colon(self):
+        """desc 只认带冒号的「改成/改为/换成：」，防无冒号切换被当格式"""
+        from dashboard import subscription_commands as sc
+        # 有冒号 → 提取格式描述
+        self.assertEqual(sc._extract_edit_template("编辑周报模板改成：先写总体结论"),
+                         "先写总体结论")
+        self.assertEqual(sc._extract_edit_template("把看板模板改成：每日先列风险"),
+                         "每日先列风险")
+        # 无冒号：编辑意图但 desc 空 / 无编辑动词则非编辑意图
+        self.assertEqual(sc._extract_edit_template("编辑看板模板"), "")
+        self.assertIsNone(sc._extract_edit_template("把看板模板改成周报"))
+        # 非编辑意图 → None
+        self.assertIsNone(sc._extract_edit_template("看板用周报模板"))
+        self.assertIsNone(sc._extract_edit_template("有哪些看板模板"))
+
     def test_template_query_is_direct_not_write(self):
         from dashboard import subscription_commands as sc
         parsed = sc.parse_subscription_command("看板模板")
@@ -596,6 +639,21 @@ class SubscriptionCommandTemplateTests(unittest.TestCase):
         text = sc.render_confirmation(describe_pending)
         self.assertIn("晨会看板", text)
         self.assertIn("今日要点 / 进展", text)
+
+    def test_render_confirmation_edit_template(self):
+        """v1.13.0：编辑模板确认文案（覆盖保存，非新建）"""
+        from dashboard import subscription_commands as sc
+        pending = {
+            "intent": "edit_template", "template_key": "myreport",
+            "template_name": "自定义周报",
+            "section_spec": [{"kind": "headline", "title": "总体结论"},
+                             {"kind": "claims", "title": "各表进展"}],
+        }
+        text = sc.render_confirmation(pending)
+        self.assertIn("自定义周报", text)
+        self.assertIn("总体结论 / 各表进展", text)
+        self.assertIn("覆盖保存", text)
+        self.assertIn("取消", text)
 
 
 class DashboardSkillTemplateTests(unittest.TestCase):
@@ -622,7 +680,7 @@ class DashboardSkillTemplateTests(unittest.TestCase):
         self.addCleanup(lambda: _cleanup_db(self._sub_path, self._sub_store))
 
         self.patch_pending = mock.patch(
-            "dashboard.subscription_commands._pending", {})
+            "pending_context._pending", {})
         self.patch_pending.start()
         self.addCleanup(self.patch_pending.stop)
 
@@ -731,6 +789,81 @@ class DashboardSkillTemplateTests(unittest.TestCase):
             r = DashboardSkill.handle("把这个当看板模板", user_id="union001")
         self.assertIn("先上传", r["answer"])
 
+    def _create_user_template(self, uid="union001", key="myreport",
+                              name="自定义周报"):
+        res = self._tpl_store.create_user_template(
+            key=key, name=name, user_id=uid,
+            description="旧描述", map_instructions="旧指令",
+            reduce_instructions="旧reduce",
+            section_spec=[{"kind": "headline", "title": "旧章节"}])
+        self.assertTrue(res["ok"])
+        return res["template"]
+
+    @mock.patch("skills.dashboard.DashboardSkill._push_sample",
+                return_value="已推送示例看板")
+    @mock.patch("dashboard.template_builder.describe_to_spec")
+    def test_edit_template_confirm_flow(self, m_describe, m_push):
+        """v1.13.0：编辑私有模板 → 确认 → 覆盖字段、key 不变、无副本"""
+        self._create_user_template()
+        m_describe.return_value = {
+            "ok": True, "name": "自定义周报",  # 编辑不换名，用原 key/name
+            "description": "新描述：先结论后分块",
+            "map_instructions": "只看变化",
+            "reduce_instructions": "先总体后各表",
+            "section_spec": [
+                {"kind": "headline", "title": "总体结论"},
+                {"kind": "claims", "title": "各表进展", "levels": ["update"]},
+                {"kind": "sources", "title": "数据来源"},
+            ],
+        }
+        from skills.dashboard import DashboardSkill
+        r = DashboardSkill.handle(
+            "编辑自定义周报改成：先写总体结论", user_id="union001")
+        self.assertIn("自定义周报", r["answer"])
+        self.assertIn("总体结论", r["answer"])  # render_confirmation 展示新结构
+        pending = self._confirm()
+        self.assertEqual(pending["intent"], "edit_template")
+        self.assertEqual(pending["template_key"], "myreport")
+        # 确认 → 覆盖保存
+        r2 = DashboardSkill.handle("确认", user_id="union001")
+        self.assertIn("已按新格式覆盖", r2["answer"])
+        m_push.assert_called_once()
+        updated = self._tpl_store.get("myreport", "union001")
+        self.assertIsNotNone(updated)
+        self.assertEqual(updated.description, "新描述：先结论后分块")
+        self.assertEqual(updated.section_spec[0]["title"], "总体结论")
+        # 无副本（同名未新建）
+        mine = [t for t in self._tpl_store.list_visible("union001")
+                if t.scope == "user"]
+        self.assertEqual(len(mine), 1)
+
+    @mock.patch("dashboard.template_builder.describe_to_spec")
+    def test_edit_no_description_shows_current(self, m_describe):
+        """v1.13.0：无格式描述 → 展示当前内容引导，不 set pending"""
+        self._create_user_template()
+        from skills.dashboard import DashboardSkill
+        from dashboard import subscription_commands as sc
+        m_describe.assert_not_called()
+        r = DashboardSkill.handle("编辑自定义周报模板", user_id="union001")
+        self.assertIn("当前结构", r["answer"])
+        self.assertIn("自定义周报", r["answer"])
+        self.assertIn("改成：", r["answer"])
+        self.assertIsNone(sc.get_pending("union001"))
+
+    def test_edit_system_template_rejected(self):
+        """v1.13.0：系统模板不可编辑 → 引导另建"""
+        from skills.dashboard import DashboardSkill
+        r = DashboardSkill.handle("编辑周报模板改成：先写结论", user_id="union001")
+        self.assertIn("系统自带模板", r["answer"])
+        self.assertIn("周报总结", r["answer"])
+
+    def test_edit_unknown_template_guides(self):
+        """v1.13.0：找不到模板 → 引导说「看板模板」查看"""
+        from skills.dashboard import DashboardSkill
+        r = DashboardSkill.handle("编辑不存在的模板改成：先写结论", user_id="union001")
+        self.assertIn("没找到", r["answer"])
+        self.assertIn("看板模板", r["answer"])
+
     def test_subscription_status_shows_template(self):
         from skills.dashboard import DashboardSkill
         r = DashboardSkill.handle("我的看板", user_id="union001")
@@ -762,7 +895,7 @@ class TemplateChoiceFlowTests(unittest.TestCase):
         self.addCleanup(lambda: _cleanup_db(self._sub_path, self._sub_store))
 
         self.patch_pending = mock.patch(
-            "dashboard.subscription_commands._pending", {})
+            "pending_context._pending", {})
         self.patch_pending.start()
         self.addCleanup(self.patch_pending.stop)
 

@@ -35,6 +35,9 @@ from dingtalk_stream import (
 from dingtalk_stream.frames import CallbackMessage
 
 from config import DINGTALK_CLIENT_ID, DINGTALK_CLIENT_SECRET
+# v1.13.0（M3）：确认词统一收口到 pending_context（类型作用域），
+# confirm_learn 登记项引用 learn 专属补充确认词（manifest/tripwire 消费）
+from pending_context import _LEARN_EXTRA_CONFIRM_RE  # noqa: E402
 
 logger = logging.getLogger("dingtalk_bot")
 
@@ -122,15 +125,9 @@ def _is_admin(user_id: str) -> bool:
 
 def _is_learn_command(text: str) -> bool:
     return bool(_LEARN_RE.match((text or "").strip()))
-
-
-# 上传后「推荐入库」确认词（v1.11.0）：有 file-pending 才拦截，无 pending 不抢对话
-_CONFIRM_LEARN_RE = re.compile(r"^(入库|确认|好的|可以|没问题|要|入库吧)$")
-
-
-def _is_confirm_learn(text: str) -> bool:
-    t = (text or "").strip()
-    return bool(_CONFIRM_LEARN_RE.fullmatch(t))
+# v1.13.0（M3）：确认词统一收口到 pending_context（类型作用域），
+# 原 _CONFIRM_LEARN_RE 已删除，manifest 的 confirm_learn 项引用
+# pending_context._LEARN_EXTRA_CONFIRM_RE。
 
 
 # v1.12.0 判定层治本（M1/M2）：文件命令（删除/重学）接管前的领域互斥让位 + 多领域澄清。
@@ -471,21 +468,67 @@ class ErrorQueryHandler(ChatbotHandler):
         set_current_staff_id(staff_id)
         set_current_user_id(user_id)
 
-        # 通用工具二次确认优先于 Agent：确认后直接执行已冻结的工具名和参数，
-        # 不再让 LLM 重解释一次，避免目标漂移或凭空声称成功。
-        from tools import (cancel_pending_operation, confirm_pending_operation,
-                           get_pending_operation)
-        tool_pending = get_pending_operation(user_id)
-        stripped = text.strip()
-        if tool_pending and re.fullmatch(r"(?:取消|算了|不要了|不执行)[。！!]?", stripped):
-            cancel_pending_operation(user_id)
-            answer = "已取消，刚才的操作没有执行。"
-            if on_chunk:
-                on_chunk(answer, "done")
-            return {"answer": answer, "source": "tool_confirmation"}
-        if tool_pending:
-            from dashboard.subscription_commands import is_confirmation_text
-            if is_confirmation_text(stripped):
+        # v1.13.0（M3）：统一 pending 确认路由——任何非看板 pending（tool/learn/
+        # clarify）的取消/确认/澄清解析都在这里拦截；看板 pending 完全让位技能层
+        # （技能层 handle 已处理确认/取消，行为不变）。窄拦截：只有取消/确认/可解析
+        # 澄清文本才拦，其余一律放行普通流程。
+        from pending_context import (PT_CLARIFY, PT_KANBAN, PT_LEARN, PT_TOOL,
+                                     clear as pc_clear, get as pc_get,
+                                     is_cancel_text as pc_is_cancel,
+                                     is_confirm_text)
+        entry = pc_get(user_id)
+        if entry:
+            ptype = entry["type"]
+            stripped = text.strip()
+            # 取消：非看板 pending 通用取消（看板取消由技能层处理）
+            if ptype != PT_KANBAN and pc_is_cancel(stripped):
+                pc_clear(user_id)
+                answer = "已取消，刚才的操作没有执行。"
+                if on_chunk:
+                    on_chunk(answer, "done")
+                return {"answer": answer, "source": "pending_cancel"}
+            if ptype == PT_CLARIFY:
+                # 判定层澄清（v1.12.0）：上一轮反问澄清的用户回复 → 路由到对应确认流程。
+                from routing import get_clarification, resolve_clarification
+                resolved = resolve_clarification(user_id, stripped)
+                if resolved:
+                    _ctx = resolved.get("_ctx") or {}
+                    _key = resolved.get("key")
+                    if _key == "cancel":
+                        answer = "已取消，刚才的操作没有执行。"
+                        if on_chunk:
+                            on_chunk(answer, "done")
+                        return {"answer": answer, "source": "clarification"}
+                    _action = _ctx.get("action")
+                    _target = _ctx.get("target", "")
+                    if _key == "kanban":
+                        # 用户选看板侧 → 让位技能层处理（澄清已清，不拦截）
+                        pass
+                    elif _action == "delete":
+                        from tools import execute_tool
+                        value = json.loads(execute_tool(
+                            "kb_file_manage", {"action": "delete", "target": _target}))
+                        answer = (f"⚠️ 准备删除「{_target}」及对应知识库内容。"
+                                  "此操作不可恢复，回复「确认」执行，回复「取消」放弃。") \
+                            if value.get("confirmation_required") else f"❌ {value.get('error', '无法创建删除操作')}"
+                        if on_chunk:
+                            on_chunk(answer, "done")
+                        return {"answer": answer, "source": "knowledge_delete"}
+                    elif _action == "relearn":
+                        from tools import execute_tool
+                        value = json.loads(execute_tool(
+                            "kb_file_manage", {"action": "relearn", "target": _target}))
+                        answer = (f"⚠️ 准备重新学习「{_target}」并更新知识库索引。"
+                                  "回复「确认」执行，回复「取消」放弃。") \
+                            if value.get("confirmation_required") else f"❌ {value.get('error', '无法创建重学操作')}"
+                        if on_chunk:
+                            on_chunk(answer, "done")
+                        return {"answer": answer, "source": "knowledge_relearn"}
+                    # 其他/未知目标 → 继续正常流程
+            elif ptype == PT_TOOL and is_confirm_text(stripped, PT_TOOL):
+                # 工具写操作二次确认：直接执行已冻结的工具名和参数，不再让 LLM
+                # 重解释一次，避免目标漂移或凭空声称成功。
+                from tools import confirm_pending_operation
                 raw = confirm_pending_operation(user_id)
                 try:
                     value = json.loads(raw) if isinstance(raw, str) else (raw or {})
@@ -498,46 +541,22 @@ class ErrorQueryHandler(ChatbotHandler):
                 if on_chunk:
                     on_chunk(answer, "done")
                 return {"answer": answer, "source": "tool_confirmation"}
-
-        # v1.12.0 判定层澄清（M2/M3）：上一轮反问澄清的用户回复 → 路由到对应确认流程。
-        # 无澄清 pending 或回复无法解析（普通消息）→ 不阻塞，继续正常流程。
-        from routing import get_clarification, resolve_clarification
-        if get_clarification(user_id):
-            resolved = resolve_clarification(user_id, stripped)
-            if resolved:
-                _ctx = resolved.get("_ctx") or {}
-                _key = resolved.get("key")
-                if _key == "cancel":
-                    answer = "已取消，刚才的操作没有执行。"
+            elif ptype == PT_LEARN and is_confirm_text(stripped, PT_LEARN):
+                # 上传后「推荐入库」确认（v1.11.0）：有 learn pending 且确认词才拦截。
+                try:
+                    from knowledge_review import (clear_pending_learn,
+                                                  learn_file_path_for_user)
+                    pending = entry["payload"]
+                    result = learn_file_path_for_user(
+                        user_id, pending.get("file_path", ""),
+                        pending.get("file_name", ""))
+                    clear_pending_learn(user_id)
+                    answer = _format_learn_result(result)
                     if on_chunk:
                         on_chunk(answer, "done")
-                    return {"answer": answer, "source": "clarification"}
-                _action = _ctx.get("action")
-                _target = _ctx.get("target", "")
-                if _key == "kanban":
-                    # 用户选看板侧 → 让位技能层处理（澄清已清，不拦截）
-                    pass
-                elif _action == "delete":
-                    from tools import execute_tool
-                    value = json.loads(execute_tool(
-                        "kb_file_manage", {"action": "delete", "target": _target}))
-                    answer = (f"⚠️ 准备删除「{_target}」及对应知识库内容。"
-                              "此操作不可恢复，回复「确认」执行，回复「取消」放弃。") \
-                        if value.get("confirmation_required") else f"❌ {value.get('error', '无法创建删除操作')}"
-                    if on_chunk:
-                        on_chunk(answer, "done")
-                    return {"answer": answer, "source": "knowledge_delete"}
-                elif _action == "relearn":
-                    from tools import execute_tool
-                    value = json.loads(execute_tool(
-                        "kb_file_manage", {"action": "relearn", "target": _target}))
-                    answer = (f"⚠️ 准备重新学习「{_target}」并更新知识库索引。"
-                              "回复「确认」执行，回复「取消」放弃。") \
-                        if value.get("confirmation_required") else f"❌ {value.get('error', '无法创建重学操作')}"
-                    if on_chunk:
-                        on_chunk(answer, "done")
-                    return {"answer": answer, "source": "knowledge_relearn"}
-                # 其他/未知目标 → 继续正常流程
+                    return {"answer": answer, "source": "knowledge_learn"}
+                except Exception as e:
+                    logger.warning(f"推荐入库确认处理失败: {e}")
 
         # 审核口令与普通技能路由
         if text in ("查看我的审核ID", "我的审核ID", "查看我的钉钉ID"):
@@ -647,24 +666,7 @@ class ErrorQueryHandler(ChatbotHandler):
                 return {"answer": answer, "source": "knowledge_relearn"}
             # gate == "defer"：让位给技能层，不拦截
 
-        # 5.5 上传后「推荐入库」确认（v1.11.0）：有 file-pending 且确认词才拦截
-        if _is_confirm_learn(t):
-            try:
-                from knowledge_review import (clear_pending_learn,
-                                              get_pending_learn,
-                                              learn_file_path_for_user)
-                pending = get_pending_learn(user_id)
-                if pending:
-                    result = learn_file_path_for_user(
-                        user_id, pending.get("file_path", ""),
-                        pending.get("file_name", ""))
-                    clear_pending_learn(user_id)
-                    answer = _format_learn_result(result)
-                    if on_chunk:
-                        on_chunk(answer, "done")
-                    return {"answer": answer, "source": "knowledge_learn"}
-            except Exception as e:
-                logger.warning(f"推荐入库确认处理失败: {e}")
+        # v1.13.0（M3）：learn pending 确认已上移到统一路由块，此处不再单独拦截。
 
         # 5.75 学到指定知识库（v1.11.5 多库）：「把这个文档学到产品手册」
         m = _LEARN_TO_KB_RE.match(t)
@@ -1338,8 +1340,10 @@ _BOT_COMMANDS: list[dict] = [
      "trigger": "把这个文档学到产品手册", "regex": _LEARN_TO_KB_RE,
      "desc": "入库到指定知识库（v1.11.5 多库）", "status": "enabled"},
     {"id": "confirm_learn", "sector": "kb", "name": "确认学习",
-     "trigger": "入库 / 确认 / 好的", "regex": _CONFIRM_LEARN_RE,
-     "desc": "上传文件后推荐入库的确认词（有 file-pending 才拦截）", "status": "enabled"},
+     "trigger": "入库 / 确认 / 好的",
+     # v1.13.0（M3）：确认词统一收口到 pending_context，regex 引用其类型补充词
+     "regex": _LEARN_EXTRA_CONFIRM_RE,
+     "desc": "上传文件后推荐入库的确认词（有 learn pending 才拦截）", "status": "enabled"},
     {"id": "my_files", "sector": "kb", "name": "我的文件",
      "trigger": "我的文件 / 查看我的文件", "regex": _MY_FILES_RE,
      "desc": "列出自己上传的文件（序号+文件名+学习状态）", "status": "enabled"},

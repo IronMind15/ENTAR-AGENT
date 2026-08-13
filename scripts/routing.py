@@ -20,8 +20,6 @@
 
 import logging
 import re
-import threading
-import time
 
 logger = logging.getLogger("routing")
 
@@ -83,11 +81,10 @@ def detect_domains(text: str) -> list[str]:
 
 
 # ===== 操作歧义澄清（M2 / M3） =====
-_CLARIFY_TIMEOUT = 600   # 澄清反问窗口（秒），与 tools/_pending 一致
-_clarify: dict[str, dict] = {}
-_clarify_lock = threading.Lock()
+# v1.13.0（M3）：pending 统一收口到 pending_context（type=clarify），薄封装保留 API。
+_CLARIFY_TIMEOUT = 600   # 澄清反问窗口（秒）
 
-_CANCEL_CLARIFY_RE = re.compile(r"^(?:取消|算了|不要了|不执行)[。！!]?$")
+_CANCEL_CLARIFY_RE = re.compile(r"^(?:取消|算了|不要了|不执行|先不弄了)[。！!]?$")
 
 
 def ask_clarification(user_id: str, options: list[dict],
@@ -97,28 +94,24 @@ def ask_clarification(user_id: str, options: list[dict],
     key 是路由目标（调用方用它决定进入哪个确认流程）；
     label 是展示给用户的可选项文案。
     """
-    with _clarify_lock:
-        _clarify[user_id] = {
-            "options": list(options),
-            "ctx": ctx or {},
-            "ts": time.time(),
-        }
+    from pending_context import PT_CLARIFY, set as pc_set
+    pc_set(user_id, PT_CLARIFY,
+           {"options": list(options), "ctx": ctx or {}},
+           ttl=_CLARIFY_TIMEOUT)
 
 
 def get_clarification(user_id: str) -> dict | None:
     """取未过期的澄清上下文；过期/不存在返回 None。只读，不清除。"""
-    with _clarify_lock:
-        entry = _clarify.get(user_id)
-        if entry and time.time() - entry["ts"] <= _CLARIFY_TIMEOUT:
-            return entry
-        if entry:
-            _clarify.pop(user_id, None)
-        return None
+    from pending_context import PT_CLARIFY, get as pc_get
+    entry = pc_get(user_id)
+    if entry and entry["type"] == PT_CLARIFY:
+        return dict(entry["payload"])
+    return None
 
 
 def clear_clarification(user_id: str) -> None:
-    with _clarify_lock:
-        _clarify.pop(user_id, None)
+    from pending_context import PT_CLARIFY, clear_type
+    clear_type(user_id, PT_CLARIFY)
 
 
 def render_clarification(user_id: str,

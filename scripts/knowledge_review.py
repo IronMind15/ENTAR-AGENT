@@ -693,25 +693,25 @@ def learn_file_for_user(user_id: str, user_name: str = "",
     return get_review_service().learn_for_user(user_id, user_name, kb=kb)
 
 
-# ===== v1.11.0 上传后「自动推荐入库」确认（内存 pending，重启失效可接受） =====
-_pending_learn: dict[str, dict] = {}
-_pending_learn_lock = threading.Lock()
-
-
+# ===== v1.11.0 上传后「自动推荐入库」确认 =====
+# v1.13.0（M3）：pending 统一收口到 pending_context（type=learn），薄封装保留 API。
 def set_pending_learn(user_id: str, file_path: str, file_name: str = ""):
     """保存文件成功后登记推荐确认（精确对应刚上传的文件，规避多文件歧义）"""
-    with _pending_learn_lock:
-        _pending_learn[user_id] = {"file_path": file_path, "file_name": file_name}
+    from pending_context import PT_LEARN, set as pc_set
+    pc_set(user_id, PT_LEARN, {"file_path": file_path, "file_name": file_name})
 
 
 def get_pending_learn(user_id: str) -> Optional[dict]:
-    with _pending_learn_lock:
-        return _pending_learn.get(user_id)
+    from pending_context import PT_LEARN, get as pc_get
+    entry = pc_get(user_id)
+    if entry and entry["type"] == PT_LEARN:
+        return dict(entry["payload"])
+    return None
 
 
 def clear_pending_learn(user_id: str):
-    with _pending_learn_lock:
-        _pending_learn.pop(user_id, None)
+    from pending_context import PT_LEARN, clear_type
+    clear_type(user_id, PT_LEARN)
 
 
 def learn_file_path_for_user(user_id: str, file_path: str,

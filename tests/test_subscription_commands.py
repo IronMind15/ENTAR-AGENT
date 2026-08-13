@@ -207,7 +207,9 @@ class ResolveRecipientTests(unittest.TestCase):
 
 class PendingTests(unittest.TestCase):
     def setUp(self):
-        self._patched = mock.patch.object(sc, "_pending", {})
+        # v1.13.0（M3）：pending 统一收口到 pending_context，patch 目标迁移
+        import pending_context
+        self._patched = mock.patch.object(pending_context, "_pending", {})
         self._patched.start()
         self.addCleanup(self._patched.stop)
 

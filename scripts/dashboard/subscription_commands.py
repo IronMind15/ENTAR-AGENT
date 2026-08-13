@@ -82,6 +82,27 @@ _TEMPLATE_SUBMIT_RE = re.compile(
 _TEMPLATE_SET_RE = re.compile(
     r"(?:按|根据|用|换|切|改成|改为|设置|设|变成|换成)\s*(?:[^，。！？\s]{0,10}?)?\s*(?:模板|模式)|"
     r"(?:模板|模式)\s*(?:用|换|切|改成|改为|设置|设|变成)")
+# v1.13.0：编辑模板内容（整体重述覆盖）。与 set_template 区分：
+#   set  = 切到已存在模板（用/换/改成+模板名，无格式冒号）
+#   edit = 重述格式覆盖模板内容（显式编辑动词，或「…模板改成/改为：<新格式>」带冒号）
+# 注意：须在 _TEMPLATE_SET_RE 之前判定——否则「把周报模板改成：先写总体结论」
+# 会被 set 的「改成」抢成切换（v1.13.0 修复该误抢）。
+# 意图判定与 desc 提取拆开：目标模板名/desc 都不靠位置捕获（非贪婪会吞/丢目标，
+# v1.13.0 实测），统一交给独立 _EDIT_DESC_RE（整句找「改成…：」）与技能层
+# TemplateStore.resolve(text) 解析，更稳健。
+_EDIT_TEMPLATE_RE = re.compile(
+    r"(?:编辑|修改|调整|改改|重做)"                       # 门槛 A：显式编辑动词
+    r"[^，。！？：:]{0,12}?(?:看板)?\s*(?:模板|样式|格式)"   # + 模板词（编辑周报…模板 / 编辑…模板周报）
+    r"|"
+    r"(?:把|将)?[^，。！？：:]{0,12}?(?:看板)?\s*(?:模板|样式|格式)"  # 门槛 B：…模板改成：<格式>
+    r"[^，。！？：:]{0,12}?(?:改成|改为|换成)[：:]"
+    r"|"
+    r"(?:编辑|修改|调整|改改|重做)"                       # 门槛 C：编辑<名>改成：<格式>
+    r"[^，。！？：:]{0,12}?(?:看板)?\s*(?:模板|样式|格式)?"  # 模板词可省（编辑自定义周报改成：…）
+    r"[^，。！？：:]{0,12}?(?:改成|改为|换成)[：:]")
+# desc 提取：整句任意位置「改成/改为/换成：<内容>」即新格式描述（须带冒号，
+# 防「改成周报模板」无冒号的切换被误当格式）。
+_EDIT_DESC_RE = re.compile(r"(?:改成|改为|换成)[：:]\s*(?P<desc>\S.{0,160})")
 # 模板列表/查询（「看板模板」后必须紧跟 模板/模式/样式，避开「看板用周报模板」这类切换）
 _TEMPLATE_LIST_RE = re.compile(
     r"(?:有哪|有哪些|哪些|几种|什么|列一下|介绍一下?|看看|查询|有什么)\s*看板\s*(?:模板|模式|样式)|"
@@ -159,8 +180,11 @@ def parse_subscription_command(text: str, ctx: Optional[dict] = None) -> Optiona
         return None
     if _NEGATIVE_RE.search(text):
         return None  # 讨论文档/方案等，不是操作订阅
-    # 门槛：含「看板」或明确的接收人指令（"也推给张工"是订阅上下文内的追加指令）
-    if not (_HAS_KANBAN_RE.search(text) or _RECIPIENT_RE.search(text)):
+    # 门槛：含「看板」或明确的接收人指令（"也推给张工"是订阅上下文内的追加指令），
+    # 或编辑模板意图（「编辑周报模板」可不含「看板」，v1.13.0 放宽）。
+    # 安全：_NEGATIVE_RE（160 行）已含「文档/设计/方案/学习/入库」等，误入只到引导，无写副作用。
+    if not (_HAS_KANBAN_RE.search(text) or _RECIPIENT_RE.search(text)
+            or _EDIT_TEMPLATE_RE.search(text)):
         return None
 
     if _STOP_RE.search(text):
@@ -178,6 +202,12 @@ def parse_subscription_command(text: str, ctx: Optional[dict] = None) -> Optiona
             return {"intent": "describe_template", "description": desc, **(ctx or {})}
     if _TEMPLATE_SUBMIT_RE.search(text):
         return {"intent": "submit_template", **(ctx or {})}
+    # v1.13.0：编辑模板（在 set 之前——「把XX模板改成：<格式>」是编辑不是切换）
+    # 目标模板名不在解析层捕获，由技能层 TemplateStore.resolve(text) 从整句解析；
+    # desc 可为 ""（「编辑看板模板」无格式描述 → 技能层引导）。
+    edit_desc = _extract_edit_template(text)
+    if edit_desc is not None:
+        return {"intent": "edit_template", "description": edit_desc, **(ctx or {})}
     if _TEMPLATE_SET_RE.search(text):
         return {"intent": "set_template", **(ctx or {})}
     if _TEMPLATE_LIST_RE.search(text):
@@ -262,12 +292,18 @@ def is_contextual_delete(text: str) -> bool:
 
 
 def is_confirmation_text(text: str) -> bool:
-    """允许带动作复述的自然确认，例如“是的，全部删除”。"""
-    return bool(_CONFIRM_TEXT_RE.fullmatch((text or "").strip()))
+    """允许带动作复述的自然确认，例如“是的，全部删除”。
+
+    v1.13.0（M3）：确认词委托 pending_context（类型作用域，kanban 用通用词）。
+    """
+    from pending_context import PT_KANBAN, is_confirm_text
+    return is_confirm_text(text, PT_KANBAN)
 
 
 def is_cancel_text(text: str) -> bool:
-    return bool(_CANCEL_TEXT_RE.fullmatch((text or "").strip()))
+    """v1.13.0（M3）：取消词委托 pending_context"""
+    from pending_context import is_cancel_text as pc_is_cancel
+    return pc_is_cancel(text)
 
 
 # ===== 时间解析 =====
@@ -335,6 +371,20 @@ def _extract_template_desc(text: str) -> Optional[str]:
     return desc or None
 
 
+def _extract_edit_template(text: str) -> Optional[str]:
+    """从编辑意图文本提取新格式描述（desc）。
+
+    desc 只认「改成/改为/换成：<内容>」带冒号（防把「改成周报模板」无冒号的
+    切换当格式）；intent 命中但无 desc 返回 ""（引导用户描述）。
+    返回 None=非编辑意图；""=编辑意图但无描述；str=格式描述。
+    目标模板名不在本函数解析，由技能层 resolve(text) 从整句匹配。
+    """
+    if not _EDIT_TEMPLATE_RE.search(text or ""):
+        return None
+    m = _EDIT_DESC_RE.search(text or "")
+    return (m.group("desc") or "").strip() if m else ""
+
+
 # ===== 看板意图登记表（v1.12.0：能力清单/文档单一事实源） =====
 # 每个 {id, name, trigger, regex, desc, status}。regex 引用上面定义的正则对象
 # （.pattern 复用，避免登记表与判定正则各自维护触发词导致漂移）。
@@ -372,6 +422,9 @@ _INTENT_DEFS: list[dict] = [
      "regex": _TEMPLATE_SET_RE, "desc": "切换每日/周报/项目/自定义模板", "status": "enabled"},
     {"id": "template", "name": "模板列表查询", "trigger": "有哪些看板模板",
      "regex": _TEMPLATE_LIST_RE, "desc": "列出可选模板（避开「用周报模板」切换）", "status": "enabled"},
+    {"id": "edit_template", "name": "编辑模板内容", "trigger": "编辑看板模板周报改成：…",
+     "regex": _EDIT_TEMPLATE_RE,
+     "desc": "重述格式覆盖更新已有用户模板（系统模板不可编辑）", "status": "enabled"},
     {"id": "choose_template", "name": "反问选模板", "trigger": "创建后回复 1/2/3 或模板名",
      "regex": _TEMPLATE_CHOICE_NUM_RE, "desc": "创建订阅后的反问窗口回复（600s，绑上下文防误判）",
      "status": "enabled"},
@@ -581,6 +634,13 @@ def render_confirmation(pending: dict, current=None) -> str:
         lines.append(f"📐 {format_spec_summary(pending.get('section_spec'))}")
         lines.append("回复「确认」保存模板并应用到您的看板；回复「取消」则不保存。")
 
+    elif intent == "edit_template":
+        # v1.13.0：编辑已有用户模板内容（整体重述覆盖）
+        name = pending.get("template_name") or pending.get("template_key") or ""
+        lines.append(f"好的，将把「{name}」模板调整为以下结构：")
+        lines.append(f"📐 {format_spec_summary(pending.get('section_spec'))}")
+        lines.append("回复「确认」覆盖保存；回复「取消」则不改动。")
+
     else:
         lines.append("收到，请问您想对看板做什么调整？")
 
@@ -596,44 +656,49 @@ def is_kanban_topic(text: str) -> bool:
     return not bool(_NEGATIVE_RE.search(t))
 
 
-# ===== pending（内存态，重启失效可接受，重说即可） =====
+# ===== pending 与看板活动 =====
+# v1.13.0（M3）：pending 统一收口到 pending_context（type=kanban），薄封装保留 API；
+# 看板活动窗口（_activity_by_user）是「最近聊过看板」的承接安全判定，与 pending 独立保留。
 _ACTIVITY_TIMEOUT = 600   # 最近看板活动（秒），用于确认词防误触
-_pending: dict[str, dict] = {}
-_pending_lock = threading.Lock()
+_activity_lock = threading.Lock()
 _last_activity_ts: float = 0.0
 _activity_by_user: dict[str, float] = {}
 
 
 def set_pending(user_id: str, pending: dict):
-    global _last_activity_ts
-    with _pending_lock:
-        _pending[user_id] = pending
-        _last_activity_ts = time.time()
-        _activity_by_user[user_id] = _last_activity_ts
+    """登记看板 pending 并记录该用户刚进行过看板对话"""
+    from pending_context import PT_KANBAN, set as pc_set
+    pc_set(user_id, PT_KANBAN, dict(pending))
+    touch_activity(user_id)
 
 
 def touch_activity(user_id: str):
     """记录该用户刚进行过看板对话，供承接式命令安全判定。"""
     global _last_activity_ts
-    with _pending_lock:
+    with _activity_lock:
         _last_activity_ts = time.time()
         _activity_by_user[user_id] = _last_activity_ts
 
 
 def get_pending(user_id: str) -> Optional[dict]:
-    with _pending_lock:
-        return _pending.get(user_id)
+    """取看板 pending（type=kanban 才返回 payload；被其他类型覆盖时视为无）"""
+    from pending_context import PT_KANBAN, get as pc_get
+    entry = pc_get(user_id)
+    if entry and entry["type"] == PT_KANBAN:
+        return dict(entry["payload"])
+    return None
 
 
 def clear_pending(user_id: str):
-    with _pending_lock:
-        _pending.pop(user_id, None)
+    """清看板 pending（仅当当前还是 kanban 类型才清，防误清 tool/learn）"""
+    from pending_context import PT_KANBAN, clear_type
+    clear_type(user_id, PT_KANBAN)
 
 
 def has_recent_kanban_activity(timeout: float = _ACTIVITY_TIMEOUT,
                                 user_id: str | None = None) -> bool:
     """最近 timeout 秒内是否有过看板对话（技能 match 用：简短「确认」只在
     刚聊过看板时拦截，避免抢普通对话）"""
-    with _pending_lock:
+    with _activity_lock:
         last = _activity_by_user.get(user_id, 0.0) if user_id is not None else _last_activity_ts
     return (time.time() - last) <= timeout

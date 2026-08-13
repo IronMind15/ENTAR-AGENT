@@ -157,11 +157,15 @@ class BotFileCommandGateTests(unittest.TestCase):
         cancel_pending_operation("u1")
 
     def test_clarify_cancel_via_bot(self):
-        """澄清反问中用户回「取消」→ 已取消且不执行任何操作"""
+        """澄清反问中用户回「取消」→ 已取消且不执行任何操作
+
+        v1.13.0（M3）：取消走统一 pending 路由（先于 clarify 分派），
+        source 为 pending_cancel，澄清被清空。
+        """
         result = self.handler._process_text("删除 d4-1 的内容", "u2", "s2")
         self.assertEqual(result["source"], "clarification")
         result2 = self.handler._process_text("取消", "u2", "s2")
-        self.assertEqual(result2["source"], "clarification")
+        self.assertEqual(result2["source"], "pending_cancel")
         self.assertIn("已取消", result2["answer"])
         self.assertIsNone(get_clarification("u2"))
 

@@ -502,31 +502,32 @@ class PerUserSerializationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ConfirmLearnBranchTests(unittest.TestCase):
-    """v1.11.0 上传后「推荐入库」确认分支"""
+    """上传后「推荐入库」确认分支（v1.13.0 M3：learn pending 走统一确认路由）"""
 
     def setUp(self):
         self.handler = ErrorQueryHandler()
+        import pending_context
+        pending_context.reset()
 
-    @mock.patch("knowledge_review.get_pending_learn",
-                return_value={"file_path": "/x/a.pdf", "file_name": "a.pdf"})
-    @mock.patch("knowledge_review.clear_pending_learn")
     @mock.patch("knowledge_review.learn_file_path_for_user",
                 return_value={"status": "ok", "file_name": "a.pdf",
                               "collection": "standards", "chunk_count": 5})
-    def test_confirm_with_pending_learns(self, m_learn, m_clear, m_get):
-        """有 file-pending 时「入库」→ 按路径入库 + 清除 pending"""
+    def test_confirm_with_pending_learns(self, m_learn):
+        """有 learn pending 时「入库」→ 按路径入库 + 清除 pending"""
+        from knowledge_review import set_pending_learn
+        set_pending_learn("u1", "/x/a.pdf", "a.pdf")
         result = self.handler._process_text("入库", "u1", "s1")
         self.assertEqual(result["source"], "knowledge_learn")
         self.assertIn("学习完成", result["answer"])
-        m_learn.assert_called_once()
-        m_clear.assert_called_once_with("u1")
+        m_learn.assert_called_once_with("u1", "/x/a.pdf", "a.pdf")
+        # pending 已清除（真实 clear_pending_learn 走 clear_type 守卫）
+        import pending_context
+        self.assertIsNone(pending_context.get("u1"))
 
-    @mock.patch("knowledge_review.get_pending_learn", return_value=None)
     @mock.patch("skills.get_matched_skill", return_value=None)
-    def test_confirm_without_pending_not_intercepted(self, m_skill, m_get):
-        """无 pending → 确认词不被上传分支拦截（继续路由到兜底）"""
+    def test_confirm_without_pending_not_intercepted(self, m_skill):
+        """无 pending → 确认词不被统一路由拦截（继续路由到兜底）"""
         result = self.handler._process_text("确认", "u1", "s1")
-        m_get.assert_called_once_with("u1")
         self.assertIsNotNone(result)
 
 

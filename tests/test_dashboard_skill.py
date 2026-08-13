@@ -81,7 +81,7 @@ class HandleCreateTests(unittest.TestCase):
     """创建订阅：反问 → 确认 → 落地 + 推样例"""
 
     def setUp(self):
-        self.patch_pending = mock.patch("dashboard.subscription_commands._pending", {})
+        self.patch_pending = mock.patch("pending_context._pending", {})
         self.patch_pending.start()
         self.addCleanup(self.patch_pending.stop)
         # 用临时订阅存储
@@ -154,7 +154,7 @@ class HandleChangeTests(unittest.TestCase):
     """改时间/频率/接收人：需先有订阅"""
 
     def setUp(self):
-        self.patch_pending = mock.patch("dashboard.subscription_commands._pending", {})
+        self.patch_pending = mock.patch("pending_context._pending", {})
         self.patch_pending.start()
         self.addCleanup(self.patch_pending.stop)
         import tempfile, os
@@ -265,7 +265,7 @@ class HandleDocCreateTests(unittest.TestCase):
     """「按这几个文档做每日看板」：动态数据源创建 + 确认落地"""
 
     def setUp(self):
-        self.patch_pending = mock.patch("dashboard.subscription_commands._pending", {})
+        self.patch_pending = mock.patch("pending_context._pending", {})
         self.patch_pending.start()
         self.addCleanup(self.patch_pending.stop)
         import tempfile
@@ -382,7 +382,7 @@ class DocCreatePrecheckTests(unittest.TestCase):
     """创建前权限预检在 _handle_doc_create 的整合（v1.11.6）"""
 
     def setUp(self):
-        self.patch_pending = mock.patch("dashboard.subscription_commands._pending", {})
+        self.patch_pending = mock.patch("pending_context._pending", {})
         self.patch_pending.start()
         self.addCleanup(self.patch_pending.stop)
         import tempfile

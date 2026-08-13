@@ -182,6 +182,11 @@ class DashboardSkill(BaseSkill):
             sub_cmd.set_pending(uid, pending)
             return {"answer": sub_cmd.render_confirmation(pending), "source": "dashboard"}
 
+        if intent == "edit_template":
+            # v1.13.0：编辑模板内容（整体重述覆盖 → 确认 → 覆盖保存）
+            sub_cmd.touch_activity(uid)
+            return cls._handle_edit_template(q, uid, parsed)
+
         if intent == "resume":
             store = get_subscription_store()
             paused = [s for s in store.list_for_owner(uid) if not s.enabled]
@@ -441,6 +446,36 @@ class DashboardSkill(BaseSkill):
                     f"✅ 已保存模板「{tpl.name}」并应用到您的看板。{note}",
                     "source": "dashboard"}
 
+        if intent == "edit_template":
+            # v1.13.0：编辑已有用户模板内容（精确 key 更新，不靠同名匹配）
+            key = pending.get("template_key")
+            tpl = cls._match_template_key(key, user_id)
+            if not tpl or tpl.scope != "user":
+                sub_cmd.clear_pending(user_id)
+                return {"answer": "模板不存在或已不是您的私有模板，请重新「看板模板」查看。",
+                        "source": "dashboard"}
+            tdef = pending.get("template_def") or {}
+            from dashboard.template_store import get_template_store
+            updated = get_template_store().update_user_template(
+                key, user_id,
+                description=tdef.get("description", ""),
+                map_instructions=tdef.get("map_instructions", ""),
+                reduce_instructions=tdef.get("reduce_instructions", ""),
+                section_spec=tdef.get("section_spec"))
+            if not updated:
+                sub_cmd.clear_pending(user_id)
+                return {"answer": "模板更新失败，请稍后重试或换一个模板名。",
+                        "source": "dashboard"}
+            cls._sync_template_file(updated, user_id)
+            sub_cmd.clear_pending(user_id)
+            owned = store.list_for_owner(user_id)
+            note = "（还没有看板订阅，开通后说「用这个模板」即可生效）"
+            if owned:
+                note = cls._push_sample(owned[0])
+            return {"answer":
+                    f"✅ 已按新格式覆盖「{updated.name}」模板，引用它的订阅将按新结构出板。{note}",
+                    "source": "dashboard"}
+
         sub = store.get(pending.get("sub_id") or 0)
         if not sub:
             sub_cmd.clear_pending(user_id)
@@ -650,6 +685,7 @@ class DashboardSkill(BaseSkill):
                 "说「用周报模板」「用项目看板」切换；或「按这个格式做看板：负责人/"
                 "今日进展/明日计划」自定义模板。",
             ])
+        lines.append("（带「我的」标记的模板可编辑：说「编辑<模板名>改成：新格式」覆盖内容）")
         return "\n".join(lines)
 
     @staticmethod
@@ -753,10 +789,68 @@ class DashboardSkill(BaseSkill):
                     if t.scope == "user"]
             if mine:
                 names = "、".join(t.name for t in mine[:3])
-                return f"\n📂 您保存过模板：{names}，回复模板名即可复用"
+                return f"\n📂 您保存过模板：{names}，回复模板名即可复用；也可「编辑{names.split('、')[0]}改成：新格式」更新它"
         except Exception:
             pass
         return ""
+
+    # ===== v1.13.0 编辑模板内容（整体重述覆盖） =====
+    @classmethod
+    def _handle_edit_template(cls, text: str, user_id: str, parsed: dict) -> dict:
+        """编辑已有用户模板：目标解析 → 有描述生成 spec 入 pending，无描述展示当前内容引导"""
+        try:
+            from dashboard.template_store import get_template_store
+            store_t = get_template_store()
+        except Exception as e:
+            logger.warning(f"取模板存储失败: {e}")
+            return {"answer": "模板服务暂不可用，请稍后再试。", "source": "dashboard"}
+
+        desc = (parsed.get("description") or "").strip()
+        # 目标模板：resolve 整句（限定可见模板），再核对是本人私有模板
+        tpl = store_t.resolve(text, user_id)
+        if tpl and tpl.scope != "user":
+            return {"answer":
+                    f"「{tpl.name}」是系统自带模板，不能直接修改。\n"
+                    f"可以另建一个类似格式的：回复「按这个格式做看板：{tpl.description}」。",
+                    "source": "dashboard"}
+        if not tpl:
+            return {"answer":
+                    "没找到您要编辑的模板。说「看板模板」查看可选模板；"
+                    "或回复「编辑<模板名>改成：先写总体结论」描述新格式覆盖它。",
+                    "source": "dashboard"}
+
+        if not desc:
+            # 无格式描述 → 展示当前内容 + 引导，不 set pending
+            return {"answer":
+                    cls._render_template_detail(tpl)
+                    + "\n\n回复「编辑" + tpl.name
+                    + "改成：先写总体结论」描述新格式，确认后覆盖保存。",
+                    "source": "dashboard"}
+
+        # 有描述 → LLM 生成新 spec → pending → 确认
+        from dashboard.template_builder import describe_to_spec
+        tdef = describe_to_spec(desc)
+        if not tdef.get("ok"):
+            return {"answer": tdef.get("message", "生成模板失败，请换个描述试试。"),
+                    "source": "dashboard"}
+        # 编辑不换名：保留原 key/name，覆盖其余字段
+        tdef["key"] = tpl.key
+        tdef["name"] = tpl.name
+        pending = {"intent": "edit_template", "template_key": tpl.key,
+                   "template_name": tpl.name,
+                   "section_spec": tdef.get("section_spec"),
+                   "template_def": tdef}
+        sub_cmd.set_pending(user_id, pending)
+        return {"answer": sub_cmd.render_confirmation(pending), "source": "dashboard"}
+
+    @classmethod
+    def _render_template_detail(cls, tpl) -> str:
+        """展示单个模板当前内容（编辑引导/确认前用）"""
+        from dashboard.subscription_commands import format_spec_summary
+        lines = [f"📄 模板「{tpl.name}」（{tpl.key}）当前结构：",
+                 f"📐 {format_spec_summary(tpl.section_spec)}",
+                 f"📝 {tpl.description or '（无描述）'}"]
+        return "\n".join(lines)
 
     @staticmethod
     def _template_label(sub) -> str:
