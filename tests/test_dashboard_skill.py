@@ -12,6 +12,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from skills.dashboard import DashboardSkill  # noqa: E402
+from dashboard.template_store import _DEFAULT_SECTION_SPEC  # noqa: E402
 
 
 class MatchTests(unittest.TestCase):
@@ -108,7 +109,8 @@ class HandleCreateTests(unittest.TestCase):
                     pass
 
     @mock.patch("skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
-    def test_create_flow(self, mock_staff):
+    @mock.patch("skills.dashboard.DashboardSkill._user_template_hint", return_value="")
+    def test_create_flow(self, mock_hint, mock_staff):
         # 1. 说「帮我推个看板」→ 反问
         r = DashboardSkill.handle("帮我推个看板", user_id="union001")
         self.assertEqual(r["source"], "dashboard")
@@ -119,6 +121,9 @@ class HandleCreateTests(unittest.TestCase):
                         return_value="已推送示例看板") as m_push:
             r2 = DashboardSkill.handle("确认", user_id="union001")
         self.assertIn("开通", r2["answer"])
+        # v1.12.x：创建后提醒可自定义格式
+        self.assertIn("自定义格式", r2["answer"])
+        self.assertIn("先写总体结论", r2["answer"])
         m_push.assert_called_once()
         subs = self._store.list_for_owner("union001")
         self.assertEqual(len(subs), 1)
@@ -129,7 +134,8 @@ class HandleCreateTests(unittest.TestCase):
 
     @mock.patch("skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
     @mock.patch("skills.dashboard.DashboardSkill._push_sample", return_value="")
-    def test_create_sets_defaults(self, m_push, mock_staff):
+    @mock.patch("skills.dashboard.DashboardSkill._user_template_hint", return_value="")
+    def test_create_sets_defaults(self, m_hint, m_push, mock_staff):
         DashboardSkill.handle("帮我推个看板", user_id="u1")
         DashboardSkill.handle("确认", user_id="u1")
         sub = self._store.list_for_owner("u1")[0]
@@ -315,7 +321,8 @@ class HandleDocCreateTests(unittest.TestCase):
 
     @mock.patch("skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
     @mock.patch("skills.dashboard.DashboardSkill._push_sample", return_value="已推送")
-    def test_doc_create_flow(self, m_push, mock_staff):
+    @mock.patch("skills.dashboard.DashboardSkill._user_template_hint", return_value="")
+    def test_doc_create_flow(self, m_hint, m_push, mock_staff):
         self._seed_candidates()
         # 1. 说「按这几个文档做每日看板」→ 反问
         r = DashboardSkill.handle("按这几个文档做每日看板", user_id="u1")
@@ -645,6 +652,86 @@ class QueryDashboardToolContractTests(unittest.TestCase):
         from tools.push_dashboard import DEFINITION
         self.assertIn("当前用户", DEFINITION["description"])
         self.assertIn("该用户启用的订阅", DEFINITION["description"])
+
+
+class TemplateHintAndAdjustTests(unittest.TestCase):
+    """v1.12.x：创建提醒自定义格式/复用私有模板 + 同名模板调节"""
+
+    def setUp(self):
+        from dashboard.template_store import TemplateStore
+        import tempfile, os
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self._db_path = path
+        self._tpl_store = TemplateStore(db_path=path)
+        self.addCleanup(self._cleanup)
+        self.patch_ts = mock.patch(
+            "dashboard.template_store.get_template_store",
+            return_value=self._tpl_store)
+        self.patch_ts.start()
+        self.addCleanup(self.patch_ts.stop)
+
+    def _cleanup(self):
+        self._tpl_store.close()
+        for suffix in ("", "-wal", "-shm"):
+            p = self._db_path + suffix
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+
+    @mock.patch("skills.dashboard.DashboardSkill._staff_id_of",
+                return_value="staff001")
+    def test_user_template_hint_lists_private_templates(self, mock_staff):
+        self._tpl_store.create_user_template(
+            key="w1", name="我的周报", user_id="u1")
+        hint = DashboardSkill._user_template_hint("u1")
+        self.assertIn("您保存过模板", hint)
+        self.assertIn("我的周报", hint)
+        # 无私有模板 → 无提示
+        self.assertEqual(DashboardSkill._user_template_hint("u2"), "")
+
+    @mock.patch("skills.dashboard.DashboardSkill._staff_id_of",
+                return_value="staff001")
+    @mock.patch("dashboard.template_store.TemplateStore.sync_user_template_file",
+                return_value="")
+    def test_save_user_template_same_name_updates(self, mock_sync, mock_staff):
+        """同名再提交 = 调节模板内容（更新而非报错/加后缀）"""
+        tdef1 = {"name": "老板摘要", "description": "v1",
+                 "map_instructions": "只看变化", "reduce_instructions": "先总体",
+                 "section_spec": _DEFAULT_SECTION_SPEC}
+        ok1, tpl1, msg1 = DashboardSkill._save_user_template("u1", tdef1)
+        self.assertTrue(ok1, msg1)
+        tdef2 = {"name": "老板摘要", "description": "v2",
+                 "map_instructions": "只看变化",
+                 "reduce_instructions": "先风险后进展",
+                 "section_spec": _DEFAULT_SECTION_SPEC}
+        ok2, tpl2, msg2 = DashboardSkill._save_user_template("u1", tdef2)
+        self.assertTrue(ok2, msg2)
+        # key 不变（同一条记录被更新），内容为 v2
+        self.assertEqual(tpl1.key, tpl2.key)
+        updated = self._tpl_store.get(tpl1.key, "u1")
+        self.assertEqual(updated.reduce_instructions, "先风险后进展")
+        # 没有生成「老板摘要2」之类的副本
+        mine = [t for t in self._tpl_store.list_visible("u1")
+                if t.scope == "user"]
+        self.assertEqual(len(mine), 1)
+
+    @mock.patch("skills.dashboard.DashboardSkill._staff_id_of",
+                return_value="staff001")
+    @mock.patch("dashboard.template_store.TemplateStore.sync_user_template_file",
+                return_value="")
+    def test_save_user_template_syncs_file(self, mock_sync, mock_staff):
+        """保存后同步本地文件（调用点验证，写盘逻辑在 template_store 测试）"""
+        from dashboard.template_store import _DEFAULT_SECTION_SPEC as spec
+        ok, tpl, _ = DashboardSkill._save_user_template(
+            "u1", {"name": "文件模板", "section_spec": spec})
+        self.assertTrue(ok)
+        mock_sync.assert_called_once()
+        self.assertEqual(mock_sync.call_args[0][0].name, "文件模板")
+        # 第二个参数是经 _staff_id_of 转换后的 staff_id
+        self.assertEqual(mock_sync.call_args[0][1], "staff001")
 
 
 if __name__ == "__main__":

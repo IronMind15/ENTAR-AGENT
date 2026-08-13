@@ -71,13 +71,16 @@ CONTACT_CACHE_TTL_SECONDS: int = int(_get_config("CONTACT_CACHE_TTL_SECONDS") or
 # 存储后端：sqlite（推荐）| json（回退）
 MEMORY_BACKEND: str = "sqlite"
 
-# 短期窗口轮数上限（一问一答算 1 轮）。窗口 20 轮 + 释放 1/2：
-# 满 20 轮时一次滚掉前 10 轮、保留最近 10 轮（批量滚动，KV Cache 友好）
-MAX_CONTEXT_ROUNDS: int = 20
+# 短期窗口轮数上限（一问一答算 1 轮）。窗口 50 轮 + 释放 30 轮：
+# 满 50 轮时一次滚掉最早 30 轮、保留最近 20 轮（批量滚动，KV Cache 友好）
+MAX_CONTEXT_ROUNDS: int = 50
 
-# 短记忆注入总预算（字数，超出从最早丢弃）
-# 为「窗口 20 轮 + 静态 system」改造预留：20 轮约 8400 字 + 系统提示/档案/长记忆，留足冗余
-MEMORY_BUDGET_TOKENS: int = 20000
+# 滚动后保留的最近轮数（释放 30 = 窗口 50 - 保留 20）
+KEEP_CONTEXT_ROUNDS: int = 20
+
+# 短记忆注入总预算（字数，超出从最早丢弃）。
+# 2026-08-13 取消上限：以 DeepSeek 1M token 上下文为最高限制，None = 不截断
+MEMORY_BUDGET_TOKENS: int | None = None
 
 # 管理员密码（空 = 不开启密码保护）
 ADMIN_PASSWORD: str = _get_config("ADMIN_PASSWORD")

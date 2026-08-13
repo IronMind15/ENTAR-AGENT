@@ -101,7 +101,9 @@ def format_context(user_id: str, max_content: int = 200,
     total_max: 总字数预算，超出时从最早的对话开始丢弃（保护上下文窗口）；None 用配置 MEMORY_BUDGET_TOKENS
     """
     if total_max is None:
-        total_max = int(_get_config_flag("MEMORY_BUDGET_TOKENS", 20000))
+        _budget = _get_config_flag("MEMORY_BUDGET_TOKENS", 20000)
+        # 配置为 None/空 = 不设上限（2026-08-13 起以 1M 上下文为限）
+        total_max = int(_budget) if _budget not in (None, "") else None
     if _get_backend() == "sqlite":
         try:
             store = _get_sqlite_store()

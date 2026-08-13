@@ -55,6 +55,52 @@ class TemplateStoreTests(unittest.TestCase):
         self.store = TemplateStore(db_path=self._path)
         self.addCleanup(lambda: _cleanup_db(self._path, self.store))
 
+    def test_sync_user_template_file_writes_json(self):
+        """v1.12.x：用户模板同步为本地用户文件夹下的 JSON 文件"""
+        import json
+        import dashboard.template_store as ts
+        res = self.store.create_user_template(
+            key="my_tpl", name="我的模板", user_id="union001",
+            description="先结论后分块", map_instructions="只看变化",
+            reduce_instructions="先总体后各表",
+            section_spec=_DEFAULT_SECTION_SPEC)
+        self.assertTrue(res["ok"])
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(ts, "_TEMPLATE_DIR", tmp):
+                path = TemplateStore.sync_user_template_file(
+                    res["template"], staff_id="staff001")
+            self.assertTrue(path.startswith(tmp))
+            self.assertTrue(os.path.exists(path))
+            payload = json.load(open(path, encoding="utf-8"))
+            self.assertEqual(payload["key"], "my_tpl")
+            self.assertEqual(payload["name"], "我的模板")
+            self.assertEqual(payload["reduce_instructions"], "先总体后各表")
+            self.assertEqual(payload["section_spec"], _DEFAULT_SECTION_SPEC)
+            # 目录按 staff_id 隔离
+            self.assertIn("staff001", path)
+
+    def test_sync_skips_system_template(self):
+        """系统模板不落文件（只记录用户自定义要求）"""
+        import dashboard.template_store as ts
+        daily = self.store.get("daily")
+        with mock.patch.object(ts, "_TEMPLATE_DIR", tempfile.mkdtemp()):
+            path = TemplateStore.sync_user_template_file(daily, staff_id="staff001")
+        self.assertEqual(path, "")
+
+    def test_remove_user_template_file(self):
+        """删除模板同步文件（尽力而为）"""
+        import dashboard.template_store as ts
+        res = self.store.create_user_template(
+            key="gone", name="要删的", user_id="union001")
+        self.assertTrue(res["ok"])
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(ts, "_TEMPLATE_DIR", tmp):
+                path = TemplateStore.sync_user_template_file(
+                    res["template"], staff_id="staff001")
+                self.assertTrue(os.path.exists(path))
+                TemplateStore.remove_user_template_file("gone", "staff001")
+                self.assertFalse(os.path.exists(path))
+
     def test_system_seeds_exist_and_daily_is_regression_anchor(self):
         keys = [t.key for t in self.store.list_visible()]
         self.assertEqual(sorted(keys), ["daily", "project", "weekly"])
@@ -200,19 +246,28 @@ class RenderTemplateTests(unittest.TestCase):
     def _r(self, **kw):
         defaults = dict(results=self.results, claims=self.claims, labels=self.labels,
                         title="恩特能源每日项目看板", date_str="2026-08-12",
-                        headline="今日变化 2 条")
+                        headline="今日变化 2 条",
+                        valid_refs={"s1:r1": {
+                            "evidence": {"source_name": "项目A"},
+                            "fields": {"进展": "已上线", "风险": "延期2周"},
+                        }})
         defaults.update(kw)
         # __func__：类属性函数经实例访问会被绑定成方法（实例变 results 位置参数），
         # 导致 TypeError: got multiple values for 'results'——须取原始函数再按关键字调用
         return self._render.__func__(**defaults)
 
     def test_daily_spec_is_verbatim_regression_anchor(self):
-        """daily 模板输出 == 不传 spec 的输出（旧硬编码逐字回归）"""
+        """daily 模板输出 == 不传 spec 的输出（新格式逐字回归锚点）
+
+        v1.12.x 改版：总体结论（跨来源）先行 → 各表最新总结（按来源分块）
+        → 数据来源（原文链接）。本用例无跨来源结论，「总体结论」区不渲染。
+        """
         expected = (
             "# 恩特能源每日项目看板\n\n"
             "> 数据日期：2026-08-12\n\n"
             "📌 今日要点：今日变化 2 条\n\n"
-            "## 重点更新\n"
+            "## 各表最新总结\n"
+            "### 项目A\n"
             "- 🔵 本周上线了版本V2 [S1-R1]\n"
             "  - 依据原值：进展：已上线\n"
             "- 🔴 供应商延期存在阻塞 [S1-R1]\n"
@@ -224,6 +279,64 @@ class RenderTemplateTests(unittest.TestCase):
         self.assertEqual(self._r(spec=_DEFAULT_SECTION_SPEC), expected)
         self.assertEqual(self._r(spec=_DEFAULT_SECTION_SPEC),
                          self._r(spec=None))
+
+    def test_daily_spec_groups_claims_by_source(self):
+        """v1.12.x：各表最新总结按来源分块；跨来源结论先行归「总体」"""
+        results = [
+            dict(self.results[0]),
+            {"source_key": "s2", "name": "项目B", "total": 3,
+             "table_name": "", "status_counts": {},
+             "source_meta": {"captured_at": "2026-08-12 09:00"},
+             "detailed_items": []},
+        ]
+        claims = self.claims + [
+            {"text": "两台整机均完成出厂测试", "level": "update",
+             "refs": ["s1:r1", "s2:r9"],
+             "evidence": [{"ref": "s1:r1", "field": "进展", "value": "已上线"}]},
+            {"text": "B 项目物料到齐", "level": "info", "refs": ["s2:r9"],
+             "evidence": [{"ref": "s2:r9", "field": "物料", "value": "到齐"}]},
+        ]
+        valid_refs = {
+            "s1:r1": {"evidence": {"source_name": "项目A"},
+                      "fields": {"进展": "已上线"}},
+            "s2:r9": {"evidence": {"source_name": "项目B"},
+                      "fields": {"物料": "到齐"}},
+        }
+        text = self._r(results=results, claims=claims, valid_refs=valid_refs,
+                       spec=_DEFAULT_SECTION_SPEC)
+        # 总体结论先行，然后按数据源顺序分表
+        self.assertLess(text.index("## 总体结论"), text.index("## 各表最新总结"))
+        self.assertLess(text.index("### 项目A"), text.index("### 项目B"))
+        # 跨来源结论只在「总体结论」区出现一次，各表区不重复
+        self.assertEqual(text.count("两台整机均完成出厂测试"), 1)
+        self.assertIn("B 项目物料到齐", text)
+        self.assertNotIn("### 📊 总体", text)  # 各表区不再收跨来源
+        # 无跨来源结论时总体区整体不渲染
+        text_no_cross = self._r(results=results, claims=self.claims,
+                                valid_refs=valid_refs,
+                                spec=_DEFAULT_SECTION_SPEC)
+        self.assertNotIn("## 总体结论", text_no_cross)
+
+    def test_truncate_sentence_on_boundary(self):
+        """v1.12.x：证据原值超长时按句边界截断，不砍半句话"""
+        from dashboard.llm_pipeline import _truncate_sentence
+        long = ("7.5：1000V125KW运行20min无异常，通讯风扇正常，上位机参数已更改。"
+                "7.4：与32号对拖老化完成，过程中风扇未异响。"
+                "7.3：1000V 125KW运行15min风扇异响，待维修复测，通讯正常。"
+                "7.1：接货后更换C相半桥板并调整风扇防护罩。")
+        self.assertGreater(len(long), 60)  # 前置：数据确实超限
+        out = _truncate_sentence(long, 60)
+        self.assertTrue(out.endswith("…"))
+        self.assertLess(len(out), len(long))
+        # 结尾一定是完整句（句号/分号等之后截），不是砍半句
+        body = out[:-1]
+        self.assertTrue(body.rstrip()[-1:] in ("。", "；", "！", "？"))
+        # 不超限则原样（无省略号）
+        short = "已上线"
+        self.assertEqual(_truncate_sentence(short, 60), short)
+        # 句号稀疏（无边界）时退化硬截但仍有省略号标记
+        dense = "A" * 100
+        self.assertEqual(_truncate_sentence(dense, 60), "A" * 60 + "…")
 
     def test_weekly_spec_splits_claims_into_two_sections(self):
         spec = [

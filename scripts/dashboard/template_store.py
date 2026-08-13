@@ -15,6 +15,7 @@ WAL 模式读写不互斥）。
 
 import json
 import logging
+import os
 import sqlite3
 import threading
 from dataclasses import dataclass, field
@@ -22,6 +23,12 @@ from datetime import datetime
 from typing import Optional
 
 logger = logging.getLogger("dashboard.template_store")
+
+# 用户模板的本地文件目录（v1.12.x：模板要求落地为用户文件夹下的 JSON 文件，
+# 可查看/备份/转移；SQLite 仍是运行事实源）
+_TEMPLATE_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "data", "dashboard_templates")
 
 # 复用 user_store.db（同一 data 目录）
 from user_store import DB_PATH as _DEFAULT_DB_PATH  # noqa: E402
@@ -51,16 +58,21 @@ def _loads_spec(raw):
 # ===== 默认模板 =====
 # daily = 当前硬编码输出的逐字锚点。任何字段改动都会破坏
 # tests/test_dashboard_templates.py::test_daily_template_is_regression_anchor。
+# v1.12.x 改版：总体结论先行 → 各表最新总结（按来源分块）→ 数据来源（原文链接）
 _DEFAULT_SECTION_SPEC = [
     {"kind": "headline", "title": "今日要点"},
-    {"kind": "claims", "title": "重点更新",
-     "levels": ["risk", "decision", "update", "info"]},
+    {"kind": "claims", "title": "总体结论", "cross_source_only": True},
+    {"kind": "claims", "title": "各表最新总结",
+     "levels": ["risk", "decision", "update", "info"],
+     "group_by_source": True},
     {"kind": "errors", "title": "数据完整性提醒"},
     {"kind": "sources", "title": "数据来源"},
 ]
 _DEFAULT_MAP_INSTRUCTION = ("优先筛选 priority=changed 的今日变化；"
                             "存量只保留持续风险、阻塞或待决策事项")
-_DEFAULT_REDUCE_INSTRUCTION = "依据筛选记录的完整字段去重、排序，生成最多12条老板摘要"
+_DEFAULT_REDUCE_INSTRUCTION = ("依据筛选记录的完整字段去重、排序，生成最多12条老板摘要；"
+                               "尽量先给 1~2 条跨来源总体结论（refs 覆盖多个 source_key），"
+                               "再按来源提炼各表要点")
 
 _SYSTEM_TEMPLATES = [
     {
@@ -183,17 +195,28 @@ class TemplateStore:
 
     # ── 种子 ──────────────────────────────
     def seed_system(self):
-        """幂等写入 3 个系统模板（INSERT OR IGNORE，不改已存在记录）"""
+        """幂等写入 3 个系统模板。
+
+        v1.12.x：系统模板以代码定义为事实源，用 UPSERT 同步（原 INSERT OR
+        IGNORE 会让已存在的 daily 行停留在旧 section_spec，模板改版无法生效）。
+        用户私有模板（scope='user'）不受影响。
+        """
         with self._lock:
             conn = self._get_conn()
             now = _now()
             for tpl in _SYSTEM_TEMPLATES:
                 conn.execute(
-                    """INSERT OR IGNORE INTO dashboard_templates
+                    """INSERT INTO dashboard_templates
                        (key, name, description, scope, owner_user_id, title,
                         map_instructions, reduce_instructions, section_spec,
                         enabled, created_at, updated_at)
-                       VALUES (?,?,?, 'system', '', '', ?,?,?, 1, ?, ?)""",
+                       VALUES (?,?,?, 'system', '', '', ?,?,?, 1, ?, ?)
+                       ON CONFLICT(key) DO UPDATE SET
+                           name=excluded.name, description=excluded.description,
+                           map_instructions=excluded.map_instructions,
+                           reduce_instructions=excluded.reduce_instructions,
+                           section_spec=excluded.section_spec,
+                           updated_at=excluded.updated_at""",
                     (tpl["key"], tpl["name"], tpl["description"],
                      tpl["map_instructions"], tpl["reduce_instructions"],
                      _dumps(tpl["section_spec"]), now, now))
@@ -345,6 +368,52 @@ class TemplateStore:
                 (key, user_id))
             self._get_conn().commit()
             return cur.rowcount == 1
+
+    # ── 本地文件同步（v1.12.x：模板要求按用户文件夹落盘） ──────────────
+    @staticmethod
+    def sync_user_template_file(tpl: DashboardTemplate, staff_id: str) -> str:
+        """模板 → data/dashboard_templates/{staff_id}/{key}.json
+
+        用户模板（scope=user）每次创建/修改后同步一份 JSON 文件，方便
+        查看、备份与人工调整模板要求；staff_id 为空时退回 owner hash 目录。
+        返回文件路径。
+        """
+        if tpl.scope != "user":
+            return ""
+        folder = (staff_id or "").strip() or ("u_" + str(tpl.owner_user_id)[-12:])
+        safe_folder = "".join(
+            c for c in folder if c.isalnum() or c in ("_", "-"))
+        target_dir = os.path.join(_TEMPLATE_DIR, safe_folder)
+        try:
+            os.makedirs(target_dir, exist_ok=True)
+            payload = {
+                "key": tpl.key, "name": tpl.name,
+                "description": tpl.description, "title": tpl.title,
+                "map_instructions": tpl.map_instructions,
+                "reduce_instructions": tpl.reduce_instructions,
+                "section_spec": tpl.section_spec,
+                "updated_at": tpl.updated_at or _now(),
+            }
+            path = os.path.join(target_dir, f"{tpl.key}.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            return path
+        except Exception as e:
+            logger.warning(f"看板模板文件同步失败({tpl.key}): {e}")
+            return ""
+
+    @staticmethod
+    def remove_user_template_file(key: str, staff_id: str) -> None:
+        """删除模板对应的本地 JSON 文件（尽力而为，失败不影响主流程）"""
+        folder = (staff_id or "").strip()
+        safe_folder = "".join(
+            c for c in folder if c.isalnum() or c in ("_", "-"))
+        try:
+            path = os.path.join(_TEMPLATE_DIR, safe_folder, f"{key}.json")
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception as e:
+            logger.warning(f"看板模板文件删除失败({key}): {e}")
 
 
 # ===== 模块级单例（同 get_subscription_store 惯例） =====

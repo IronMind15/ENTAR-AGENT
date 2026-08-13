@@ -415,19 +415,22 @@ class SQLiteUserStore(UserStore):
             conn.commit()
 
     def get_window_context(self, user_id: str, max_rounds: int,
-                           max_content_chars: int | None = None) -> list[dict]:
-        """从窗口起点取最近对话，满 max_rounds 轮时批量滚动（释放前一半）
+                           max_content_chars: int | None = None,
+                           keep_rounds: int | None = None) -> list[dict]:
+        """从窗口起点取最近对话，满 max_rounds 轮时批量滚动
 
         返回正序 [{"role","content"}]，供 agent 直接作为历史轮次回放。
         滚动点持久化 → 两次滚动之间 messages 前缀稳定（KV Cache 友好），
         而非「每轮取最新 N 轮」的每轮滑动（那会让前缀每轮断裂）。
 
+        keep_rounds: 满窗口滚动后保留的最近轮数；None = 释放一半（旧行为）。
         max_content_chars: 回放内容总字符预算（None 不截断）。超出时从
         最早的对话开始丢弃，保留最近的——防止长对话回放撑爆 LLM 上下文窗口。
         """
         conn = self._get_conn()
         max_items = max_rounds * 2
-        keep_items = max_items // 2  # 释放 1/2 → 保留最近一半
+        keep_items = (keep_rounds * 2) if keep_rounds is not None \
+            else max_items // 2  # 旧默认：释放 1/2 → 保留最近一半
         start_id = self.get_window_start(user_id)
         try:
             rows = conn.execute(

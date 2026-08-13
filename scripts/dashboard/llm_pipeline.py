@@ -46,7 +46,7 @@ class DashboardReport:
 
 def _plain_text(value, max_chars: int | None = None) -> str:
     """转成主动消息安全文本；Markdown 表格改为普通文本，避免 `|` 原样泄漏。"""
-    text = str(value or "").replace("\r", "").strip()
+    text = str(value or "").replace("\r", "").replace("<br/>", " ").replace("<br>", " ").strip()
     rows = []
     for line in text.split("\n"):
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
@@ -59,6 +59,23 @@ def _plain_text(value, max_chars: int | None = None) -> str:
     if max_chars and len(text) > max_chars:
         text = text[:max_chars].rstrip() + "…"
     return text
+
+
+def _truncate_sentence(value, max_chars: int = 400) -> str:
+    """证据原值截断：先净化表格，超长时按句边界截（不砍半句话）。
+
+    v1.12.x：修复「依据原值」行 160 字硬截加「…」——长字段（问题点描述、
+    周报内容）普遍 300~2000 字，硬截导致条目像没写完。句末标点处截断，
+    找不到边界才退化为硬截。
+    """
+    text = _plain_text(value)
+    if len(text) <= max_chars:
+        return text
+    head = text[:max_chars]
+    cut = max(head.rfind(ch) for ch in ("。", "；", "！", "？"))
+    if cut > max_chars * 0.5:
+        head = head[:cut + 1]
+    return head.rstrip() + "…"
 
 
 def _json_object(text: str) -> dict:
@@ -266,13 +283,46 @@ def _fallback_claims_from_units(units: list[dict]) -> list[dict]:
     return claims[:12]
 
 
+def _claim_source_names(claim: dict, valid_refs: dict) -> list[str]:
+    """一条结论涉及的来源名（按 refs 顺序去重）；来源不可考时返回 []。"""
+    names = []
+    for ref in claim.get("refs", []):
+        evidence = (valid_refs.get(ref, {}) or {}).get("evidence", {}) or {}
+        name = str(evidence.get("source_name") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _claim_lines(claims: list[dict], labels: dict, icons: dict) -> list[str]:
+    """渲染一组结论的列表行（不含标题）；证据原值用句边界截断。"""
+    lines = []
+    for claim in claims[:12]:
+        refs = " ".join(f"[{labels[r]}]" for r in claim["refs"] if r in labels)
+        claim_text = _plain_text(claim.get("text", ""), 360)
+        lines.append(f"- {icons.get(claim.get('level'), '•')} {claim_text} {refs}".rstrip())
+        evidence_parts = []
+        for evidence in claim.get("evidence", [])[:2]:
+            value = _truncate_sentence(evidence.get("value", ""), 400)
+            evidence_parts.append(f"{_plain_text(evidence.get('field'), 40)}：{value}")
+        if evidence_parts:
+            lines.append("  - 依据原值：" + "；".join(evidence_parts))
+    return lines
+
+
 def _render_claims_block(title: str, claims: list[dict], labels: dict, icons: dict,
                          levels: list[str] | None = None,
-                         show_empty_fallback: bool = False) -> list[str]:
+                         show_empty_fallback: bool = False,
+                         valid_refs: dict | None = None,
+                         cross_source_only: bool = False,
+                         group_by_source: bool = False,
+                         results: list[dict] | None = None) -> list[str]:
     """渲染一个结论区（按 levels 分流）。返回行列表；空区返回 []。
 
     v1.12.0：模板可配置多个结论区（如周报=进展 + 风险待决策）。
     无结论时只对第一个结论区显示兜底文案（避免多个空区重复提示）。
+    v1.12.x：cross_source_only 只收跨来源聚合结论（总体结论先行）；
+    group_by_source 按来源分块（各表最新总结 + 总体组）。
     """
     filtered = [c for c in claims if not levels or c.get("level") in levels]
     if not claims:
@@ -282,32 +332,53 @@ def _render_claims_block(title: str, claims: list[dict], labels: dict, icons: di
                 "- 当前没有可由来源记录支持的结论，请查看来源数据。"]
     if not filtered:
         return []
-    lines = [f"## {title}"]
-    for claim in filtered[:12]:
-        refs = " ".join(f"[{labels[r]}]" for r in claim["refs"] if r in labels)
-        claim_text = _plain_text(claim.get("text", ""), 360)
-        lines.append(f"- {icons.get(claim.get('level'), '•')} {claim_text} {refs}".rstrip())
-        evidence_parts = []
-        for evidence in claim.get("evidence", [])[:2]:
-            value = _plain_text(evidence.get("value", ""), 160)
-            evidence_parts.append(f"{_plain_text(evidence.get('field'), 40)}：{value}")
-        if evidence_parts:
-            lines.append("  - 依据原值：" + "；".join(evidence_parts))
-    return lines
+    if cross_source_only or group_by_source:
+        names_by_claim = [(_claim_source_names(c, valid_refs or {}), c)
+                          for c in filtered]
+        if cross_source_only:
+            cross = [c for names, c in names_by_claim if len(names) > 1]
+            if not cross:
+                return []
+            return [f"## {title}"] + _claim_lines(cross, labels, icons)
+        # group_by_source：只渲染单来源结论、按数据源顺序分表；
+        # 跨来源结论由「总体结论」区（cross_source_only）负责，不在此重复
+        grouped: dict[str, list] = {}
+        for names, claim in names_by_claim:
+            if len(names) > 1:
+                continue
+            key = names[0] if names else "总体"
+            grouped.setdefault(key, []).append(claim)
+        lines = [f"## {title}"]
+        if grouped.get("总体"):
+            lines.append("### 📊 总体")
+            lines.extend(_claim_lines(grouped["总体"], labels, icons))
+        source_order = [str(r.get("name") or "") for r in (results or [])]
+        for name in source_order:
+            if grouped.get(name):
+                lines.append(f"### {name}")
+                lines.extend(_claim_lines(grouped[name], labels, icons))
+        for name, group_claims in grouped.items():
+            if name not in ("总体",) and name not in source_order:
+                lines.append(f"### {name}")
+                lines.extend(_claim_lines(group_claims, labels, icons))
+        return lines
+    return [f"## {title}"] + _claim_lines(filtered, labels, icons)
 
 
 def _render(results: list[dict], claims: list[dict], labels: dict,
             title: str, date_str: str, headline: str = "",
             collection_errors: list[str] | None = None,
-            spec: list[dict] | None = None) -> str:
+            spec: list[dict] | None = None,
+            valid_refs: dict | None = None) -> str:
     """按 section_spec 渲染看板 Markdown。
 
-    spec 为 [{kind, title, levels?}]：
+    spec 为 [{kind, title, levels?, cross_source_only?, group_by_source?}]：
         headline — 顶部一句话要点（📌）
-        claims   — 结论区（可多个，levels 限定收录级别；无 levels 全收）
+        claims   — 结论区（可多个；levels 限定收录级别；cross_source_only
+                   只收跨来源聚合结论；group_by_source 按来源分块渲染）
         errors   — 数据完整性提醒（仅当 collection_errors 非空）
-        sources  — 数据来源
-    spec 缺省 = daily（_DEFAULT_SECTION_SPEC），输出与旧硬编码逐字一致。
+        sources  — 数据来源（原文链接）
+    spec 缺省 = daily（_DEFAULT_SECTION_SPEC）。
     """
     icons = {"risk": "🔴", "decision": "🟠", "update": "🔵", "info": "•"}
     spec = spec or _DEFAULT_SECTION_SPEC
@@ -328,11 +399,18 @@ def _render(results: list[dict], claims: list[dict], labels: dict,
                            f"{headline or default_headline}"])
             rendered_headline = True
         elif kind == "claims":
+            # 兜底文案只给第一个「常规」结论区（跨来源区空属正常，不占兜底位）
+            show_fallback = first_claims and not section.get("cross_source_only")
             block = _render_claims_block(
                 section.get("title", "重点更新"), claims, labels, icons,
                 levels=section.get("levels"),
-                show_empty_fallback=first_claims)
-            first_claims = False
+                show_empty_fallback=show_fallback,
+                valid_refs=valid_refs,
+                cross_source_only=bool(section.get("cross_source_only")),
+                group_by_source=bool(section.get("group_by_source")),
+                results=results)
+            if not section.get("cross_source_only"):
+                first_claims = False
             if block:
                 blocks.append(block)
                 rendered_claims = True
@@ -562,13 +640,13 @@ def build_dashboard_report(results: list[dict], old_snapshot: list[dict] | None,
         if llm_errors else [])
     text = _render(results, final_claims, labels, title,
                    date_str or datetime.now().strftime("%Y-%m-%d"), headline,
-                   render_errors, spec=section_spec)
+                   render_errors, spec=section_spec, valid_refs=valid_refs)
     if not validate_markdown(text)[0]:
         final_claims = _fallback_claims_from_units(analysis_units)[:4]
         text = _render(results, final_claims, labels,
                        title, date_str or datetime.now().strftime("%Y-%m-%d"),
                        "已生成来源可核验的规则兜底摘要", render_errors,
-                       spec=section_spec)
+                       spec=section_spec, valid_refs=valid_refs)
     # 第二次仍不合法时做通道级净化；禁止未经校验的 fallback 直接外发。
     if not validate_markdown(text)[0]:
         text = text.replace("|", "｜")

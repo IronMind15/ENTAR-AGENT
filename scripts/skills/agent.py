@@ -22,7 +22,7 @@ if _PARENT not in sys.path:
 import httpx
 
 from config import (DEEPSEEK_API_KEY, MAX_CONCURRENT_LLM,
-                    MAX_CONTEXT_ROUNDS, MEMORY_BUDGET_TOKENS)
+                    MAX_CONTEXT_ROUNDS, KEEP_CONTEXT_ROUNDS)
 from skills import BaseSkill, register
 from tools import get_tool_definitions, execute_tool as _execute_registered_tool
 
@@ -497,15 +497,16 @@ def _handle_impl(query: str, user_id: str = "", on_chunk=None) -> dict:
     # （system 保持纯静态 → 前缀缓存稳定；历史作为独立轮次回放 → 追加式增长）
     messages = [{"role": "system", "content": _with_operation_policy(_load_system_prompt())}]
 
-    # 历史轮次：从窗口滚动点取最近对话（窗口 N 轮 + 释放 1/2），
-    # 作为独立 user/assistant 消息回放，不再拼进 system
+    # 历史轮次：从窗口滚动点取最近对话（窗口 50 轮，满时释放 30 保留 20），
+    # 作为独立 user/assistant 消息回放，不再拼进 system；
+    # 字数不设上限（以 DeepSeek 1M 上下文为最高限制）
     window_msgs = []
     if user_id:
         try:
             from user_store import get_store as get_user_store
             window_msgs = get_user_store().get_window_context(
                 user_id, MAX_CONTEXT_ROUNDS,
-                max_content_chars=MEMORY_BUDGET_TOKENS)
+                keep_rounds=KEEP_CONTEXT_ROUNDS)
             logger.info(f"已回放 {user_id} 的历史轮次 ({len(window_msgs)} 条)")
         except Exception as e:
             logger.warning(f"获取窗口对话失败（不影响主流程）: {e}")

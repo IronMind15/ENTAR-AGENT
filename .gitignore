@@ -36,6 +36,9 @@ data/user_store.db*
 # ── 用户上传文件（自动生成，不退版本） ──
 data/uploads/
 
+# ── 看板用户模板文件（运行产物，不退版本） ──
+data/dashboard_templates/
+
 # ── MinerU OCR 中间产物（可重新生成，不退版本） ──
 data/standards/mineru_output/
 

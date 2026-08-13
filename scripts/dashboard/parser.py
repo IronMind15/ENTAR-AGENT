@@ -133,9 +133,54 @@ def _infer_field_map(records: list[dict]) -> dict:
     return out
 
 
+_ATTACHMENT_FILE_RE = re.compile(
+    r"['\"]filename['\"]\s*:\s*['\"]([^'\"]+)['\"]")
+
+
+def _attachment_filenames(raw) -> str:
+    """附件字段（resourceId 资源字典）只保留文件名，多个用「 / 」连接。
+
+    v1.12.x：照片/附件字典每条 600~2400 字，LLM 看不到图片内容，
+    完整字典白占 map 输入 token，且照片重传会触发变化误报。
+    """
+    items = raw if isinstance(raw, list) else [raw]
+    names = []
+    for item in items:
+        if isinstance(item, dict) and item.get("resourceId"):
+            name = str(item.get("filename") or "")
+            if name:
+                names.append(name)
+        elif isinstance(item, str) and "resourceId" in item:
+            match = _ATTACHMENT_FILE_RE.search(item)
+            if match:
+                names.append(match.group(1))
+    return " / ".join(names)
+
+
+def _format_timestamp(value: str) -> str:
+    """纯数字 10 位（秒）/13 位（毫秒）时间戳 → YYYY-MM-DD；其余原样返回。
+
+    v1.12.x：钉钉表格时间字段返回毫秒时间戳（如 1783331486039），
+    原样展示用户看不懂；无效值（年份异常等）保留原样不瞎转。
+    """
+    digits = (value or "").strip()
+    if not digits.isdigit() or len(digits) not in (10, 13):
+        return value
+    try:
+        timestamp = int(digits)
+        if len(digits) == 13:
+            timestamp //= 1000
+        # 业务时间戳应在 2000~2100 年内，超出（如纯数字编号）保留原样
+        if not 946684800 <= timestamp <= 4102444800:
+            return value
+        return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
+    except (ValueError, OSError, OverflowError):
+        return value
+
+
 def _extract_field(cells: dict, fid: str, spec: FieldSpec,
                    truncate: bool = True) -> str:
-    """提取单个字段：按 type 解析 + 截断。
+    """提取单个字段：附件提取 → 按 type 解析 → 时间戳格式化 → 截断。
 
     records 的键可能是 field_id 或中文列名（钉钉 AI表格 records 实测用中文列名，
     而静态配置 field_map 用 field_id 索引），先按 fid 取，取不到按 spec.label 兜底。
@@ -143,13 +188,29 @@ def _extract_field(cells: dict, fid: str, spec: FieldSpec,
     raw = cells.get(fid)
     if raw is None and spec.label and spec.label != fid:
         raw = cells.get(spec.label)
+    if isinstance(raw, (dict, list)) and _has_resource_id(raw):
+        return _attachment_filenames(raw)
     if spec.type == "percent":
         return format_number(raw)
     value = extract_cell_value(raw)
+    if isinstance(value, str) and "resourceId" in value:
+        return _attachment_filenames(value)
+    if "时间" in spec.label or "日期" in spec.label:
+        value = _format_timestamp(value)
     max_len = spec.max_len or 200
     if truncate and len(value) > max_len:
         value = value[:max_len] + "…"
     return value
+
+
+def _has_resource_id(value) -> bool:
+    """值（dict/list 或字符串）是否为钉钉资源引用结构。"""
+    if isinstance(value, dict):
+        return bool(value.get("resourceId"))
+    if isinstance(value, list):
+        return any(isinstance(item, dict) and item.get("resourceId")
+                   for item in value)
+    return isinstance(value, str) and "resourceId" in value
 
 
 def _is_sensitive_label(label: str) -> bool:

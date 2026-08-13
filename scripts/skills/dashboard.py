@@ -358,11 +358,16 @@ class DashboardSkill(BaseSkill):
             note = cls._push_sample(sub)
             # v1.12.0：创建后主动反问选模板（用户可回复 1/2/3/模板名/不用了，
             # 或不理会保持默认每日；pending 供 parse_template_choice 识别选择回复）
+            # v1.12.x：提醒可自定义格式；有私有模板时列出提醒复用
+            my_templates = cls._user_template_hint(user_id)
             sub_cmd.set_pending(user_id, {"intent": "choose_template", "sub_id": sub.id})
             return {"answer": f"✅ 已为您开通每日看板推送！{note}\n"
                               f"🎨 当前模板：每日简报。要不要换个格式？回复：\n"
                               f"  1 每日简报\n  2 周报总结\n  3 项目看板\n"
-                              f"（回复「不用了」保持默认；随时也能说「用周报模板」切换）",
+                              f"✏️ 也可以直接说「按这个格式做看板：先写总体结论，"
+                              f"再按文档分块总结，最后放原文链接」自定义格式"
+                              f"{my_templates}"
+                              f"\n（回复「不用了」保持默认；随时也能说「用周报模板」切换）",
                     "source": "dashboard"}
 
         if intent == "delete":
@@ -680,7 +685,11 @@ class DashboardSkill(BaseSkill):
 
     @classmethod
     def _save_user_template(cls, user_id: str, tdef: dict) -> tuple:
-        """创建用户模板；key/name 冲突自动加序号后缀。
+        """创建/调节用户模板；同名模板更新内容（调节），并同步本地文件。
+
+        v1.12.x：同名再次提交 = 调节模板要求（覆盖 map/reduce/spec），
+        不再报「已存在」或加序号后缀；key/name 与系统模板冲突自动避让。
+        保存后同步 data/dashboard_templates/{staff_id}/{key}.json。
 
         Returns: (ok, template_or_None, message)
         """
@@ -690,6 +699,21 @@ class DashboardSkill(BaseSkill):
         base_key = "".join((name or "模板").split()) or "模板"
         if base_key in ("daily", "weekly", "project"):
             base_key = base_key + "_u"
+        fields = {
+            "name": name,
+            "description": tdef.get("description", ""),
+            "map_instructions": tdef.get("map_instructions", ""),
+            "reduce_instructions": tdef.get("reduce_instructions", ""),
+            "section_spec": tdef.get("section_spec"),
+        }
+        # 同名调节：本人已有同名模板 → 更新内容（保留原 key）
+        for tpl in store_t.list_visible(user_id):
+            if tpl.scope == "user" and tpl.name == name:
+                updated = store_t.update_user_template(tpl.key, user_id, **fields)
+                if updated:
+                    cls._sync_template_file(updated, user_id)
+                    return True, updated, ""
+        # 新建：key 冲突自动加序号后缀
         for attempt in range(5):
             suffix = "" if attempt == 0 else f"_{attempt + 1}"
             name_candidate = name if attempt == 0 else f"{name}{attempt + 1}"
@@ -700,8 +724,39 @@ class DashboardSkill(BaseSkill):
                 reduce_instructions=tdef.get("reduce_instructions", ""),
                 section_spec=tdef.get("section_spec"))
             if res.get("ok"):
-                return True, res.get("template"), ""
+                tpl = res.get("template")
+                cls._sync_template_file(tpl, user_id)
+                return True, tpl, ""
         return False, None, "模板保存失败（名称占用较多），请换一个模板名再试。"
+
+    @staticmethod
+    def _sync_template_file(tpl, user_id: str) -> None:
+        """用户模板 → 本地用户文件夹 JSON（失败不影响主流程）"""
+        if tpl is None or tpl.scope != "user":
+            return
+        try:
+            from dashboard.template_store import TemplateStore
+            TemplateStore.sync_user_template_file(
+                tpl, DashboardSkill._staff_id_of(user_id))
+        except Exception as e:
+            logger.warning(f"看板模板文件同步失败({tpl.key}): {e}")
+
+    @classmethod
+    def _user_template_hint(cls, user_id: str) -> str:
+        """创建订阅时提示已保存的私有模板（最多列 3 个，回复名字即可复用）
+
+        v1.12.x：用户此前自定义过格式时提醒复用，避免每次重新描述。
+        """
+        try:
+            from dashboard.template_store import get_template_store
+            mine = [t for t in get_template_store().list_visible(user_id)
+                    if t.scope == "user"]
+            if mine:
+                names = "、".join(t.name for t in mine[:3])
+                return f"\n📂 您保存过模板：{names}，回复模板名即可复用"
+        except Exception:
+            pass
+        return ""
 
     @staticmethod
     def _template_label(sub) -> str:

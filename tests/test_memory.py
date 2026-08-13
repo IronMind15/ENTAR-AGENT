@@ -63,6 +63,43 @@ class TestShortWindow(MemoryTestBase):
         self.assertEqual(len(ctx), 10)  # 5 轮 = 10 条
         self.assertEqual(ctx[0]["content"], "q25")  # 正序，只含最近窗口
 
+    def test_window_50_keep_20_rolling(self):
+        # 2026-08-13：窗口 50 轮，满时释放 30 轮、保留最近 20 轮（40 条）
+        for i in range(51):  # 51 轮 = 102 条，超过窗口 50 轮（100 条）
+            self.store.add_memory("u1", "user", f"q{i}")
+            self.store.add_memory("u1", "assistant", f"a{i}")
+        win = self.store.get_window_context("u1", 50, keep_rounds=20)
+        self.assertEqual(len(win), 40)  # 保留最近 20 轮
+        self.assertEqual(win[0]["content"], "q31")  # 最早保留的是第 31 轮
+        self.assertEqual(win[-1]["content"], "a50")
+        # 滚动后窗口外应有 102 - 40 = 62 条未压缩
+        batch = self.store.get_compress_batch("u1", 70)
+        self.assertEqual(len(batch), 62)
+        # 再取窗口稳定（滚动点已前移，不会重复滚动丢内容）
+        win2 = self.store.get_window_context("u1", 50, keep_rounds=20)
+        self.assertEqual(len(win2), 40)
+        self.assertEqual(win2[0]["content"], "q31")
+
+    def test_window_keep_rounds_default_releases_half(self):
+        # keep_rounds 缺省保持旧行为：满窗口释放 1/2（回归锚点）
+        for i in range(21):  # 21 轮 = 42 条，超过窗口 20 轮（40 条）
+            self.store.add_memory("u1", "user", f"q{i}")
+            self.store.add_memory("u1", "assistant", f"a{i}")
+        win = self.store.get_window_context("u1", 20)
+        self.assertEqual(len(win), 20)  # 释放 1/2 → 保留最近 10 轮
+        self.assertEqual(win[0]["content"], "q11")
+
+    def test_window_no_content_budget_keeps_all(self):
+        # 2026-08-13：字数不设上限（max_content_chars=None）时超长内容不丢
+        for i in range(5):
+            self.store.add_memory("u1", "user", "长" * 8000 + f"q{i}")
+            self.store.add_memory("u1", "assistant", "长" * 8000 + f"a{i}")
+        # 总计 8 万字符，远超旧 2 万预算，但不截断、不丢
+        win = self.store.get_window_context("u1", 10, max_content_chars=None)
+        self.assertEqual(len(win), 10)
+        self.assertEqual(win[0]["content"], "长" * 8000 + "q0")
+        self.assertEqual(win[-1]["content"], "长" * 8000 + "a4")
+
     def test_compressed_excluded(self):
         # 26 轮 = 52 条消息，超过窗口 20 轮（40 条）
         for i in range(26):
@@ -317,7 +354,7 @@ class TestBackfill(MemoryTestBase):
                 updated_at TEXT
             );
         """)
-        for i in range(44):
+        for i in range(110):  # 110 条 > 窗口 50 轮（100 条）
             conn.execute(
                 "INSERT INTO conversations (user_id, role, content) "
                 "VALUES ('old', 'user', ?)", (f"旧消息{i}",)
@@ -341,8 +378,8 @@ class TestBackfill(MemoryTestBase):
             "AND name='long_term_memories'"
         ).fetchone()
         c.close()
-        self.assertEqual(keep, 40)  # 窗口 20 轮 = 40 条保留
-        self.assertEqual(done, 4)   # 其余 4 条标记已压缩
+        self.assertEqual(keep, 100)  # 窗口 50 轮 = 100 条保留
+        self.assertEqual(done, 10)   # 窗口外 10 条标记已压缩
         self.assertTrue(has_table)
 
 
