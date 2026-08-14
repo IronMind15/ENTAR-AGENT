@@ -170,6 +170,7 @@ def _is_learn_command(text: str) -> bool:
 #   "proceed" → 无业务领域冲突 → 照旧文件命令
 def _file_command_gate(text: str, user_id: str, action: str, target: str):
     from routing import ask_clarification, detect_domains, render_clarification
+    from dashboard.subscription_commands import is_kanban_context
     domains = detect_domains(text)
     if "kanban" in domains:
         # 含看板领域：唯一领域 → 看板操作让位技能层（「删除看板订阅」）；
@@ -190,6 +191,14 @@ def _file_command_gate(text: str, user_id: str, action: str, target: str):
         prompt = (f"「{text}」既像{verb}文件学习内容，又涉及看板/业务操作，"
                   "我不确定你想做哪一个：")
         return "clarify", render_clarification(user_id, prompt=prompt)
+    # v1.12.9：detect_domains 纯文本无「看板」词时（如「删除全部数据源」），
+    # 若用户正处看板语境，让位技能层由 parse 内 LLM 兜底分类判断——技能层 match
+    # False 则消息继续走 Agent（kb_file_manage 文件删除原路径不丢命令）；目标带
+    # 扩展名或句含「学习/重学」的明确文件删除照旧 proceed，避免误让位。
+    if action == "delete" and is_kanban_context(text, user_id):
+        if "." not in (target or "").strip() \
+                and "学习" not in text and "重学" not in text:
+            return "defer", None
     return "proceed", None
 
 

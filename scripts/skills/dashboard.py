@@ -73,7 +73,9 @@ class DashboardSkill(BaseSkill):
                     return False
             return True
         # 订阅管理指令（含"也推给张工"这类不含"看板"的追加指令）
-        if sub_cmd.parse_subscription_command(q) is not None:
+        # v1.12.9：传 user_id 供 is_kanban_context 判定——口语操作句（「帮我停掉这个」
+        # 「删除」）在看板对话中由 parse 内 LLM 兜底承接；非看板上下文照旧放行。
+        if sub_cmd.parse_subscription_command(q, {"user_id": user_id}) is not None:
             return True
         # 简短确认词：仅当该用户最近有看板活动（有 pending 待确认）才拦截。
         # 必须按 user_id 隔离——此前用全局时间戳，A 聊完看板 10 分钟内 B 说
@@ -142,7 +144,10 @@ class DashboardSkill(BaseSkill):
             sub_cmd.touch_activity(uid)
             return {"answer": cls._render_push_history(uid), "source": "dashboard"}
 
-        parsed = sub_cmd.parse_subscription_command(q)
+        parsed = sub_cmd.parse_subscription_command(q, {"user_id": uid})
+        # 防御：match 层已用同参数先判过（LLM 兜底返回 None → match False → 不接），
+        # handle 不会出现「match 接了但 parse 返回 None」；此处兜底只是防 handle 被
+        # 外部直接调用（测试/其他入口）时误弹帮助文案。
         if not parsed:
             return {"answer": _HELP_TEXT, "source": "dashboard"}
         intent = parsed["intent"]
@@ -241,6 +246,13 @@ class DashboardSkill(BaseSkill):
         if intent == "set_per_source":
             # v1.12.5：每源独立总结（开启/关闭 → 确认 → 落地）
             return cls._handle_set_per_source(q, uid, parsed)
+
+        if intent == "change_sources":
+            # v1.12.9：LLM 兜底分类出的源增删——正则 parse_source_edit_intent 已在
+            # match 前段接住精确指令（带 doc_name/action），这里只剩口语操作句
+            # （无「看板」词、LLM 只判意图不给参数），action 从文本规则推断、
+            # doc_name 空走最近候选兜底，写操作仍反问确认后才落地。
+            return cls._handle_llm_change_sources(q, uid)
 
         if intent == "set_recipient_self":
             return {"answer": sub_cmd.render_confirmation({"intent": "set_recipient_self"}),
@@ -358,6 +370,51 @@ class DashboardSkill(BaseSkill):
             return {"answer": cls._source_candidates_hint(user_id, target),
                     "source": "dashboard"}
         action = parsed.get("action") or "add"
+        pending = {"intent": "change_sources", "sub_id": target.id,
+                   "action": action,
+                   "doc_name": doc.name or f"文档{doc.node_id[:8]}",
+                   "doc_key": f"doc_{doc.id}"}
+        sub_cmd.set_pending(user_id, pending)
+        return {"answer": sub_cmd.render_confirmation(pending), "source": "dashboard"}
+
+    @classmethod
+    def _handle_llm_change_sources(cls, text: str, user_id: str) -> dict:
+        """v1.12.9：LLM 兜底分类出的源增删（口语操作句，无「看板」词）。
+
+        正则 source_edit 路径（parse_source_edit_intent）能给出精确 doc_name/action；
+        LLM 兜底只给意图名不给参数，这里 action 从文本规则推断：
+          「全部/所有/清空」→ remove_all（清空任务全部数据源）
+          「删/去/移/拿掉/取消/清」→ remove（移除单个源）
+          否则 → add
+        doc_name 空则走最近候选兜底（_match_source_doc(uid, "")），匹配不到列出
+        候选引导；写操作一律反问确认后才落地，不编造「已生效」。
+        """
+        t = (text or "").strip()
+        if any(w in t for w in ("全部", "所有", "清空")):
+            action = "remove_all"
+        elif re.search(r"删|去|移|拿掉|取消|清", t):
+            action = "remove"
+        else:
+            action = "add"
+        store = get_subscription_store()
+        subs = store.list_for_owner(user_id)
+        if not subs:
+            return {"answer":
+                    "您还没有看板任务。说「帮我推个看板」先开通，再增减数据源。",
+                    "source": "dashboard"}
+        target = subs[-1]
+        if action == "remove_all":
+            if not (target.data_sources or []):
+                return {"answer": "当前看板任务没有配置数据源，无需清空。",
+                        "source": "dashboard"}
+            pending = {"intent": "change_sources", "sub_id": target.id,
+                       "action": "remove_all", "doc_name": "全部数据源", "doc_key": ""}
+            sub_cmd.set_pending(user_id, pending)
+            return {"answer": sub_cmd.render_confirmation(pending), "source": "dashboard"}
+        doc = cls._match_source_doc(user_id, "")
+        if doc is None:
+            return {"answer": cls._source_candidates_hint(user_id, target),
+                    "source": "dashboard"}
         pending = {"intent": "change_sources", "sub_id": target.id,
                    "action": action,
                    "doc_name": doc.name or f"文档{doc.node_id[:8]}",
@@ -617,6 +674,20 @@ class DashboardSkill(BaseSkill):
             key = str(pending.get("doc_key") or "")
             name = pending.get("doc_name") or ""
             current = [str(x) for x in (sub.data_sources or [])]
+            if action == "remove_all":
+                # v1.12.9：清空任务全部数据源（「删除全部数据源」口语操作，
+                # LLM 兜底分类 change_sources → 确认后落地，按真实 update 回报）
+                if not current:
+                    sub_cmd.clear_pending(user_id)
+                    return {"answer": "当前看板任务没有配置数据源，无需清空。",
+                            "source": "dashboard"}
+                sub.data_sources = []
+                store.update(sub)
+                sub_cmd.clear_pending(user_id)
+                return {"answer":
+                        "✅ 已清空看板任务的全部数据源，下次推送将无数据可出。"
+                        "需要恢复可说「把XX加进看板」。",
+                        "source": "dashboard"}
             if action == "add":
                 if not key:
                     sub_cmd.clear_pending(user_id)

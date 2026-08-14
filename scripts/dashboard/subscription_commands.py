@@ -277,11 +277,14 @@ def parse_subscription_command(text: str, ctx: Optional[dict] = None) -> Optiona
     if _NEGATIVE_RE.search(text):
         return None  # 讨论文档/方案等，不是操作订阅
     # 门槛：含「看板」或明确的接收人指令（"也推给张工"是订阅上下文内的追加指令），
-    # 或编辑模板意图（「编辑周报模板」可不含「看板」，v1.12.1 放宽）。
+    # 或编辑模板意图（「编辑周报模板」可不含「看板」，v1.12.1 放宽），
+    # 或用户在看板上下文（口语指代操作「帮我停掉这个」无「看板」词，v1.12.9）。
     # 安全：_NEGATIVE_RE（160 行）已含「文档/设计/方案/学习/入库」等，误入只到引导，无写副作用。
+    ctx_user_id = (ctx or {}).get("user_id", "")
     if not (_HAS_KANBAN_RE.search(text) or _RECIPIENT_RE.search(text)
             or _EDIT_TEMPLATE_RE.search(text)
-            or _PER_SOURCE_ON_RE.search(text) or _PER_SOURCE_OFF_RE.search(text)):
+            or _PER_SOURCE_ON_RE.search(text) or _PER_SOURCE_OFF_RE.search(text)
+            or is_kanban_context(text, ctx_user_id)):
         return None
 
     if _STOP_RE.search(text):
@@ -351,6 +354,20 @@ def parse_subscription_command(text: str, ctx: Optional[dict] = None) -> Optiona
         if intent is None:
             return None
         return {"intent": intent, **(ctx or {})}
+    # v1.12.9：正则全部未命中 → 只在「无看板词 + 用户在看板上下文」时 LLM 分类承接
+    # 口语操作（「帮我停掉这个」「删除」「删除全部数据源」等无「看板」词的操作句），
+    # 防落 Agent 被 LLM 无工具编造「已执行」。LLM 判非订阅操作/失败 → None →
+    # 放行 Agent 正常聊，不拦截普通聊天、不产生写副作用（写操作仍走 handle 二次确认）。
+    # 确认词/取消词/承接式全部删除先于 LLM 分类排除——它们归 handle 的确认分支处理。
+    # 含「看板」词的消息不由这里兜底：match 层的 is_kanban_topic + needs_kanban_ambiguity_check
+    # 已处理其歧义（「看看今天的看板」等实时查询/概念句放行 Agent），此处再抢会把
+    # 正则未命中的看板词句（如「我想看下看板配置」）误送 LLM 分类（回归 v1.12.6 修复）。
+    if not is_kanban_topic(text) and is_kanban_context(text, ctx_user_id):
+        if is_confirmation_text(text) or is_cancel_text(text) or is_contextual_delete(text):
+            return None
+        intent = _cached_llm_classify(text, ctx_user_id)
+        if intent is not None:
+            return {"intent": intent, **(ctx or {})}
     return None
 
 
@@ -622,23 +639,35 @@ def needs_kanban_ambiguity_check(text: str) -> bool:
     return bool(_SUSPECT_QUESTION_RE.search(text))
 
 
-def _llm_verify_subscription(text: str, fallback_intent: str,
+def _llm_verify_subscription(text: str, fallback_intent: Optional[str] = None,
                              llm_fn=None) -> Optional[str]:
     """调 DeepSeek 判断是否为订阅管理意图。
 
-    返回：None=放行给 Agent（LLM 判断不是订阅操作）；
+    返回：None=放行给 Agent（LLM 判断不是订阅操作 / 失败且无 fallback）；
          str=最终意图（LLM 可能修正，如 change_recipients→set_recipient_self）；
-    任何失败回退 fallback_intent（保持正则原行为，不崩）。
+    任何失败回退 fallback_intent（有则保持正则原行为，None 则放行，不崩）。
+
+    v1.12.9：意图枚举从 v1.12.0 的 8 个核心意图扩展到操作类全意图
+    （create/stop/delete/resume/query/change_time/change_freq/change_recipients/
+    set_recipient_self/set_per_source/change_sources/set_template/template），
+    供「正则未命中 + 看板上下文」时的 LLM 兜底分类使用（_cached_llm_classify）。
     """
     try:
         if llm_fn is None:
             from skills.agent import call_deepseek as llm_fn
         prompt = (
             "你是恩特小助手『每日项目看板』订阅意图分类器。判断下面这条钉钉消息"
-            "是否在管理看板订阅（开通/停用/删除/改推送时间/改频率/改接收人/查配置）。\n"
+            "是否在管理看板订阅。管理操作包括：开通(create)/停用(stop)/恢复(resume)/"
+            "删除(delete)/查配置(query)/改推送时间(change_time)/改频率(change_freq)/"
+            "增删接收人(change_recipients)/接收人设为自己(set_recipient_self)/"
+            "每源独立总结开关(set_per_source)/增减任务数据源(change_sources)/"
+            "切换模板(set_template)/模板列表(template)。\n"
+            "如果消息不是在看板订阅管理（普通聊天、问天气、讨论概念、查故障、"
+            "删文件等），返回 is_subscription=false。\n"
             "只返回一行 JSON，不要任何其他文字：\n"
-            '{"is_subscription": true或false, "intent": "create或stop或delete或query或'
-            'change_time或change_freq或change_recipients或set_recipient_self或null"}\n'
+            '{"is_subscription": true或false, "intent": "create或stop或resume或delete或'
+            'query或change_time或change_freq或change_recipients或set_recipient_self或'
+            'set_per_source或change_sources或set_template或template或null"}\n'
             f"消息：{text[:200]}"
         )
         raw = llm_fn(prompt, max_tokens=120)
@@ -648,7 +677,7 @@ def _llm_verify_subscription(text: str, fallback_intent: str,
         intent = data.get("intent")
         return intent if intent in _ALL_INTENTS else fallback_intent
     except Exception as e:
-        logger.warning(f"看板意图 LLM 复核失败，回退正则({fallback_intent}): {e}")
+        logger.warning(f"看板意图 LLM 复核失败，回退({fallback_intent}): {e}")
         return fallback_intent
 
 
@@ -657,6 +686,33 @@ def _maybe_llm_verify(text: str, intent: str) -> Optional[str]:
     if not _needs_llm_verify(text, intent):
         return intent
     return _llm_verify_subscription(text, fallback_intent=intent)
+
+
+# ===== LLM 兜底分类（v1.12.9 看板操作意图治本） =====
+# 正则未命中 + 在看板上下文 → LLM 分类兜底。只判意图，参数/名称缺失走技能层现有兜底。
+# 短缓存防 match/handle 对同 query 双调 LLM（match 与 handle 都会 parse 同一条消息）。
+_LLM_CLASSIFY_TTL = 60.0  # 秒
+_classify_cache: dict[tuple, tuple[float, str]] = {}
+_classify_cache_lock = threading.Lock()
+
+
+def _cached_llm_classify(text: str, user_id: str = "", llm_fn=None) -> Optional[str]:
+    """正则未命中时的 LLM 兜底分类。返回意图名或 None（非订阅/失败→放行 Agent）。
+
+    llm_fn is not None 时绕过缓存（测试注入 mock，避免缓存污染断言）。
+    白名单校验 _ALL_INTENTS，防止 LLM 编造未注册意图。
+    """
+    key = (user_id, text)
+    if llm_fn is None:
+        with _classify_cache_lock:
+            hit = _classify_cache.get(key)
+            if hit and (time.time() - hit[0]) <= _LLM_CLASSIFY_TTL:
+                return hit[1]
+    intent = _llm_verify_subscription(text, fallback_intent=None, llm_fn=llm_fn)
+    if intent is not None:
+        with _classify_cache_lock:
+            _classify_cache[key] = (time.time(), intent)
+    return intent
 
 
 # ===== 接收人解析 =====
@@ -790,13 +846,18 @@ def render_confirmation(pending: dict, current=None) -> str:
         lines.append("回复「确认」生效；或告诉我其他调整（如「改到10点」「也推给张工」）。")
 
     elif intent == "change_sources":
-        # v1.12.7：任务级源增删确认
+        # v1.12.7：任务级源增删确认；v1.12.9：remove_all（清空全部源）单独文案
         action = pending.get("action")
         name = pending.get("doc_name") or ""
-        verb = "加入" if action == "add" else "移除"
-        lines.append(f"好的，将把《{name}》{verb}看板任务的数据源：")
-        lines.append("")
-        lines.append("回复「确认」生效；回复「取消」则不改动。")
+        if action == "remove_all":
+            lines.append("好的，将清空看板任务的全部数据源（下次推送将无数据可出）：")
+            lines.append("")
+            lines.append("回复「确认」清空；回复「取消」则保留现状。")
+        else:
+            verb = "加入" if action == "add" else "移除"
+            lines.append(f"好的，将把《{name}》{verb}看板任务的数据源：")
+            lines.append("")
+            lines.append("回复「确认」生效；回复「取消」则不改动。")
 
     elif intent == "stop":
         count = len(pending.get("sub_ids") or [])
@@ -843,6 +904,24 @@ def is_kanban_topic(text: str) -> bool:
     if not t or not _HAS_KANBAN_RE.search(t):
         return False
     return not bool(_NEGATIVE_RE.search(t))
+
+
+def is_kanban_context(text: str, user_id: str = "") -> bool:
+    """是否「正在看板语境」——LLM 兜底分类的承接依据（v1.12.9）。
+
+    看板词面命中 → True（is_kanban_topic 原逻辑）；
+    否则只要有 user_id 且在看板会话中（有 pending 或 600s 内刚聊过看板）→ True。
+    这样「帮我停掉这个」「删除」「不是停掉，是删除」这类口语指代
+    （无「看板」二字）在看板对话中也能被 parse 承接，而不是落 Agent 被 LLM 编造。
+    从未聊过看板的用户随口说「删除」→ False，照旧放行不误接。
+    """
+    if is_kanban_topic(text):
+        return True
+    if not user_id:
+        return False
+    if get_pending(user_id):
+        return True
+    return has_recent_kanban_activity(user_id=user_id)
 
 
 # ===== pending 与看板活动 =====

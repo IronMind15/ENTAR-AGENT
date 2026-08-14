@@ -3,6 +3,33 @@
 > 📌 **本文档是项目唯一的版本记录（单一事实源）**——README.md、PROGRESS.md 的版本历史均指向本文件，发版时只在这里追加记录。
 > 相关：待办清单见 [TODO.md](TODO.md)，进度看板见 [PROGRESS.md](PROGRESS.md)。
 
+## v1.12.9（2026-08-14）
+
+**🎯 看板操作意图 LLM 分类治本（折中方案）**——袁会荧实测口语操作句接不住（「帮我停掉这个」无「看板」词 → 正则 miss → 落 Agent → LLM 无工具调用编造「将停用」、未建 pending）+「删除全部数据源」被 bot 文件删除正则误接必失败。8/13 验证报告否过全链路 LLM 全量托管（边界句零提升/延迟差 3 数量级/重操作语义漂移），本次折中：**正则快闸保留（确定性指令秒回），LLM 只在「正则未命中 + 用户在看板上下文」时承接分类，写操作仍走二次确认**（比全量托管多出的安全阀，兜住 LLM 误判）。
+
+### 🧠 口语操作意图承接（正则未命中 + 看板上下文 → LLM 兜底分类）
+
+- **新增 `is_kanban_context(text, user_id)`**：看板词面命中 OR（用户有看板 pending OR 600s 内刚聊过看板）——口语指代（「这个」「删除」「帮我停掉这个」）在看板对话中被 parse 承接；从未聊过看板的用户随口说「删除」照旧放行不误接。
+- **parse 门槛扩展 + 末尾 LLM 兜底**：门槛放行后正则逐个匹配（命中即快路径秒回）；全部未命中且用户在看板上下文 → `_cached_llm_classify` 分类返回意图（create/stop/delete/resume/query/change_time/change_freq/change_recipients/set_recipient_self/set_per_source/change_sources/set_template/template），LLM 判非订阅/失败 → 放行 Agent 正常聊不拦截。
+- **含「看板」词的消息不由此兜底**（交 match 层既有 `needs_kanban_ambiguity_check` 歧义判定）——回归护栏：正则 miss 的看板词句（「我想看下看板配置」）不被误送 LLM 分类（tripwire 测试守着，防 v1.12.6 修复回退）。
+- **`_cached_llm_classify` 60s 短缓存**（key=user_id+text）：match 与 handle 对同 query 双调 parse 时 LLM 只付一次成本；`_llm_verify_subscription` 意图枚举扩到操作类全意图 + 白名单 `_ALL_INTENTS` 校验防编造。
+- **确认词/取消词/承接式「全部删除」先于 LLM 分类排除**——归 handle 确认分支处理，不被兜底吞掉。
+
+### 🧹 「删除全部数据源」根治（bot gate 让位）
+
+- 根因：bot `_DELETE_RE`（`^(?:删除|删掉)\s*(?:学习\s*)?(.+?)$`）很宽，`_file_command_gate` 的 `detect_domains` 纯文本判定无「看板」词 → proceed → `kb_file_manage` 拿「全部数据源」当文件名找 → 必失败。
+- `_file_command_gate` 追加看板上下文让位：`action=delete` 且 `is_kanban_context` 且目标无扩展名/句无「学习/重学」→ defer 给技能层；技能层 `_handle_llm_change_sources` 从文本规则定 action（「全部/所有/清空」→ remove_all 清空任务全部源、「删/去/移/拿掉」→ remove 单个源、否则 add），`_execute_pending` 加 remove_all 落地；带扩展名/含「学习」词的明确文件删除照旧 proceed 不误让位。
+
+### 测试
+
+- 新增 `tests/test_kanban_llm_classify.py` 20 项（口语操作端到端：LLM 分类 → 反问确认 → 真实 store 落地；「删除全部数据源」bot 层 defer → 技能层 remove_all 不落 kb_file_manage；缓存单次调用；确认词不被吞；看板上下文放行非订阅；非看板上下文不误接；看板词句不走兜底回归护栏；remove_all 无源提示）。
+- 全量回归 **966 项通过**（946 基线 + 20）。
+
+### 已知限制
+
+- LLM 兜底只在看板上下文生效，冷启动用户的口语操作仍需明说「看板」或用既有命令。
+- agent.py 零工具幻觉护栏盲区（零工具调用直接编造「将停用」未触发纠偏）记 TODO 其他待办单独排期。
+
 ## v1.12.8（2026-08-14）
 
 **🔒 审查报告修复包 + 🏗 Web 端定位调整（用户层 → 纯管理层）**——20260813 审查报告 5 项修复（C2 密钥进镜像、C3 BM25 缓存永不失效、H4 调度精确分钟、H6 模板 key 路径穿越、H7 推送无重试）+ Web 端砍掉用户层（普通用户只用钉钉，`/ask` 用户名伪造攻击面 C1 随之消失）+ 管理层「按人查看」视图。用户拍板小版本更新（v1.12.8）。
