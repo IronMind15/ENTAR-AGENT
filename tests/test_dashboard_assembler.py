@@ -12,15 +12,45 @@ if str(SCRIPTS_DIR) not in sys.path:
 from dashboard.assembler import (  # noqa: E402
     assemble_markdown, llm_assemble, validate_markdown,
 )
-from dashboard.config_model import load_sources  # noqa: E402
+from dashboard.config_model import FieldSpec, SourceConfig  # noqa: E402
 from dashboard.parser import parse_source_records  # noqa: E402
 
 
+def _fixture_sources():
+    """A1（v1.12.6）后静态配置已清空，测试自行构造 SourceConfig 双源 fixture。"""
+    return [
+        SourceConfig(
+            key="project_status", name="研发项目现况表", kind="notable",
+            base_id="b1",
+            field_map={
+                "01ZM8y7": FieldSpec(label="项目名称", type="list_name"),
+                "7qnPz0F": FieldSpec(label="阶段", type="dict_name"),
+                "YQnOvE5": FieldSpec(label="状态", type="dict_name"),
+                "FjrTLFt": FieldSpec(label="产品型号", type="string"),
+                "aepzDFy": FieldSpec(label="本周进展", type="string", max_len=200),
+                "uWD6X8E": FieldSpec(label="风险卡点", type="string", max_len=200),
+            },
+            status_groups={"attention": ["滞后"], "normal": ["正常"]},
+        ),
+        SourceConfig(
+            key="test_issues", name="整机下线测试问题", kind="notable",
+            base_id="b2",
+            field_map={
+                "Hr3tyzt": FieldSpec(label="状态", type="dict_name"),
+                "GuqYscv": FieldSpec(label="SN号", type="string"),
+                "ChZTtyj": FieldSpec(label="描述", type="string"),
+            },
+            status_groups={"attention": ["故障", "待验证"],
+                           "normal": ["已完成", "已打包"]},
+        ),
+    ]
+
+
 def _parsed_results():
-    """真实配置 + 千问基准记录 → 解析结果（2 个板块）"""
-    sources = {s.key: s for s in load_sources()}
+    """fixture 配置 + 千问基准记录 → 解析结果（2 个板块）"""
+    proj_src, issues_src = _fixture_sources()
     proj = parse_source_records(
-        sources["project_status"],
+        proj_src,
         [{"fields": {
             "01ZM8y7": [{"name": f"项目{i}"}],
             "7qnPz0F": {"name": "样机测试"},
@@ -42,7 +72,7 @@ def _parsed_results():
                 "GuqYscv": f"SN-{n:03d}",
                 "ChZTtyj": f"测试描述 {n}",
             }})
-    issues = parse_source_records(sources["test_issues"], issue_records)
+    issues = parse_source_records(issues_src, issue_records)
     return [proj, issues]
 
 
@@ -67,7 +97,7 @@ class AssembleMarkdownTests(unittest.TestCase):
     def test_today_points_no_attention_normal(self):
         """无关注项 → 整体正常兜底"""
         from dashboard.parser import parse_source_records
-        sources = {s.key: s for s in load_sources()}
+        sources = {s.key: s for s in _fixture_sources()}
         proj = parse_source_records(
             sources["project_status"],
             [{"fields": {

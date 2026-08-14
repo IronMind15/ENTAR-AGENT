@@ -35,7 +35,7 @@ from dingtalk_stream import (
 from dingtalk_stream.frames import CallbackMessage
 
 from config import DINGTALK_CLIENT_ID, DINGTALK_CLIENT_SECRET
-# v1.13.0（M3）：确认词统一收口到 pending_context（类型作用域），
+# v1.12.1（M3）：确认词统一收口到 pending_context（类型作用域），
 # confirm_learn 登记项引用 learn 专属补充确认词（manifest/tripwire 消费）
 from pending_context import _LEARN_EXTRA_CONFIRM_RE  # noqa: E402
 
@@ -57,7 +57,7 @@ ERROR_MESSAGE = "❌ 处理出错了（错误码：{code}）。请稍后重试�
 # 故障查询(100)、PCB计算(90) 都是毫秒级；RAG Agent(50) 走 LLM 需要提示
 FAST_SKILL_PRIORITY = 50
 
-# 单条聊天 markdown 安全线（v1.13.0 消息流）：贴近看板 MAX_MARKDOWN_LEN=5000 的
+# 单条聊天 markdown 安全线（v1.12.5 消息流）：贴近看板 MAX_MARKDOWN_LEN=5000 的
 # 安全余量取 4500。普通聊天 reply_markdown 原本无长度处理，超长整体塞一条会被
 # 钉钉截断/渲染异常；以此为阈值把超长回复拆成多条顺序消息，保证完整送达。
 CHAT_MARKDOWN_LEN = 4500
@@ -66,7 +66,7 @@ CHAT_MARKDOWN_LEN = 4500
 def _split_long_text(text: str, limit: int = CHAT_MARKDOWN_LEN) -> list[str]:
     """按完整段落拆超长文本为多条（聊天兜底拆条，不带「第x/y页」标题）。
 
-    v1.13.0（消息流）：作为 bot 层兜底，任何超长 answer / 附加消息都先过这里，
+    v1.12.5（消息流）：作为 bot 层兜底，任何超长 answer / 附加消息都先过这里，
     保证钉钉单条安全线内完整送达。按 ``\\n\\n`` 段落切，不砍半行/半个 Markdown
     结构；异常超长的单个段落退化为按完整行拆。与看板 _paginate_markdown 的区别：
     这里不带「第 N/M 页」标题头——那是报告风格，聊天场景要干净。
@@ -158,7 +158,7 @@ def _is_admin(user_id: str) -> bool:
 
 def _is_learn_command(text: str) -> bool:
     return bool(_LEARN_RE.match((text or "").strip()))
-# v1.13.0（M3）：确认词统一收口到 pending_context（类型作用域），
+# v1.12.1（M3）：确认词统一收口到 pending_context（类型作用域），
 # 原 _CONFIRM_LEARN_RE 已删除，manifest 的 confirm_learn 项引用
 # pending_context._LEARN_EXTRA_CONFIRM_RE。
 
@@ -454,7 +454,7 @@ class ErrorQueryHandler(ChatbotHandler):
                 answer = result.get("answer", "") or "抱歉，我没有找到相关信息。"
                 logger.info(f"处理完成: {answer[:50]}...")
 
-                # v1.13.0（消息流）：一次处理可产出多条顺序消息——answer 为第一条，
+                # v1.12.5（消息流）：一次处理可产出多条顺序消息——answer 为第一条，
                 # result["messages"] 为附加条（技能/Agent/看板识别均可返回）。每条
                 # 再经 _split_long_text 兜底拆超长：聊天长回复自动多条、不被钉钉截断，
                 # 这是「其他回答也允许多次发送」的 bot 层兜底。
@@ -532,7 +532,7 @@ class ErrorQueryHandler(ChatbotHandler):
         set_current_staff_id(staff_id)
         set_current_user_id(user_id)
 
-        # v1.13.0（M3）：统一 pending 确认路由——任何非看板 pending（tool/learn/
+        # v1.12.1（M3）：统一 pending 确认路由——任何非看板 pending（tool/learn/
         # clarify）的取消/确认/澄清解析都在这里拦截；看板 pending 完全让位技能层
         # （技能层 handle 已处理确认/取消，行为不变）。窄拦截：只有取消/确认/可解析
         # 澄清文本才拦，其余一律放行普通流程。
@@ -730,7 +730,7 @@ class ErrorQueryHandler(ChatbotHandler):
                 return {"answer": answer, "source": "knowledge_relearn"}
             # gate == "defer"：让位给技能层，不拦截
 
-        # v1.13.0（M3）：learn pending 确认已上移到统一路由块，此处不再单独拦截。
+        # v1.12.1（M3）：learn pending 确认已上移到统一路由块，此处不再单独拦截。
 
         # 5.75 学到指定知识库（v1.11.5 多库）：「把这个文档学到产品手册」
         m = _LEARN_TO_KB_RE.match(t)
@@ -853,14 +853,14 @@ class ErrorQueryHandler(ChatbotHandler):
                 cand_ids.append(cand_id)
             summary = self._doc_summary(result)
             if kind == "folder":
-                # v1.13.0：文件夹不逐条预览，展示 message（子文档数 + 最新文档名）
-                # 看板数据源为「动态取最新一份」，创建看板走 _handle_doc_link_with_kanban。
+                # v1.12.6（C8）：文件夹不逐条预览，展示 message（子文档数 + 文件名单）
+                # 看板数据源每次推送自动解读文件夹内全部子文档，创建看板走 _handle_doc_link_with_kanban。
                 children = result.get("children") or []
                 replies.append(
                     f"📁 {result.get('name') or kind_name}（文件夹）"
                     f"· {len(children)} 份文档"
                     + (f"\n{summary}" if summary else "")
-                    + "\n回复「把这个文件夹做成每日看板」可按最新一份每日推送。")
+                    + "\n回复「把这个文件夹做成每日看板」，每次推送自动解读文件夹内全部文档。")
                 continue
             replies.append(
                 f"📑 {result.get('name') or kind_name}（{kind_name}）· 概要 · 共 {len(records)} 条记录"
@@ -944,7 +944,7 @@ class ErrorQueryHandler(ChatbotHandler):
     def _doc_summary(self, result: dict) -> str:
         """文档概要（v1.11.3）：notable/workbook 预览前几条字段；doc 取 markdown 前 150 字
 
-        v1.13.0：folder 枚举子文档名（最新在前，取前 5 个），无子文档返回 message。
+        v1.12.3：folder 枚举子文档名（最新在前，取前 5 个），无子文档返回 message。
         """
         if result.get("kind") == "doc":
             md = (result.get("markdown") or "").strip()
@@ -991,7 +991,7 @@ class ErrorQueryHandler(ChatbotHandler):
                 name=result.get("document_name") or result.get("name")
                 or result.get("sheet_name") or "",
                 # v1.11.1：doc 也做看板源（文档内容不齐，采集 Markdown 全文由 LLM 提炼）
-                # v1.13.0：folder 也做看板源（动态取最新子文档），enabled 放开
+                # v1.12.6（C8）：folder 也做看板源（每次推送解读全部子文档），enabled 放开
                 enabled=kind in ("notable", "workbook", "doc", "folder"),
                 field_map=json.dumps(field_map, ensure_ascii=False),
             ))
@@ -1428,7 +1428,7 @@ _BOT_COMMANDS: list[dict] = [
      "desc": "入库到指定知识库（v1.11.5 多库）", "status": "enabled"},
     {"id": "confirm_learn", "sector": "kb", "name": "确认学习",
      "trigger": "入库 / 确认 / 好的",
-     # v1.13.0（M3）：确认词统一收口到 pending_context，regex 引用其类型补充词
+     # v1.12.1（M3）：确认词统一收口到 pending_context，regex 引用其类型补充词
      "regex": _LEARN_EXTRA_CONFIRM_RE,
      "desc": "上传文件后推荐入库的确认词（有 learn pending 才拦截）", "status": "enabled"},
     {"id": "my_files", "sector": "kb", "name": "我的文件",

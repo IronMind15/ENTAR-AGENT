@@ -34,8 +34,13 @@ class LoadSourcesTests(unittest.TestCase):
             json.dump(data, f, ensure_ascii=False)
         return path
 
-    def test_loads_two_sources_from_real_file(self):
-        """项目真实样例 JSON 能加载出 project_status + test_issues"""
+    def test_real_file_empty_after_residue_cleanup(self):
+        """真实 JSON 已清空 base_id 空的历史残留（v1.12.6），sources 应为空
+
+        旧版断言加载出 project_status/test_issues——二者 base_id 为空（历史残留，
+        config_model.source_usable 运行期过滤 + 日志告警），已随 v1.12.6 清理。
+        看板数据源现在完全由动态候选（dashboard_doc_candidates）提供。
+        """
         # 用真实配置文件路径
         import os
         real_path = os.path.join(
@@ -44,7 +49,7 @@ class LoadSourcesTests(unittest.TestCase):
         with mock.patch.object(cm, "_JSON_PATH", real_path):
             sources = cm.load_sources()
         keys = {s.key for s in sources}
-        self.assertEqual(keys, {"project_status", "test_issues"})
+        self.assertEqual(keys, set())
 
     def test_field_map_parsed(self):
         """field_map 解析为 FieldSpec（含类型/截断）"""

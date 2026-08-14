@@ -77,44 +77,84 @@ class ResolveSubscriptionSourcesTests(unittest.TestCase):
     def _sub(self, data_sources):
         return Subscription(owner_user_id="u1", data_sources=data_sources)
 
-    def test_mixed_config_and_doc_keys(self):
-        from dashboard.config_model import SourceConfig
+    def test_owner_enabled_candidates_used_real_time(self):
+        """C6：解析不再看绑定快照——实时拉 owner 当前 enabled 候选。
+
+        订阅创建时只绑了 doc_1，但后来用户又发布了 doc_2——推送必须包含
+        新文档（需求「发布的每个文件都能被解读到」）。
+        """
         self._store.add(DocCandidate(user_id="u1", url="u", node_id="n1",
                                      kind="notable", enabled=True))
-        sub = self._sub(["project_status", "doc_1"])
-        with mock.patch("dashboard.config_model.get_source",
-                        return_value=SourceConfig(key="project_status",
-                                                  name="研发项目现况表",
-                                                  base_id="b1")):
+        self._store.add(DocCandidate(user_id="u1", url="u2", node_id="n2",
+                                     kind="notable", enabled=True))
+        sub = self._sub(["doc_1"])
+        with mock.patch("dashboard.config_model.load_sources", return_value=[]):
             sources = resolve_subscription_sources(sub)
-        self.assertEqual([s.key for s in sources], ["project_status", "doc_1"])
+        self.assertEqual(sorted(s.key for s in sources), ["doc_1", "doc_2"])
 
-    def test_missing_doc_skipped(self):
-        sub = self._sub(["doc_999"])
-        with mock.patch("dashboard.config_model.get_source"):
+    def test_other_owner_candidates_isolated(self):
+        """C6：不同 owner 的文件互不影响（隔离）——只解析本人候选"""
+        self._store.add(DocCandidate(user_id="u1", url="u", node_id="n1",
+                                     kind="notable", enabled=True))
+        self._store.add(DocCandidate(user_id="u2", url="u", node_id="n2",
+                                     kind="notable", enabled=True))
+        sub = self._sub(["doc_1"])
+        with mock.patch("dashboard.config_model.load_sources", return_value=[]):
             sources = resolve_subscription_sources(sub)
-        self.assertEqual(sources, [])
+        self.assertEqual([s.key for s in sources], ["doc_1"])
 
-    def test_disabled_doc_skipped(self):
+    def test_disabled_candidate_excluded(self):
+        """C6：停用/删除的文档自动退出推送（隔离的停用手段）"""
         self._store.add(DocCandidate(user_id="u1", url="u", node_id="n1",
                                      kind="notable", enabled=False))
         sub = self._sub(["doc_1"])
-        with mock.patch("dashboard.config_model.get_source"):
+        with mock.patch("dashboard.config_model.load_sources", return_value=[]):
             sources = resolve_subscription_sources(sub)
         self.assertEqual(sources, [])
 
-    def test_missing_config_skipped(self):
-        sub = self._sub(["missing_key"])
-        with mock.patch("dashboard.config_model.get_source", return_value=None):
-            sources = resolve_subscription_sources(sub)
-        self.assertEqual(sources, [])
-
-    def test_missing_source_has_generic_warning(self):
+    def test_static_config_sources_merged(self):
+        """C6：静态配置源仍并入（公司级共享源，A1 后为空的兜底通道）"""
         from dashboard.config_model import SourceConfig
+        self._store.add(DocCandidate(user_id="u1", url="u", node_id="n1",
+                                     kind="notable", enabled=True))
+        sub = self._sub(["project_status"])
+        with mock.patch("dashboard.config_model.load_sources", return_value=[
+                SourceConfig(key="project_status", name="研发项目现况表",
+                             base_id="b1")]):
+            sources = resolve_subscription_sources(sub)
+        self.assertEqual(sorted(s.key for s in sources),
+                         ["doc_1", "project_status"])
+
+    def test_migration_fallback_stored_config_only(self):
+        """迁移兜底：owner 无候选且静态源为空 → 回退旧绑定（仅配置键，doc_ 不再走）"""
+        from dashboard.config_model import SourceConfig
+        sub = self._sub(["project_status", "doc_999"])
+        with mock.patch("dashboard.config_model.get_source",
+                        return_value=SourceConfig(key="project_status",
+                                                  name="研发项目现况表",
+                                                  base_id="b1")), \
+                mock.patch("dashboard.config_model.load_sources", return_value=[]):
+            sources = resolve_subscription_sources(sub)
+        self.assertEqual([s.key for s in sources], ["project_status"])
+
+    def test_no_sources_at_all(self):
+        sub = self._sub(["doc_999"])
+        with mock.patch("dashboard.config_model.get_source", return_value=None), \
+                mock.patch("dashboard.config_model.load_sources", return_value=[]):
+            sources = resolve_subscription_sources(sub)
+        self.assertEqual(sources, [])
+
+    def test_warning_only_when_all_sources_gone(self):
+        """C6：仅当解析为空且旧绑定非空才提醒（避免静默空推）"""
         sub = self._sub(["doc_1", "doc_2"])
-        warnings = source_resolution_warnings(
-            sub, [SourceConfig(key="doc_1", base_id="n1")])
-        self.assertIn("doc_2", warnings[0])
+        warnings = source_resolution_warnings(sub, [])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("doc_1", warnings[0])
+
+    def test_no_warning_when_sources_present(self):
+        sub = self._sub(["doc_1", "doc_2"])
+        warnings = source_resolution_warnings(sub, [object()])
+        self.assertEqual(warnings, [])
 
 
 class LoadAllAvailableSourcesTests(unittest.TestCase):
@@ -160,7 +200,7 @@ class LoadAllAvailableSourcesTests(unittest.TestCase):
         self.assertEqual(sources[0].kind, "doc")
 
     def test_folder_kind_included(self):
-        # v1.13.0：folder 纳入看板数据源（动态取最新子文档）
+        # v1.12.3：folder 纳入看板数据源；v1.12.6（C8）每次推送解读全部子文档
         self._store.add(DocCandidate(user_id="u1", url="u", node_id="f1",
                                      kind="folder", enabled=True,
                                      name="部门周报"))
@@ -185,7 +225,7 @@ class LoadAllAvailableSourcesTests(unittest.TestCase):
 
 
 class AssemblePerSourceMessagesTests(unittest.TestCase):
-    """v1.13.0：逐源组装——每个数据源单独一轮 LLM，各产出消息"""
+    """v1.12.5：逐源组装——每个数据源单独一轮 LLM，各产出消息"""
 
     def _parsed_item(self, source_key):
         return {"source_key": source_key, "name": f"源{source_key}",
@@ -227,6 +267,50 @@ class AssemblePerSourceMessagesTests(unittest.TestCase):
             msgs = assemble_per_source_messages([])
         self.assertEqual(msgs, [])
         build.assert_not_called()
+
+
+class CollectAndParsePartialFailureTests(unittest.TestCase):
+    """v1.12.6（C8）：collect_and_parse 对部分失败（error 与 records 并存）保留数据"""
+
+    def _run(self, sources, collected):
+        from dashboard.service import collect_and_parse
+        with mock.patch("dashboard.collector.Collector.collect_all",
+                        return_value=collected):
+            return collect_and_parse(sources, operator_id="op")
+
+    @staticmethod
+    def _src():
+        return build_dynamic_source(DocCandidate(
+            id=1, user_id="u1", url="u", node_id="n1", sheet_id="s1",
+            kind="notable", operator_union="union1"))
+
+    def test_full_failure_without_records_is_skipped(self):
+        """error 非空且无 records → 整源跳过进 errors（旧行为保持）"""
+        src = self._src()
+        parsed, errors = self._run([src], [{
+            "source_key": src.key, "name": "A", "table_name": "",
+            "records": [], "error": "无权限",
+        }])
+        self.assertEqual(parsed, [])
+        self.assertEqual(len(errors), 1)
+        self.assertIn("无权限", errors[0])
+
+    def test_partial_failure_keeps_records_and_reports_error(self):
+        """v1.12.6（C8）：文件夹部分子文档失败 → 记录保留 + 错误同时上报"""
+        src = self._src()
+        collected = [{
+            "source_key": src.key, "name": "部门周报", "table_name": "",
+            "records": [{"fields": {"名称": "交付验收"}},
+                        {"fields": {"名称": "设计评审"}}],
+            "error": "1/2 份子文档读取失败：33周部门周报: 无权限",
+        }]
+        parsed, errors = self._run([src], collected)
+        # 成功记录照常进 parsed（不再因 error 非空整源丢弃）
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0]["source_key"], src.key)
+        # 失败信息同时进 errors，报告可提示不完整
+        self.assertEqual(len(errors), 1)
+        self.assertIn("1/2 份子文档读取失败", errors[0])
 
 
 if __name__ == "__main__":

@@ -48,6 +48,28 @@ class MockDocClient:
         return self.records.get(sheet_id, [])
 
 
+class FolderClient(MockDocClient):
+    """文件夹场景假客户端：children 枚举 + 按 nodeId 返回各自读结果（v1.12.6 C8）"""
+
+    def __init__(self, children, reads):
+        super().__init__()
+        self._children = children
+        self._reads = reads
+        self.read_order = []
+
+    def list_folder_children(self, base_id):
+        return self._children
+
+    def read_doc_content(self, node_id, operator_id=""):
+        self.read_order.append(node_id)
+        return self._reads.get(node_id, {"ok": False, "message": "未知"})
+
+    @staticmethod
+    def _doc_blocks_to_records(blocks):
+        return [{"类型": "段落", "内容": b.get("paragraph", {}).get("text", "")}
+                for b in blocks]
+
+
 class CollectLatestWeekTests(unittest.TestCase):
     """latest_week 模式：自动选数字最大周次分表"""
 
@@ -125,27 +147,74 @@ class CollectKindTests(unittest.TestCase):
         self.assertEqual(len(result["records"]), 2)
         self.assertEqual(result["records"][0]["内容"], "要求：每日汇报")
 
-    def test_folder_kind_reads_newest_child(self):
-        """v1.13.0：folder 数据源 → 枚举子文档按 updateTime 取最新一份读全文"""
-        client = MockDocClient()
-        client._folder_children = [
-            {"nodeId": "a1", "name": "33周部门周报", "nodeType": "file", "updateTime": 100},
-            {"nodeId": "a2", "name": "29-30周部门周报", "nodeType": "file", "updateTime": 50},
-        ]
-        client.list_folder_children = lambda base_id: client._folder_children
-        client._doc_content = {"ok": True, "blocks": [
-            {"blockType": "paragraph", "paragraph": {"text": "本周完成交付验收"}},
-        ]}
-        client.read_doc_content = lambda node_id, operator_id="": client._doc_content
-        client._doc_blocks_to_records = lambda blocks: [
-            {"类型": "段落", "内容": "本周完成交付验收"}]
+    def test_folder_kind_reads_all_children(self):
+        """v1.12.6（C8）：folder 数据源 → 枚举子文档逐个解读全部（不再只取最新）"""
+        client = FolderClient(
+            children=[
+                {"nodeId": "a1", "name": "33周部门周报", "nodeType": "file", "updateTime": 100},
+                {"nodeId": "a2", "name": "29-30周部门周报", "nodeType": "file", "updateTime": 50},
+            ],
+            reads={
+                "a1": {"ok": True, "blocks": [
+                    {"blockType": "paragraph", "paragraph": {"text": "本周完成交付验收"}}]},
+                "a2": {"ok": True, "blocks": [
+                    {"blockType": "paragraph", "paragraph": {"text": "上周完成设计评审"}}]},
+            },
+        )
         result = Collector(client).collect(
             _source(kind="folder", table_mode="fixed", table_id=""))
         self.assertEqual(result["error"], "")
+        self.assertEqual(len(result["records"]), 2)
+        # 两份子文档都读到，每份记录带「来源文件」标签
+        by_file = {r["来源文件"]: r["内容"] for r in result["records"]}
+        self.assertEqual(by_file, {
+            "33周部门周报": "本周完成交付验收",
+            "29-30周部门周报": "上周完成设计评审",
+        })
+        # 按 updateTime 升序逐个读（旧→新）
+        self.assertEqual(client.read_order, ["a2", "a1"])
+        # 源名即文件夹名，不再标注「最新」
+        self.assertEqual(result["name"], "源s1")
+
+    def test_folder_partial_failure_keeps_records_and_surfaces_error(self):
+        """v1.12.6（C8）：文件夹部分子文档失败 → 成功记录保留，错误随 records 上报"""
+        client = FolderClient(
+            children=[
+                {"nodeId": "a1", "name": "33周部门周报", "nodeType": "file", "updateTime": 100},
+                {"nodeId": "a2", "name": "29-30周部门周报", "nodeType": "file", "updateTime": 50},
+            ],
+            reads={
+                "a1": {"ok": False, "message": "无权限读取"},
+                "a2": {"ok": True, "blocks": [
+                    {"blockType": "paragraph", "paragraph": {"text": "上周完成设计评审"}}]},
+            },
+        )
+        result = Collector(client).collect(
+            _source(kind="folder", table_mode="fixed", table_id=""))
+        # 成功的记录仍在，且打上来源标签
         self.assertEqual(len(result["records"]), 1)
-        # 取 updateTime 最大的最新文档，name 标注（最新）
-        self.assertIn("33周部门周报", result["name"])
-        self.assertIn("最新", result["name"])
+        self.assertEqual(result["records"][0]["来源文件"], "29-30周部门周报")
+        # 失败的子文档体现在 error 里（供 collect_and_parse 上报不中断）
+        self.assertIn("1/2", result["error"])
+        self.assertIn("33周部门周报", result["error"])
+
+    def test_folder_all_children_fail_returns_error(self):
+        """v1.12.6（C8）：文件夹全部子文档失败 → error + 无 records（整源跳过）"""
+        client = FolderClient(
+            children=[
+                {"nodeId": "a1", "name": "33周部门周报", "nodeType": "file", "updateTime": 100},
+                {"nodeId": "a2", "name": "29-30周部门周报", "nodeType": "file", "updateTime": 50},
+            ],
+            reads={
+                "a1": {"ok": False, "message": "无权限读取"},
+                "a2": {"ok": False, "message": "网络超时"},
+            },
+        )
+        result = Collector(client).collect(
+            _source(kind="folder", table_mode="fixed", table_id=""))
+        self.assertNotEqual(result["error"], "")
+        self.assertIn("全部", result["error"])
+        self.assertEqual(result["records"], [])
 
     def test_folder_empty_children_returns_error(self):
         """文件夹枚举失败/为空 → 记 error 不崩"""

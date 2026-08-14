@@ -91,8 +91,11 @@ class Collector:
                     "records": self.client._doc_blocks_to_records(blocks) or [],
                     "error": "",
                 }
-            # v1.13.0：文件夹数据源 → 每次采集枚举子文档，按修改时间取最新一份
-            # （动态跟随：文件夹里新增周报后下次采集自动换到最新，无需改订阅）。
+            # v1.12.6（C8）：文件夹数据源 → 每次采集枚举子文档，逐个解读全部
+            # 子文档（不再只取最新一份）。每份记录打「来源文件」标签供报告区分；
+            # 单个子文档失败不中断整体（部分成功仍采集，错误随 records 一并上报，
+            # collect_and_parse 保留数据不整源丢弃）。动态跟随：文件夹新增周报后
+            # 下次采集自动纳入（需求「发布的每个文件都能被解读到」）。
             if kind == "folder":
                 children = self.client.list_folder_children(source.base_id)
                 if not children:
@@ -101,28 +104,42 @@ class Collector:
                         "table_name": "", "records": [],
                         "error": "文件夹无可用文档（枚举失败或文件夹为空）",
                     }
-                latest = max(children, key=lambda c: c.get("updateTime") or 0)
-                latest_id = str(latest.get("nodeId") or "")
-                if not latest_id:
+                all_records: list[dict] = []
+                fail_msgs: list[str] = []
+                ordered = sorted(children,
+                                 key=lambda c: int(c.get("updateTime") or 0))
+                for child in ordered:
+                    child_id = str(child.get("nodeId") or "")
+                    child_name = str(child.get("name") or
+                                     f"文档{child_id[:8]}") or child_id
+                    if not child_id:
+                        fail_msgs.append(f"{child_name}: 缺少 nodeId")
+                        continue
+                    doc = self.client.read_doc_content(child_id, op)
+                    if not doc.get("ok"):
+                        fail_msgs.append(
+                            f"{child_name}: {doc.get('message', '读取失败')}")
+                        continue
+                    for rec in (self.client._doc_blocks_to_records(
+                            doc.get("blocks") or []) or []):
+                        rec = dict(rec)
+                        rec["来源文件"] = child_name
+                        all_records.append(rec)
+                if not all_records and fail_msgs:
                     return {
                         "source_key": source.key, "name": source_name,
                         "table_name": "", "records": [],
-                        "error": "文件夹最新文档缺少 nodeId",
-                    }
-                doc = self.client.read_doc_content(latest_id, op)
-                if not doc.get("ok"):
-                    return {
-                        "source_key": source.key, "name": source_name,
-                        "table_name": "", "records": [],
-                        "error": doc.get("message", "文件夹最新文档读取失败"),
+                        "error": f"文件夹全部 {len(fail_msgs)} 份子文档读取失败："
+                                 + "；".join(fail_msgs[:3]),
                     }
                 return {
                     "source_key": source.key,
-                    "name": str(latest.get("name") or source_name) + "（最新）",
+                    "name": source_name,
                     "table_name": "",
-                    "records": self.client._doc_blocks_to_records(
-                        doc.get("blocks") or []) or [],
-                    "error": "",
+                    "records": all_records,
+                    "error": (f"{len(fail_msgs)}/{len(children)} 份子文档读取失败"
+                              f"：{'；'.join(fail_msgs[:3])}")
+                    if fail_msgs else "",
                 }
             if source.table_mode == "latest_week" and kind == "notable":
                 sheets = self.client.list_sheets(source.base_id, op)

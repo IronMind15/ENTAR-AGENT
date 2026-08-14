@@ -194,6 +194,19 @@ def get_tool_names() -> list[str]:
     return list(_tool_registry.keys())
 
 
+def is_write_tool(name: str) -> bool:
+    """工具是否写操作（policy 含 confirm → 执行前须用户二次确认）
+
+    v1.12.6（B4 幻觉护栏）：区分只读/写操作工具。只读工具（kb_search、
+    contact_find、dash_query 等）的调用**不能**作为「已执行写操作」的依据——
+    护栏据此判定「只调了只读工具却声称完成写操作」仍是幻觉。
+    """
+    entry = _tool_registry.get(name)
+    if entry is None:
+        return False
+    return bool((entry[2] or {}).get("confirm"))
+
+
 def execute_tool(name: str, args: dict) -> str:
     """执行工具调用，返回 JSON 字符串结果
 
@@ -218,7 +231,7 @@ def execute_tool(name: str, args: dict) -> str:
         if not user_id:
             return json.dumps({"error": "该操作需要用户身份和二次确认，当前无法执行"},
                               ensure_ascii=False)
-        # v1.13.0（M3）：pending 统一收口到 pending_context（type=tool）
+        # v1.12.1（M3）：pending 统一收口到 pending_context（type=tool）
         from pending_context import PT_TOOL, set as pc_set
         payload = {
             "tool": name, "args": dict(args or {}),

@@ -576,7 +576,7 @@ class SubscriptionCommandTemplateTests(unittest.TestCase):
         self.assertEqual(parsed["description"], "负责人/今日进展/明日计划")
 
     def test_edit_template_intents(self):
-        """v1.13.0 冲突矩阵：编辑 vs 切换 vs 描述/提交/列表"""
+        """v1.12.1 冲突矩阵：编辑 vs 切换 vs 描述/提交/列表"""
         from dashboard import subscription_commands as sc
         cases = [
             # (文本, 期望意图, 期望 description)
@@ -641,7 +641,7 @@ class SubscriptionCommandTemplateTests(unittest.TestCase):
         self.assertIn("今日要点 / 进展", text)
 
     def test_render_confirmation_edit_template(self):
-        """v1.13.0：编辑模板确认文案（覆盖保存，非新建）"""
+        """v1.12.1：编辑模板确认文案（覆盖保存，非新建）"""
         from dashboard import subscription_commands as sc
         pending = {
             "intent": "edit_template", "template_key": "myreport",
@@ -803,7 +803,7 @@ class DashboardSkillTemplateTests(unittest.TestCase):
                 return_value="已推送示例看板")
     @mock.patch("dashboard.template_builder.describe_to_spec")
     def test_edit_template_confirm_flow(self, m_describe, m_push):
-        """v1.13.0：编辑私有模板 → 确认 → 覆盖字段、key 不变、无副本"""
+        """v1.12.1：编辑私有模板 → 确认 → 覆盖字段、key 不变、无副本"""
         self._create_user_template()
         m_describe.return_value = {
             "ok": True, "name": "自定义周报",  # 编辑不换名，用原 key/name
@@ -839,7 +839,7 @@ class DashboardSkillTemplateTests(unittest.TestCase):
 
     @mock.patch("dashboard.template_builder.describe_to_spec")
     def test_edit_no_description_shows_current(self, m_describe):
-        """v1.13.0：无格式描述 → 展示当前内容引导，不 set pending"""
+        """v1.12.1：无格式描述 → 展示当前内容引导，不 set pending"""
         self._create_user_template()
         from skills.dashboard import DashboardSkill
         from dashboard import subscription_commands as sc
@@ -851,14 +851,14 @@ class DashboardSkillTemplateTests(unittest.TestCase):
         self.assertIsNone(sc.get_pending("union001"))
 
     def test_edit_system_template_rejected(self):
-        """v1.13.0：系统模板不可编辑 → 引导另建"""
+        """v1.12.1：系统模板不可编辑 → 引导另建"""
         from skills.dashboard import DashboardSkill
         r = DashboardSkill.handle("编辑周报模板改成：先写结论", user_id="union001")
         self.assertIn("系统自带模板", r["answer"])
         self.assertIn("周报总结", r["answer"])
 
     def test_edit_unknown_template_guides(self):
-        """v1.13.0：找不到模板 → 引导说「看板模板」查看"""
+        """v1.12.1：找不到模板 → 引导说「看板模板」查看"""
         from skills.dashboard import DashboardSkill
         r = DashboardSkill.handle("编辑不存在的模板改成：先写结论", user_id="union001")
         self.assertIn("没找到", r["answer"])

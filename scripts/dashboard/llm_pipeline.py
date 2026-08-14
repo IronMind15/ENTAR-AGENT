@@ -30,7 +30,7 @@ logger = logging.getLogger("dashboard.llm_pipeline")
 REPORT_MARKDOWN_LEN = MAX_MARKDOWN_LEN - 400
 
 _MAP_EXECUTOR = ThreadPoolExecutor(
-    max_workers=max(1, int(os.getenv("DASHBOARD_LLM_MAP_WORKERS", "1"))),
+    max_workers=max(2, int(os.getenv("DASHBOARD_LLM_MAP_WORKERS", "2"))),
     thread_name_prefix="dashboard-map")
 _REDUCE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="dashboard-reduce")
 
@@ -544,7 +544,13 @@ def build_dashboard_report(results: list[dict], old_snapshot: list[dict] | None,
     map_completed = 0
     llm_errors = 0
     if llm_func:
+        # v1.12.6（A3）：批预算从「全局对折」改为「每批独立超时」。
+        # 原实现 as_completed(timeout=total*0.7)：单 worker 串行 + 全局 105s 预算，
+        # 第 1 批慢调用吃光预算后剩余批被整批 cancel（实测 4 源 2 批只完成 1 批，内容截断）。
+        # 现改为 worker 并行 + 每批各自 deadline：各批独立 LLM 调用，互不拖累，
+        # 一批超时才丢该批（仍保留 accepted_claims 核验），不再「一刀切」丢全部剩余批。
         total_timeout = max(10, int(os.getenv("DASHBOARD_LLM_TOTAL_TIMEOUT", "150")))
+        per_batch_timeout = max(30, int(os.getenv("DASHBOARD_LLM_BATCH_TIMEOUT", "120")))
         started = time.monotonic()
         batches = _chunks(analysis_units, max(1, batch_size),
                           max(2000, max_batch_chars))
@@ -561,22 +567,23 @@ def build_dashboard_report(results: list[dict], old_snapshot: list[dict] | None,
             ): index
             for index, batch in enumerate(batches)
         }
-        try:
-            completed = as_completed(futures, timeout=total_timeout * 0.7)
-            for future in completed:
-                try:
-                    value = _json_object(future.result())
-                    selected_refs.extend(_selected_refs(value))
-                    map_completed += 1
-                except Exception as exc:
-                    llm_errors += 1
-                    logger.warning("看板 LLM 分批提炼失败: %s", exc)
-        except FutureTimeout:
-            pending = [future for future in futures if not future.done()]
-            llm_errors += len(pending)
-            for future in pending:
+        # 并行等待，逐批独立超时：completed 先完成先收，slow 批单独等满自己的
+        # per_batch_timeout，避免单批慢拖垮整体预算导致其它批被连带跳过。
+        for future in as_completed(futures):
+            index = futures[future]
+            try:
+                value = _json_object(future.result(timeout=per_batch_timeout))
+                selected_refs.extend(_selected_refs(value))
+                map_completed += 1
+            except FutureTimeout:
                 future.cancel()
-            logger.warning("看板 LLM 分批提炼超出整体时间预算，跳过 %s 批", len(pending))
+                llm_errors += 1
+                logger.warning(
+                    "看板 LLM 第 %s 批提炼超出单批预算(%ss)，跳过该批", index,
+                    per_batch_timeout)
+            except Exception as exc:
+                llm_errors += 1
+                logger.warning("看板 LLM 分批提炼失败(批%s): %s", index, exc)
         valid_selected = []
         seen_selected = set()
         for ref in selected_refs:

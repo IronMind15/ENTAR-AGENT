@@ -1,4 +1,4 @@
-"""统一 pending 确认上下文（v1.13.0，M3 pending 归一）
+"""统一 pending 确认上下文（v1.12.1，M3 pending 归一）
 
 单一事实源：tools 写操作 / knowledge_review 文件入库 / dashboard 看板订阅 /
 routing 操作歧义澄清——四套独立 pending 字典统一收口到这里，按 user_id 存一张表，

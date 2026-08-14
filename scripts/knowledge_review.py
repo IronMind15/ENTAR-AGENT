@@ -694,7 +694,7 @@ def learn_file_for_user(user_id: str, user_name: str = "",
 
 
 # ===== v1.11.0 上传后「自动推荐入库」确认 =====
-# v1.13.0（M3）：pending 统一收口到 pending_context（type=learn），薄封装保留 API。
+# v1.12.1（M3）：pending 统一收口到 pending_context（type=learn），薄封装保留 API。
 def set_pending_learn(user_id: str, file_path: str, file_name: str = ""):
     """保存文件成功后登记推荐确认（精确对应刚上传的文件，规避多文件歧义）"""
     from pending_context import PT_LEARN, set as pc_set

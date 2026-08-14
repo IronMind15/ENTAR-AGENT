@@ -15,11 +15,24 @@ from dashboard.assembler import assemble_markdown  # noqa: E402
 
 
 def _parsed_results():
-    from dashboard.config_model import load_sources
+    """构造一个项目源 fixture（不依赖真实 JSON 配置——v1.12.6 配置源已清空，
+    数据源全部来自动态候选，测试自行构造 SourceConfig）"""
+    from dashboard.config_model import SourceConfig, FieldSpec
     from dashboard.parser import parse_source_records
-    sources = {s.key: s for s in load_sources()}
+    src = SourceConfig(
+        key="project_status", name="研发项目现况表", kind="notable",
+        base_id="b1",
+        field_map={
+            "01ZM8y7": FieldSpec(label="项目名称", type="list_name"),
+            "7qnPz0F": FieldSpec(label="阶段", type="dict_name"),
+            "YQnOvE5": FieldSpec(label="状态", type="dict_name"),
+            "FjrTLFt": FieldSpec(label="产品型号", type="string"),
+            "aepzDFy": FieldSpec(label="本周进展", type="string", max_len=200),
+            "uWD6X8E": FieldSpec(label="风险卡点", type="string", max_len=200),
+        },
+    )
     proj = parse_source_records(
-        sources["project_status"],
+        src,
         [{"fields": {
             "01ZM8y7": [{"name": "项目1"}],
             "7qnPz0F": {"name": "样机"},

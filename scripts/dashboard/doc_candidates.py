@@ -247,7 +247,7 @@ class DocCandidateStore:
     def list_dashboard_ready(self, user_id: str) -> list[DocCandidate]:
         """取该用户可做看板数据源的文档（kind∈notable/workbook/doc/folder 且 enabled=1）
 
-        v1.13.0：folder 加入——文件夹做看板源动态取最新子文档。
+        v1.12.6（C8）：folder 加入——文件夹做看板源每次推送解读全部子文档。
         """
         with self._lock:
             rows = self._get_conn().execute(

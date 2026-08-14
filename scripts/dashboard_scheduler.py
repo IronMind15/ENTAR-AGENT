@@ -27,7 +27,7 @@ _scheduler: BackgroundScheduler | None = None
 
 _TS_FORMAT = "%Y-%m-%d %H:%M:%S"
 
-# v1.13.0（消息流）：定时推送在汇总报告之外，把「记录变化最多」的 Top N 数据源
+# v1.12.5（消息流）：定时推送在汇总报告之外，把「记录变化最多」的 Top N 数据源
 # 单独展开一条（每个关键源聚焦详情）。N 收敛在 2：变化源多时避免消息暴增。
 KEY_SOURCE_EXPAND_N = 2
 
@@ -159,7 +159,7 @@ def _execute_subscription(sub) -> dict:
 
     # LLM 组装 → 失败/超长规则兜底（service.assemble 内部处理）
     # v1.12.0：按订阅模板决定输出格式（daily 缺省=旧行为）
-    # v1.14.0：per_source 订阅改用逐源组装——每个数据源单独一条（复用 v1.13.0
+    # v1.12.5：per_source 订阅改用逐源组装——每个数据源单独一条（复用 v1.12.5
     # assemble_per_source_messages），不再合并成一份报告，也不再关键源展开
     # （已是逐源粒度）。
     template = service.resolve_template(sub)
@@ -195,10 +195,10 @@ def _execute_subscription(sub) -> dict:
         name_by_key = {s.key: s.name for s in sources}
         messages[0] = change_banner(sub.last_snapshot, snap, name_by_key) + "\n\n" + messages[0]
 
-    # v1.13.0（消息流）：汇总报告之外，把「变化最多」的 Top N 关键数据源单独
+    # v1.12.5（消息流）：汇总报告之外，把「变化最多」的 Top N 关键数据源单独
     # 展开一条——每条聚焦详情（含完整证据），汇总报告仍给全局视角。复用同一套
     # LLM 组装（失败规则兜底），按订阅模板输出格式；标题带源名区分于汇总。
-    # v1.14.0：per_source 逐源模式每条已是单源总结，跳过关键源展开。
+    # v1.12.5：per_source 逐源模式每条已是单源总结，跳过关键源展开。
     for key_item, key_name in (_key_source_expansions(report, parsed)
                                if not per_source and report else []):
         try:
@@ -229,14 +229,23 @@ def _execute_subscription(sub) -> dict:
 
 
 def _deduplicate_due_subscriptions(subs: list) -> tuple[list, list[tuple[int, int]]]:
-    """保留来源覆盖最全的订阅，返回 (待执行, [(被抑制ID, 覆盖者ID)])。"""
-    ordered = sorted(subs, key=lambda sub: len(set(sub.data_sources)), reverse=True)
+    """保留来源覆盖最全的订阅，返回 (待执行, [(被抑制ID, 覆盖者ID)])。
+
+    v1.12.6（C6）：来源集合改为实时解析 effective_source_keys——订阅不再
+    绑定固定数据源，同 owner 同时刻同接收人的订阅解析出相同来源即视为重复。
+    """
+    from dashboard import service
+
+    def _keys(sub):
+        return service.effective_source_keys(sub)
+
+    ordered = sorted(subs, key=lambda sub: len(_keys(sub)), reverse=True)
     covered: list[tuple[tuple, set[str], int]] = []
     selected, suppressed = [], []
     for sub in ordered:
         identity = (sub.owner_user_id, sub.push_hour, sub.push_minute,
                     sub.weekdays or "", tuple(sorted(sub.recipients)))
-        sources = set(str(key) for key in sub.data_sources)
+        sources = _keys(sub)
         parent = next((sid for key, keys, sid in covered
                        if key == identity and sources <= keys), None)
         if parent is not None:

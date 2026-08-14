@@ -93,7 +93,7 @@ class SubscriptionStoreTests(unittest.TestCase):
         self.assertEqual(got.recipients, ["staff001", "staff002"])
 
     def test_per_source_roundtrip_and_update(self):
-        # v1.14.0：每源独立总结字段持久化 + 可切换
+        # v1.12.5：每源独立总结字段持久化 + 可切换
         sub_id = self.store.create(self._sub(per_source=True))
         got = self.store.get(sub_id)
         self.assertTrue(got.per_source)
@@ -102,7 +102,7 @@ class SubscriptionStoreTests(unittest.TestCase):
         self.assertFalse(self.store.get(sub_id).per_source)
 
     def test_per_source_in_fingerprint(self):
-        # v1.14.0：输出模式不同视为不同业务配置（合并 vs 逐源可并存）
+        # v1.12.6：输出模式不同视为不同业务配置（合并 vs 逐源可并存）
         merged = self._sub(per_source=False)
         per_source = self._sub(per_source=True)
         self.assertNotEqual(merged.fingerprint(), per_source.fingerprint())

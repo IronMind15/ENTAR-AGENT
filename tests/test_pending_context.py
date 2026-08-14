@@ -1,4 +1,4 @@
-"""统一 pending 上下文测试（v1.13.0，M3 pending 归一）
+"""统一 pending 上下文测试（v1.12.1，M3 pending 归一）
 
 覆盖：set/get/clear 往返、跨类型覆盖、TTL 过期、clear_type 类型守卫、
 确认词类型作用域（「入库」只在 learn 生效）、并发 set。

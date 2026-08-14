@@ -81,7 +81,7 @@ def detect_domains(text: str) -> list[str]:
 
 
 # ===== 操作歧义澄清（M2 / M3） =====
-# v1.13.0（M3）：pending 统一收口到 pending_context（type=clarify），薄封装保留 API。
+# v1.12.1（M3）：pending 统一收口到 pending_context（type=clarify），薄封装保留 API。
 _CLARIFY_TIMEOUT = 600   # 澄清反问窗口（秒）
 
 _CANCEL_CLARIFY_RE = re.compile(r"^(?:取消|算了|不要了|不执行|先不弄了)[。！!]?$")

@@ -68,16 +68,7 @@ _RESUME_RE = re.compile(
 _DELETE_RE = re.compile(
     r"删除.*看板|删掉.*看板|解绑.*看板|注销.*看板|移除订阅.*看板|"
     r"看板.*删除|看板.*删掉|看板.*解绑|看板.*注销")
-# v1.14.0：调整订阅数据源（移除/添加）。「数据源」话题词放宽——用户说
-# 「测试ai表格的数据源帮我删掉」常不带「看板」，仍属订阅管理（防漏进 Agent 幻觉）。
-# 与删除订阅区分：删除订阅必含「看板」(_DELETE_RE)，此处只认「数据源/看板数据」。
-# 支持两种语序：名词在前（…数据源帮我删掉） / 动词在前（删掉…数据源）。
-_CHANGE_SOURCES_RE = re.compile(
-    r"(?:数据源|看板数据)[^，。！？\n]{0,12}?(?:删掉|删除|移除|去掉|去掉吧|别要|不要)"
-    r"|(?:删掉|删除|移除|去掉|去掉吧|别要|不要)[^，。！？\n]{0,12}?(?:数据源|看板数据)")
-_CHANGE_SOURCES_ADD_RE = re.compile(
-    r"(?:加个|加上|添加|增加|加一个)[^，。！？\n]{0,14}?(?:数据源|看板数据)")
-# v1.14.0：每源独立总结（per_source）。袁会荧实测需求「四份文件各自独立总结」——
+# v1.12.5：每源独立总结（per_source）。袁会荧实测需求「四份文件各自独立总结」——
 # 常不带「看板」也不带「数据源」，属订阅输出模式调整（防漏进 Agent 幻觉）。
 # 开启：各自/每个/单独/分开/独立 + 总结/出板/推送/汇报；关闭：否定/合并语。
 # 关闭须在开启之前判定（「不要分开总结」的「分开总结」会命中开启分支）。
@@ -106,13 +97,13 @@ _TEMPLATE_SUBMIT_RE = re.compile(
 _TEMPLATE_SET_RE = re.compile(
     r"(?:按|根据|用|换|切|改成|改为|设置|设|变成|换成)\s*(?:[^，。！？\s]{0,10}?)?\s*(?:模板|模式)|"
     r"(?:模板|模式)\s*(?:用|换|切|改成|改为|设置|设|变成)")
-# v1.13.0：编辑模板内容（整体重述覆盖）。与 set_template 区分：
+# v1.12.1：编辑模板内容（整体重述覆盖）。与 set_template 区分：
 #   set  = 切到已存在模板（用/换/改成+模板名，无格式冒号）
 #   edit = 重述格式覆盖模板内容（显式编辑动词，或「…模板改成/改为：<新格式>」带冒号）
 # 注意：须在 _TEMPLATE_SET_RE 之前判定——否则「把周报模板改成：先写总体结论」
-# 会被 set 的「改成」抢成切换（v1.13.0 修复该误抢）。
+# 会被 set 的「改成」抢成切换（v1.12.1 修复该误抢）。
 # 意图判定与 desc 提取拆开：目标模板名/desc 都不靠位置捕获（非贪婪会吞/丢目标，
-# v1.13.0 实测），统一交给独立 _EDIT_DESC_RE（整句找「改成…：」）与技能层
+# v1.12.1 实测），统一交给独立 _EDIT_DESC_RE（整句找「改成…：」）与技能层
 # TemplateStore.resolve(text) 解析，更稳健。
 _EDIT_TEMPLATE_RE = re.compile(
     r"(?:编辑|修改|调整|改改|重做)"                       # 门槛 A：显式编辑动词
@@ -159,7 +150,7 @@ _CREATE_RE = re.compile(
 _CONTEXT_DELETE_RE = re.compile(
     r"(?:现在)?(?:帮我)?(?:把)?(?:这些|以上|前面|现有|我的)?(?:全部|都)?"
     r"(?:删除|删掉|移除|清除)(?:掉|了)?$")
-# v1.12.4：_CONFIRM_TEXT_RE 已于 v1.13.0（M3）收口到 pending_context（确认词唯一
+# v1.12.4：_CONFIRM_TEXT_RE 已于 v1.12.1（M3）收口到 pending_context（确认词唯一
 # 事实源，is_confirmation_text 委托其 is_confirm_text），此处旧定义已无任何引用，
 # 删除防两表漂移——修改确认词只改 pending_context 一处。
 _CANCEL_TEXT_RE = re.compile(r"^(?:取消|算了|不要了|不执行|先不弄了)[。！!]?$")
@@ -205,12 +196,10 @@ def parse_subscription_command(text: str, ctx: Optional[dict] = None) -> Optiona
     if _NEGATIVE_RE.search(text):
         return None  # 讨论文档/方案等，不是操作订阅
     # 门槛：含「看板」或明确的接收人指令（"也推给张工"是订阅上下文内的追加指令），
-    # 或编辑模板意图（「编辑周报模板」可不含「看板」，v1.13.0 放宽），
-    # 或数据源调整意图（「测试ai表格的数据源帮我删掉」不带「看板」，v1.14.0 放宽）。
+    # 或编辑模板意图（「编辑周报模板」可不含「看板」，v1.12.1 放宽）。
     # 安全：_NEGATIVE_RE（160 行）已含「文档/设计/方案/学习/入库」等，误入只到引导，无写副作用。
     if not (_HAS_KANBAN_RE.search(text) or _RECIPIENT_RE.search(text)
             or _EDIT_TEMPLATE_RE.search(text)
-            or _CHANGE_SOURCES_RE.search(text) or _CHANGE_SOURCES_ADD_RE.search(text)
             or _PER_SOURCE_ON_RE.search(text) or _PER_SOURCE_OFF_RE.search(text)):
         return None
 
@@ -222,17 +211,12 @@ def parse_subscription_command(text: str, ctx: Optional[dict] = None) -> Optiona
     if _DELETE_RE.search(text):
         # v1.11.6：删除订阅（确认后彻底移除）
         return {"intent": "delete", **(ctx or {})}
-    if _CHANGE_SOURCES_ADD_RE.search(text) or _CHANGE_SOURCES_RE.search(text):
-        # v1.14.0：调整订阅数据源（移除/添加；确认后落地）。须在 _QUERY_RE 之前——
-        # 「看板数据源删掉」含「数据源」不含 _QUERY_RE 触发词，放前安全；放 _DELETE_RE
-        # 之后（「删除XX看板」删除订阅仍是 delete）。
-        return {"intent": "change_sources", **(ctx or {})}
     if _PER_SOURCE_OFF_RE.search(text):
-        # v1.14.0：每源独立总结关闭。OFF 独立判定并优先——否定句（「不要分开总结」
+        # v1.12.5：每源独立总结关闭。OFF 独立判定并优先——否定句（「不要分开总结」
         # 「合并成一份」）里的「分开总结」同时命中开启正则，须直接取 False 不再看 ON。
         return {"intent": "set_per_source", "per_source": False, **(ctx or {})}
     if _PER_SOURCE_ON_RE.search(text):
-        # v1.14.0：每源独立总结开启（确认后落地）
+        # v1.12.5：每源独立总结开启（确认后落地）
         return {"intent": "set_per_source", "per_source": True, **(ctx or {})}
     # v1.12.0：模板意图（describe > submit > set > list）
     if _TEMPLATE_DESCRIBE_RE.search(text):
@@ -241,7 +225,7 @@ def parse_subscription_command(text: str, ctx: Optional[dict] = None) -> Optiona
             return {"intent": "describe_template", "description": desc, **(ctx or {})}
     if _TEMPLATE_SUBMIT_RE.search(text):
         return {"intent": "submit_template", **(ctx or {})}
-    # v1.13.0：编辑模板（在 set 之前——「把XX模板改成：<格式>」是编辑不是切换）
+    # v1.12.1：编辑模板（在 set 之前——「把XX模板改成：<格式>」是编辑不是切换）
     # 目标模板名不在解析层捕获，由技能层 TemplateStore.resolve(text) 从整句解析；
     # desc 可为 ""（「编辑看板模板」无格式描述 → 技能层引导）。
     edit_desc = _extract_edit_template(text)
@@ -325,6 +309,46 @@ def parse_template_choice(text: str, user_id: str) -> Optional[dict]:
     return None
 
 
+# ===== 口语序数选择（v1.12.6，B5）=====
+# 数字「1/2/3」等已由 parse_template_choice 承接（choose_template 反问），这里补
+# 口语序数形式（「我说选第一个」「选第二个」「就第一个吧」）——否则落 Agent 无工具
+# 可用，实测编造「看板维护转达工单」幻觉（袁会荧 2026-08-14：回「我说选第一个」→
+# 落 Agent → contact_find 查通讯录 → 编造工单）。同样必须绑死「有 kanban pending
+# 且处于反问窗口」，否则「第一个」等短语会误拦普通聊天。
+_SPOKEN_CHOICE_PREFIX_RE = re.compile(r"^(?:我(?:是)?说|我|请|麻烦)?(?:就|要|选|挑)*")
+_SPOKEN_CHOICE_RE = re.compile(
+    r"^第([一二三四五六七八九十]|\d{1,2})(?:个)?(?:吧|哈|呀|哦|的|了)?[。！!]?$")
+_CN_ORDINAL_MAP = {ch: i + 1 for i, ch in enumerate("一二三四五六七八九十")}
+
+
+def parse_spoken_choice(text: str, user_id: str) -> Optional[dict]:
+    """识别看板反问中的口语序数选择（「我说选第一个」→ index=1）
+
+    仅当该用户有 kanban pending 且处于反问窗口（600s）内才识别——
+    「选第一个」不含「看板」，必须绑死「刚在看板对话中被反问」的上下文。
+
+    返回 {"intent": "choose_ordinal", "index": n}；非选择回复返回 None
+    （放行给 Agent/主流程）。
+    """
+    pending = get_pending(user_id)
+    if not pending:
+        return None
+    if not has_recent_kanban_activity(user_id=user_id):
+        return None  # 反问窗口过期
+    t = (text or "").strip()
+    if not t:
+        return None
+    stripped = _SPOKEN_CHOICE_PREFIX_RE.sub("", t)
+    m = _SPOKEN_CHOICE_RE.fullmatch(stripped)
+    if not m:
+        return None
+    raw = m.group(1)
+    index = int(raw) if raw.isdigit() else _CN_ORDINAL_MAP.get(raw, 0)
+    if index <= 0 or index > 20:
+        return None
+    return {"intent": "choose_ordinal", "index": index}
+
+
 def is_contextual_delete(text: str) -> bool:
     """识别承接上一轮看板上下文的“全部删除”，不单独作为全局意图。"""
     return bool(_CONTEXT_DELETE_RE.fullmatch((text or "").strip()))
@@ -333,29 +357,16 @@ def is_contextual_delete(text: str) -> bool:
 def is_confirmation_text(text: str) -> bool:
     """允许带动作复述的自然确认，例如“是的，全部删除”。
 
-    v1.13.0（M3）：确认词委托 pending_context（类型作用域，kanban 用通用词）。
+    v1.12.1（M3）：确认词委托 pending_context（类型作用域，kanban 用通用词）。
     """
     from pending_context import PT_KANBAN, is_confirm_text
     return is_confirm_text(text, PT_KANBAN)
 
 
 def is_cancel_text(text: str) -> bool:
-    """v1.13.0（M3）：取消词委托 pending_context"""
+    """v1.12.1（M3）：取消词委托 pending_context"""
     from pending_context import is_cancel_text as pc_is_cancel
     return pc_is_cancel(text)
-
-
-def is_change_sources_action(text: str) -> str:
-    """数据源调整动作：'add'（加个/添加）/ 'remove'（删掉/移除/去掉）/ ''（非数据源操作）
-
-    v1.14.0：供技能层区分增删语义（识别到的源名按动作归位到 add_keys / remove_keys）。
-    """
-    t = text or ""
-    if _CHANGE_SOURCES_ADD_RE.search(t):
-        return "add"
-    if _CHANGE_SOURCES_RE.search(t):
-        return "remove"
-    return ""
 
 
 # ===== 时间解析 =====
@@ -454,9 +465,6 @@ _INTENT_DEFS: list[dict] = [
      "regex": _RESUME_RE, "desc": "复用已停用订阅重新启用（不新建重复）", "status": "enabled"},
     {"id": "delete", "name": "删除订阅", "trigger": "删除看板订阅",
      "regex": _DELETE_RE, "desc": "彻底移除订阅（确认后，不可恢复）", "status": "enabled"},
-    {"id": "change_sources", "name": "调整数据源", "trigger": "把XX数据源删掉 / 加个XX数据源",
-     "regex": _CHANGE_SOURCES_RE, "desc": "增删订阅的数据源（按名称匹配真实源，确认后落地）",
-     "status": "enabled"},
     {"id": "set_per_source", "name": "每源独立总结", "trigger": "四份文件各自独立总结 / 合并成一份",
      "regex": _PER_SOURCE_ON_RE,
      "desc": "订阅输出模式：每个数据源单独一条 vs 合并成一份报告（确认后落地）",
@@ -507,7 +515,7 @@ _SUSPECT_REFER_RE = re.compile(r"别人|他们|她们|大家|某人|任何人")
 def _needs_llm_verify(text: str, intent: str) -> bool:
     """重操作 + 可疑文本 → 需要 LLM 复核；普通指令直接走正则，零成本"""
     if _SUSPECT_QUESTION_RE.search(text):
-        # v1.13.0：query 加入——「看板数据源和看板任务是分开的吗」命中 _QUERY_RE
+        # v1.12.3：query 加入——「看板数据源和看板任务是分开的吗」命中 _QUERY_RE
         # 的「看板.*任务」被吞成查订阅状态，概念疑问句须 LLM 判歧义后放行 Agent。
         return intent in ("create", "change_recipients", "doc_create", "query")
     if intent == "change_recipients" and _SUSPECT_REFER_RE.search(text):
@@ -516,7 +524,7 @@ def _needs_llm_verify(text: str, intent: str) -> bool:
 
 
 def needs_kanban_ambiguity_check(text: str) -> bool:
-    """看板话题 + 概念疑问句 → match 层需 LLM 判歧义（v1.13.0）
+    """看板话题 + 概念疑问句 → match 层需 LLM 判歧义（v1.12.3）
 
     明确管理动词/明确查询（无「吗/是不是/为什么/怎么」等疑问词）→ False，
     走正则快速路径秒回；只有含疑问词的看板话题才付一次 LLM 判歧义成本。
@@ -635,6 +643,7 @@ def render_confirmation(pending: dict, current=None) -> str:
         lines.append("好的，我可以为您开通每日项目看板推送，请确认：")
         lines.append("")
         lines.append(f"📋 数据板块：{_format_sources(sources)}")
+        lines.append("🆕 之后您新发布的文档会自动纳入每日推送（每次发送时实时计算，无需重新订阅）。")
         lines.append(f"⏰ 推送时间：{format_weekdays(pending.get('weekdays', ''))} "
                      f"{pending.get('push_hour', 9):02d}:{pending.get('push_minute', 0):02d}")
         lines.append(f"🔔 提醒模式：{'仅数据有变化时推送' if pending.get('alert_mode', 'always') == 'changes_only' else '每天固定推送（附今日变化）'}")
@@ -647,6 +656,7 @@ def render_confirmation(pending: dict, current=None) -> str:
         lines.append("好的，将按以下文档做每日看板，请确认：")
         lines.append("")
         lines.append(f"📋 数据板块：{_format_sources(sources)}")
+        lines.append("🆕 之后您新发布的文档会自动纳入每日推送（每次发送时实时计算，无需重新订阅）。")
         lines.append(f"⏰ 推送时间：{format_weekdays(pending.get('weekdays', ''))} "
                      f"{pending.get('push_hour', 9):02d}:{pending.get('push_minute', 0):02d}")
         lines.append(f"🔔 提醒模式：{'仅数据有变化时推送' if pending.get('alert_mode', 'always') == 'changes_only' else '每天固定推送（附今日变化）'}")
@@ -681,22 +691,8 @@ def render_confirmation(pending: dict, current=None) -> str:
         lines.append(f"好的，将删除您的{target}看板订阅（此操作不可恢复，历史推送配置一并清除）。")
         lines.append("回复「确认」删除；如果只是想暂停，说「停掉看板」即可。")
 
-    elif intent == "change_sources":
-        # v1.14.0：调整订阅数据源（移除/添加，确认后按真实 update 结果落地）
-        removed = pending.get("remove_names") or []
-        added = pending.get("add_names") or []
-        lines.append("好的，将调整您的看板订阅数据源：")
-        if removed:
-            lines.append(f"❌ 移除：{'、'.join(removed)}")
-        if added:
-            lines.append(f"➕ 添加：{'、'.join(added)}")
-        if not removed and not added:
-            lines.append("（未识别出明确变更，保持当前数据源）")
-        lines.append("")
-        lines.append("回复「确认」生效；或告诉我其他调整（如「改到10点」「也推给张工」）。")
-
     elif intent == "set_per_source":
-        # v1.14.0：每源独立总结（开启/关闭，确认后落地）
+        # v1.12.5：每源独立总结（开启/关闭，确认后落地）
         per_source = bool(pending.get("per_source"))
         lines.append("好的，将调整订阅的输出方式：")
         lines.append("📦 " + ("每个数据源单独总结一条（各自聚焦、互不混合）"
@@ -731,7 +727,7 @@ def render_confirmation(pending: dict, current=None) -> str:
         lines.append("回复「确认」保存模板并应用到您的看板；回复「取消」则不保存。")
 
     elif intent == "edit_template":
-        # v1.13.0：编辑已有用户模板内容（整体重述覆盖）
+        # v1.12.1：编辑已有用户模板内容（整体重述覆盖）
         name = pending.get("template_name") or pending.get("template_key") or ""
         lines.append(f"好的，将把「{name}」模板调整为以下结构：")
         lines.append(f"📐 {format_spec_summary(pending.get('section_spec'))}")
@@ -753,7 +749,7 @@ def is_kanban_topic(text: str) -> bool:
 
 
 # ===== pending 与看板活动 =====
-# v1.13.0（M3）：pending 统一收口到 pending_context（type=kanban），薄封装保留 API；
+# v1.12.1（M3）：pending 统一收口到 pending_context（type=kanban），薄封装保留 API；
 # 看板活动窗口（_activity_by_user）是「最近聊过看板」的承接安全判定，与 pending 独立保留。
 _ACTIVITY_TIMEOUT = 600   # 最近看板活动（秒），用于确认词防误触
 _activity_lock = threading.Lock()

@@ -934,7 +934,7 @@ class ReadDocumentUnknownKindTests(unittest.TestCase):
 
 
 class DetectKindFolderTests(unittest.TestCase):
-    """v1.13.0：dws 权威元信息识别文件夹（nodeType=folder 前置探测，三类 API 不再白试）"""
+    """v1.12.3：dws 权威元信息识别文件夹（nodeType=folder 前置探测，三类 API 不再白试）"""
 
     def _client_with_meta(self, meta: dict):
         from dingtalk_doc_client import DingTalkDocClient
@@ -972,7 +972,7 @@ class DetectKindFolderTests(unittest.TestCase):
 
 
 class ListFolderChildrenTests(unittest.TestCase):
-    """v1.13.0：dws drive list 枚举文件夹子节点（folder 参数用 nodeId 作 dentryUuid）"""
+    """v1.12.3：dws drive list 枚举文件夹子节点（folder 参数用 nodeId 作 dentryUuid）"""
 
     def test_parses_children_and_filters_file(self):
         from dingtalk_doc_client import DingTalkDocClient
@@ -1031,7 +1031,7 @@ class ListFolderChildrenTests(unittest.TestCase):
 
 
 class ReadDocumentFolderTests(unittest.TestCase):
-    """v1.13.0：read_document folder 分支返回子节点枚举 + 文件夹名"""
+    """v1.12.3：read_document folder 分支返回子节点枚举 + 文件夹名"""
 
     def test_folder_branch_returns_children_and_name(self):
         from dingtalk_doc_client import DingTalkDocClient
@@ -1069,7 +1069,7 @@ class ReadDocumentFolderTests(unittest.TestCase):
 
 
 class BotFolderLinkTests(unittest.TestCase):
-    """v1.13.0 bot 识别文件夹链接：回复文件夹概要 + 登记看板源（enabled）"""
+    """v1.12.3 bot 识别文件夹链接：回复文件夹概要 + 登记看板源（enabled）"""
 
     def setUp(self):
         from dashboard.doc_candidates import DocCandidateStore

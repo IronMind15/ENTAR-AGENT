@@ -177,7 +177,7 @@ class BotFileCommandGateTests(unittest.TestCase):
     def test_clarify_cancel_via_bot(self):
         """澄清反问中用户回「取消」→ 已取消且不执行任何操作
 
-        v1.13.0（M3）：取消走统一 pending 路由（先于 clarify 分派），
+        v1.12.1（M3）：取消走统一 pending 路由（先于 clarify 分派），
         source 为 pending_cancel，澄清被清空。
         """
         result = self.handler._process_text("删除 d4-1 的看板", "u2", "s2")

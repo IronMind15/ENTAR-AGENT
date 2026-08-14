@@ -67,7 +67,7 @@ class Subscription:
     recipients: list = field(default_factory=list)     # batchSend staff_id，含 owner
     title: str = "恩特能源每日项目看板"
     template_id: str = "daily"           # 看板模板键（v1.12.0，输出格式）
-    per_source: bool = False   # v1.14.0：每源独立总结（True=每个数据源单独一条，False=合并一份报告）
+    per_source: bool = False   # v1.12.5：每源独立总结（True=每个数据源单独一条，False=合并一份报告）
     last_snapshot: Optional[list] = None   # alerts.make_snapshot 输出
     last_pushed_at: str = ""
     enabled: bool = True
@@ -79,7 +79,7 @@ class Subscription:
 
         v1.12.0 加入 template_id：同来源同时段不同格式不视为重复订阅——
         用户可能故意同时要「每日简报」和「周报总结」两个输出。
-        v1.14.0 加入 per_source：同一来源同时段「合并总结」与「每源独立总结」
+        v1.12.5 加入 per_source：同一来源同时段「合并总结」与「每源独立总结」
         是两种输出模式，允许并存（视为不同业务配置）。
         """
         return (
@@ -153,7 +153,7 @@ class SubscriptionStore:
         # v1.12.0 迁移：老库补 template_id 列（默认 daily，等价于旧行为）
         self._ensure_column(conn, "dashboard_subscriptions", "template_id",
                             "TEXT DEFAULT 'daily'")
-        # v1.14.0 迁移：老库补 per_source 列（默认 0=合并总结，等价于旧行为）
+        # v1.12.5 迁移：老库补 per_source 列（默认 0=合并总结，等价于旧行为）
         self._ensure_column(conn, "dashboard_subscriptions", "per_source",
                             "INTEGER DEFAULT 0")
         conn.commit()
@@ -237,10 +237,27 @@ class SubscriptionStore:
         return [self._row_to_sub(r) for r in rows]
 
     def find_exact_duplicate(self, candidate: Subscription) -> Optional[Subscription]:
-        """查找与候选订阅业务配置完全相同的记录。"""
-        wanted = candidate.fingerprint()
+        """查找与候选订阅业务配置完全相同的记录。
+
+        v1.12.6（C6）：来源集合按实时解析的有效 key 比较（effective_source_keys）
+        ——订阅不再绑定固定快照，同 owner 当前候选相同即视为同一订阅（新发布/
+        删除的文档自动反映，不会因快照不同误建第二条订阅）。模板/每源独立总结/
+        时间/接收人/提醒模式仍参与区分，允许故意并存的不同输出。
+        """
+        from dashboard.service import effective_source_keys
+        wanted = set(effective_source_keys(candidate))
         for existing in self.list_for_owner(candidate.owner_user_id):
-            if existing.fingerprint() == wanted:
+            if (int(existing.push_hour) == int(candidate.push_hour)
+                    and int(existing.push_minute) == int(candidate.push_minute)
+                    and (existing.weekdays or "") == (candidate.weekdays or "")
+                    and (existing.alert_mode or "always")
+                    == (candidate.alert_mode or "always")
+                    and tuple(sorted(str(x) for x in existing.recipients))
+                    == tuple(sorted(str(x) for x in candidate.recipients))
+                    and (existing.template_id or "daily")
+                    == (candidate.template_id or "daily")
+                    and int(existing.per_source) == int(candidate.per_source)
+                    and set(effective_source_keys(existing)) == wanted):
                 return existing
         return None
 

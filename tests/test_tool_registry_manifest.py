@@ -7,7 +7,7 @@ v1.12.0 注册中心 + 能力清单测试
 - 改名断言：10 个新名注册、8 个旧名排除（tripwire）
 - definitions name 与注册 key 恒等
 - 停用守卫：search_standards / search_experience_kb 不再注册
-- 能力清单完整性：10 工具 / 5 技能 / 16 意图 / enabled 命令 + regex 可编译
+- 能力清单完整性：10 工具 / 5 技能 / 17 意图 / enabled 命令 + regex 可编译
 """
 
 import json
@@ -106,7 +106,7 @@ class ToolRegistryTests(unittest.TestCase):
 
 class CapabilityManifestTests(unittest.TestCase):
     def test_manifest_integrity(self):
-        """能力清单完整性：10 工具 / 5 技能 / 15 意图 / enabled 命令 + regex 可编译"""
+        """能力清单完整性：10 工具 / 5 技能 / 17 意图 / enabled 命令 + regex 可编译"""
         import capability_manifest as cm
 
         tools = cm.collect_tools()
@@ -118,7 +118,7 @@ class CapabilityManifestTests(unittest.TestCase):
         self.assertFalse(any("error" in s for s in skills))
 
         intents = cm.collect_dashboard_intents()
-        self.assertEqual(len(intents), 18)  # v1.14.0：新增 change_sources + set_per_source
+        self.assertEqual(len(intents), 17)  # v1.12.6：删 change_sources（用户未设计的绑定/解绑）
         self.assertFalse(any("error" in i for i in intents))
 
         cmds = cm.collect_bot_commands()

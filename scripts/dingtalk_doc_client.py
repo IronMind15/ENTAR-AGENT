@@ -143,7 +143,7 @@ class DingTalkDocClient:
         return str(self.get_document_metadata(node_id).get("name") or "").strip()
 
     def list_folder_children(self, node_id: str) -> list[dict]:
-        """枚举文件夹子节点（v1.13.0，做看板数据源动态取最新用）。
+        """枚举文件夹子节点（v1.12.3，做看板数据源动态取最新用）。
 
         调 `dws drive list --workspace {ws} --folder {nodeId}`——folder 参数须用
         文件夹的 **nodeId**（dentryUuid），不是 folderId；且必须带 workspace
@@ -659,7 +659,7 @@ class DingTalkDocClient:
 
     def _detect_kind_uncached(self, node_id: str, operator_id: str = "") -> str:
         """detect_kind 无缓存本体（探测 API 实际调用处）"""
-        # v1.13.0：先试 dws 权威元信息——文件夹（nodeType=folder）三类 API 必 400，
+        # v1.12.3：先试 dws 权威元信息——文件夹（nodeType=folder）三类 API 必 400，
         # 直接用 dws doc info 识别（已有缓存，零额外成本）；dws 不可用时自然落回三类 API。
         meta = self.get_document_metadata(node_id)
         if meta.get("nodeType") == "folder":
@@ -850,7 +850,7 @@ class DingTalkDocClient:
                     "message": f"普通文档读取暂不可用，可先『帮我学习』入库（{str(e)[:100]}）",
                 }
         if kind == "folder":
-            # v1.13.0：文件夹不直接读内容，枚举子节点供 bot 预览 + 看板采集动态取最新。
+            # v1.12.3：文件夹不直接读内容，枚举子节点供 bot 预览 + 看板采集动态取最新。
             children = self.list_folder_children(node_id)
             children.sort(key=lambda c: c.get("updateTime") or 0, reverse=True)
             folder_name = document_name or "文件夹"

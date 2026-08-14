@@ -9,17 +9,47 @@ SCRIPTS_DIR = PROJECT_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from dashboard.config_model import load_sources  # noqa: E402
+from dashboard.config_model import FieldSpec, SourceConfig  # noqa: E402
 from dashboard.parser import (  # noqa: E402
     extract_cell_value, find_latest_week_table, format_number, parse_source_records,
 )
 
 
+def _fixture_sources():
+    """A1（v1.12.6）后静态配置已清空，测试自行构造 SourceConfig 双源 fixture。"""
+    return {
+        "project_status": SourceConfig(
+            key="project_status", name="研发项目现况表", kind="notable",
+            base_id="b1",
+            field_map={
+                "01ZM8y7": FieldSpec(label="项目名称", type="list_name"),
+                "7qnPz0F": FieldSpec(label="阶段", type="dict_name"),
+                "YQnOvE5": FieldSpec(label="状态", type="dict_name"),
+                "FjrTLFt": FieldSpec(label="产品型号", type="string"),
+                "aepzDFy": FieldSpec(label="本周进展", type="string", max_len=200),
+                "uWD6X8E": FieldSpec(label="风险卡点", type="string", max_len=200),
+            },
+            status_groups={"attention": ["滞后"], "normal": ["正常"]},
+        ),
+        "test_issues": SourceConfig(
+            key="test_issues", name="整机下线测试问题", kind="notable",
+            base_id="b2",
+            field_map={
+                "Hr3tyzt": FieldSpec(label="状态", type="dict_name"),
+                "GuqYscv": FieldSpec(label="SN号", type="string"),
+                "ChZTtyj": FieldSpec(label="描述", type="string"),
+            },
+            status_groups={"attention": ["故障", "待验证"],
+                           "normal": ["已完成", "已打包"]},
+        ),
+    }
+
+
 def _source_by_key(key: str):
-    for s in load_sources():
-        if s.key == key:
-            return s
-    raise AssertionError(f"dashboard_sources.json 缺少数据源 {key}")
+    src = _fixture_sources().get(key)
+    if src is None:
+        raise AssertionError(f"fixture 缺少数据源 {key}")
+    return src
 
 
 class ExtractCellValueTests(unittest.TestCase):

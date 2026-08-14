@@ -63,41 +63,66 @@ def build_dynamic_source(cand) -> "SourceConfig":
 
 
 def resolve_subscription_sources(sub) -> list:
-    """订阅 data_sources → SourceConfig 列表
+    """订阅 → SourceConfig 列表（v1.12.6，C6：每次推送实时解析）
 
-    - `doc_<id>` key：查文档候选 → build_dynamic_source（候选缺失/已删则跳过）
-    - 其余 key：配置源 get_source（缺配置则跳过）
+    v1.12.6（C6）改版：订阅取消持久绑定——每次推送实时拉取 owner 当前
+    enabled 的文档候选（doc_candidates.list_dashboard_ready，按 user_id
+    隔离）+ 静态配置源。用户新发布的文件自动进入下次推送（需求「发布的
+    每个文件都能被解读到」）；不同 owner 的文件互不影响（隔离，C7 后不
+    存在跨订阅改数据源）。懒执行：本函数只在推送/预览/查询时被调用。
+
+    `sub.data_sources` 仅作迁移兜底：owner 无任何动态候选且静态源为空时，
+    回退旧绑定解析（老订阅不丢源；doc_ 键不再参与，防跨用户引用）。
     """
-    from .config_model import get_source, source_usable
-    from .doc_candidates import get_candidate_store
     out = []
-    cand_store = None
+    try:
+        from .doc_candidates import get_candidate_store
+        owner = getattr(sub, "owner_user_id", "") or getattr(sub, "owner_union_id", "")
+        for cand in get_candidate_store().list_dashboard_ready(owner):
+            out.append(build_dynamic_source(cand))
+    except Exception as e:
+        logger.warning(f"拉取订阅 owner 动态候选失败: {e}")
+    out.extend(load_enabled_sources())
+    if out:
+        return out
+    return _resolve_stored_config_sources(sub)
+
+
+def _resolve_stored_config_sources(sub) -> list:
+    """迁移兜底：旧绑定里的配置源 key（doc_ 键由实时候选接管，不再走此路）"""
+    from .config_model import get_source, source_usable
+    out = []
     for key in sub.data_sources or []:
         if isinstance(key, str) and key.startswith("doc_"):
-            try:
-                cand_id = int(key[len("doc_"):])
-                if cand_store is None:
-                    cand_store = get_candidate_store()
-                cand = cand_store.get(cand_id)
-                if cand and cand.enabled:
-                    out.append(build_dynamic_source(cand))
-            except Exception:
-                continue
-        else:
-            src = get_source(key)
-            if src and src.enabled and source_usable(src):
-                out.append(src)
+            continue
+        src = get_source(key)
+        if src and src.enabled and source_usable(src):
+            out.append(src)
     return out
 
 
+def effective_source_keys(sub) -> set:
+    """订阅当前生效的数据源 key 集合（C6：实时解析，去重/覆盖判断用）"""
+    try:
+        return {s.key for s in resolve_subscription_sources(sub)}
+    except Exception:
+        return set(getattr(sub, "data_sources", None) or [])
+
+
 def source_resolution_warnings(sub, resolved_sources: list) -> list[str]:
-    """报告订阅里已删除、停用或失效的数据源，避免部分缺数却静默出报。"""
-    resolved = {source.key for source in resolved_sources}
-    missing = [key for key in (sub.data_sources or []) if key not in resolved]
-    if not missing:
+    """C6 后：仅当订阅当前全无数据源、但曾绑定过时提示（迁移兜底）。
+
+    旧逻辑比对 sub.data_sources 与解析结果差集——C6 订阅实时拉取 owner
+    enabled 候选，旧绑定不再参与解析，「部分源缺失」不再是常见态。仅当
+    解析为空而旧绑定非空（老订阅源全部失效）时提醒，避免静默空推。
+    """
+    if resolved_sources:
         return []
-    return [f"订阅中有 {len(missing)} 个数据源已删除、停用或配置不可用："
-            + "、".join(missing[:5])]
+    stored = [str(k) for k in (sub.data_sources or [])]
+    if not stored:
+        return []
+    return [f"订阅原本绑定了 {len(stored)} 个数据源，现全部不可用"
+            "（已删除、停用或未配置）：" + "、".join(stored[:5])]
 
 
 def load_all_available_sources(user_id: str = "") -> list:
@@ -119,7 +144,9 @@ def load_all_available_sources(user_id: str = "") -> list:
 def collect_and_parse(sources: list, operator_id: str = "", staff_id: str = ""):
     """采集 → 解析，返回 (parsed_results, errors)
 
-    - 单源失败（error 非空）或空记录的数据源跳过，进 errors（不中断整体）
+    - 单源全失败（error 非空且无 records）跳过，进 errors（不中断整体）
+    - v1.12.6（C8）：部分失败（error 与 records 并存，如文件夹个别子文档失败）
+      保留已采记录并同时上报 error，不整源丢弃
     - parsed: parse_source_records 结果列表
     """
     from .collector import Collector
@@ -131,11 +158,15 @@ def collect_and_parse(sources: list, operator_id: str = "", staff_id: str = ""):
     parsed = []
     errors = []
     for c in collected:
-        if c.get("error"):
+        if c.get("error") and not c.get("records"):
             errors.append(f"{c.get('name') or c.get('source_key')}: {c['error']}")
             continue
         src = src_by_key.get(c["source_key"])
         if src and c.get("records"):
+            # v1.12.6（C8）：文件夹部分子文档失败 → error 与 records 并存。
+            # 保留已采到的记录（不整源丢弃），同时把失败项上报，让报告提示不完整。
+            if c.get("error"):
+                errors.append(f"{c.get('name') or c.get('source_key')}: {c['error']}")
             # 采集器可能取得了文件级真实标题；传给 parser，不能再退回候选旧名。
             if c.get("name") and c.get("name") != src.name:
                 from dataclasses import replace
@@ -197,7 +228,7 @@ def assemble_per_source_messages(parsed: list, title: str = "恩特能源每日�
                                  template=None) -> list[str]:
     """每个数据源单独跑一轮组装 → 每个源总结一条（识别/预览逐源聚焦）。
 
-    v1.13.0（消息流）：数据源多时一次性全塞 LLM reduce 复杂/超限。这里按源
+    v1.12.5（消息流）：数据源多时一次性全塞 LLM reduce 复杂/超限。这里按源
     拆分——LLM 每次只总结一个源（更聚焦、不超上下文），每个源的结果作为一条
     消息返回，调用方顺序发送。
 

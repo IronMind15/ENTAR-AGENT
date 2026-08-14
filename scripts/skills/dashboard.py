@@ -13,7 +13,6 @@ import re
 
 from dashboard import service
 from dashboard import subscription_commands as sub_cmd
-from dashboard.config_model import load_sources
 from dashboard.subscription_store import Subscription, get_subscription_store
 from skills import BaseSkill, register
 
@@ -48,11 +47,15 @@ class DashboardSkill(BaseSkill):
         # 内部限定 pending choose_template + 反问窗口，普通聊天不会误拦。
         if sub_cmd.parse_template_choice(q, user_id) is not None:
             return True
+        # v1.12.6（B5）：口语序数选择（「我说选第一个」）。同样不含「看板」，且绑
+        # kanban pending + 反问窗口——否则落 Agent 无工具可用，实测编造「工单转达」幻觉。
+        if sub_cmd.parse_spoken_choice(q, user_id) is not None:
+            return True
         # 第 0 步：「按这几个文档做每日看板」（_NEGATIVE_RE 含「文档」会拦常规路径，需提前）
         if sub_cmd.parse_doc_dashboard_intent(q) is not None:
             return True
         if sub_cmd.is_kanban_topic(q):
-            # v1.13.0：概念疑问句（「看板数据源和看板任务是分开的吗」）→ LLM 判歧义，
+            # v1.12.3：概念疑问句（「看板数据源和看板任务是分开的吗」）→ LLM 判歧义，
             # 判定非订阅管理 → 放行给 Agent 正常问答（修复 query 意图吞问题）。
             # 明确管理动词/明确查询无疑问词 → 走正则快速路径，不付 LLM 成本。
             if sub_cmd.needs_kanban_ambiguity_check(q):
@@ -103,6 +106,10 @@ class DashboardSkill(BaseSkill):
         choice = sub_cmd.parse_template_choice(q, uid)
         if choice:
             return cls._execute_template_choice(choice, uid)
+        # v1.12.6（B5）：口语序数选择（「我说选第一个」等），防落 Agent 幻觉
+        spoken = sub_cmd.parse_spoken_choice(q, uid)
+        if spoken:
+            return cls._handle_spoken_choice(spoken, uid)
 
         # “现在帮我全部删除”只有在该用户刚查看/管理过看板时才承接，避免误删。
         if sub_cmd.is_contextual_delete(q) and had_recent_activity:
@@ -191,7 +198,7 @@ class DashboardSkill(BaseSkill):
             return {"answer": sub_cmd.render_confirmation(pending), "source": "dashboard"}
 
         if intent == "edit_template":
-            # v1.13.0：编辑模板内容（整体重述覆盖 → 确认 → 覆盖保存）
+            # v1.12.1：编辑模板内容（整体重述覆盖 → 确认 → 覆盖保存）
             sub_cmd.touch_activity(uid)
             return cls._handle_edit_template(q, uid, parsed)
 
@@ -214,12 +221,8 @@ class DashboardSkill(BaseSkill):
             sub_cmd.set_pending(uid, pending)
             return {"answer": sub_cmd.render_confirmation(pending), "source": "dashboard"}
 
-        if intent == "change_sources":
-            # v1.14.0：调整订阅数据源（按名称匹配真实源 → 确认 → 落地）
-            return cls._handle_change_sources(q, uid)
-
         if intent == "set_per_source":
-            # v1.14.0：每源独立总结（开启/关闭 → 确认 → 落地）
+            # v1.12.5：每源独立总结（开启/关闭 → 确认 → 落地）
             return cls._handle_set_per_source(q, uid, parsed)
 
         if intent == "set_recipient_self":
@@ -251,71 +254,8 @@ class DashboardSkill(BaseSkill):
 
     # ===== 辅助 =====
     @classmethod
-    def _handle_change_sources(cls, text: str, user_id: str) -> dict:
-        """v1.14.0：调整订阅数据源（按名称匹配真实源 → 确认 → 落地）
-
-        用户说「测试ai表格的数据源帮我删掉」「加个项目进度计划表数据源」——
-        不带「看板」也能进（parse 门槛已放宽）。只认订阅真实拥有的源，
-        识别不到或不在订阅时如实提示，不编造「已修改」。
-        """
-        store = get_subscription_store()
-        subs = store.list_for_owner(user_id)
-        if not subs:
-            return {"answer": "您还没有订阅看板。说「帮我推个看板」先开通，再调整数据源。",
-                    "source": "dashboard"}
-        parsed = cls._parse_change_sources(text, user_id, subs[0])
-        if not (parsed["remove_keys"] or parsed["add_keys"]):
-            return {"answer":
-                    "没识别出要调整的数据源。当前订阅数据源说「看板状态」查看；"
-                    "可说「把XX数据源删掉」或「加个XX数据源」（XX 为数据源名称）。",
-                    "source": "dashboard"}
-        pending = {"intent": "change_sources", "sub_id": subs[0].id, **parsed}
-        sub_cmd.set_pending(user_id, pending)
-        return {"answer": sub_cmd.render_confirmation(pending, current=subs[0]),
-                "source": "dashboard"}
-
-    @classmethod
-    def _parse_change_sources(cls, text: str, user_id: str, sub) -> dict:
-        """按展示名在订阅源/可选源里匹配文本，返回增删清单。
-
-        - remove：订阅当前拥有的源，名出现在文本 → 移除
-        - add：可选源（config + 该用户 enabled 候选）未在订阅，名出现在文本 → 添加
-        """
-        from dashboard.service import load_all_available_sources, resolve_subscription_sources
-        action = sub_cmd.is_change_sources_action(text)
-        name_by_key: dict[str, str] = {}
-        try:
-            for src in resolve_subscription_sources(sub):
-                name_by_key[src.key] = src.name
-        except Exception:
-            pass
-        candidate: dict[str, str] = {}
-        try:
-            for src in load_all_available_sources(user_id=user_id):
-                candidate[src.name] = src.key
-        except Exception:
-            pass
-
-        remove_keys, remove_names = [], []
-        add_keys, add_names = [], []
-        if action == "remove":
-            for key, name in name_by_key.items():
-                if name and name in text and key in sub.data_sources:
-                    if key not in remove_keys:
-                        remove_keys.append(key)
-                        remove_names.append(name)
-        elif action == "add":
-            for name, key in candidate.items():
-                if name and name in text and key not in sub.data_sources:
-                    if key not in add_keys:
-                        add_keys.append(key)
-                        add_names.append(name)
-        return {"remove_keys": remove_keys, "remove_names": remove_names,
-                "add_keys": add_keys, "add_names": add_names}
-
-    @classmethod
     def _handle_set_per_source(cls, text: str, user_id: str, parsed: dict) -> dict:
-        """v1.14.0：每源独立总结（开启/关闭 → 确认 → 落地）
+        """v1.12.5：每源独立总结（开启/关闭 → 确认 → 落地）
 
         用户说「四份文件各自独立总结」「合并成一份」——不带「看板」也能进
         （parse 门槛已放宽）。输出模式是订阅级配置，确认后按真实 update 结果回报，
@@ -384,10 +324,18 @@ class DashboardSkill(BaseSkill):
     @classmethod
     def _build_create_pending(cls, user_id: str) -> dict:
         staff_id = cls._staff_id_of(user_id)
-        sources = [s.key for s in load_sources() if s.enabled]
+        # v1.12.6（C6）：静态配置已清空（A1），创建时即快照 owner 当前 enabled
+        # 候选做确认展示；推送真正发生时按实时解析拉取（新发布自动纳入）。
+        sources = []
+        try:
+            from dashboard.doc_candidates import get_candidate_store
+            cands = get_candidate_store().list_dashboard_ready(user_id)
+            sources = [f"doc_{c.id}" for c in cands]
+        except Exception as e:
+            logger.warning(f"拉取创建看板候选失败: {e}")
         return {
             "intent": "create",
-            "data_sources": sources or [],
+            "data_sources": sources,
             "push_hour": 9, "push_minute": 0,
             "weekdays": "", "alert_mode": "always",
             "title": "恩特能源每日项目看板",
@@ -424,6 +372,42 @@ class DashboardSkill(BaseSkill):
             store.update(s)
         note = cls._push_sample(owned[0])
         return {"answer": f"✅ 已将看板切换为「{tpl.name}」模板。{note}",
+                "source": "dashboard"}
+
+    @classmethod
+    def _handle_spoken_choice(cls, choice: dict, user_id: str) -> dict:
+        """口语序数选择（v1.12.6，B5）——接住「我说选第一个」防落 Agent 幻觉。
+
+        仅 choose_template 反问有编号候选项可映射（第 1→每日、第 2→周报、第 3→
+        项目，与数字 1/2/3 同义）；其余 pending 的确认流程没有「第 N 项」候选项，
+        如实说明并重申确认入口——不编造能力（工单幻觉根因之一，袁会荧 2026-08-14）。
+        """
+        uid = user_id or ""
+        pending = sub_cmd.get_pending(uid)
+        index = choice.get("index") or 0
+        if pending and pending.get("intent") == "choose_template":
+            if 1 <= index <= 3:
+                return cls._execute_template_choice(
+                    {"intent": "choose_template",
+                     "choice": ("daily", "weekly", "project")[index - 1]}, uid)
+            # 超出候选项 → 重列模板（不编造），pending 保留待用户再选
+            return {"answer":
+                    "当前只有 3 个模板可选：\n"
+                    "1 每日简报\n2 周报总结\n3 项目看板\n"
+                    "回复数字或模板名即可。",
+                    "source": "dashboard"}
+        # 其余 pending：确认流程没有分项候选项，如实说明并重申确认入口
+        if pending:
+            base = sub_cmd.render_confirmation(pending)
+            return {"answer":
+                    f"收到，您说的是第 {index} 项。不过我正等您确认的看板操作没有分项"
+                    f"候选项——请回复「确认」执行，或直接告诉我调整（如「改到10点」"
+                    f"「每周一和周五」「停掉看板」）。\n"
+                    f"（说明：我没有「工单/转达」这类功能，如需调整看板请直接说具体指令。）\n\n"
+                    f"{base}",
+                    "source": "dashboard"}
+        return {"answer": "我正等您确认看板操作，但还没收到待确认内容。"
+                          "说「帮我推个看板」即可开通。",
                 "source": "dashboard"}
 
     @classmethod
@@ -504,39 +488,8 @@ class DashboardSkill(BaseSkill):
             action = "恢复" if desired else "停止"
             return {"answer": f"✅ 已{action} {changed} 个看板订阅。", "source": "dashboard"}
 
-        if intent == "change_sources":
-            # v1.14.0：调整订阅数据源（按真实 update 结果回报，禁止吞错谎报）
-            sub = store.get(pending.get("sub_id") or 0)
-            if not sub:
-                sub_cmd.clear_pending(user_id)
-                return {"answer": "订阅不存在，可能是已删除。说「帮我推个看板」重新开通。",
-                        "source": "dashboard"}
-            owned_ids = {s.id for s in store.list_for_owner(user_id)}
-            if sub.id not in owned_ids:
-                sub_cmd.clear_pending(user_id)
-                return {"answer": "该订阅不属于您，无法调整数据源。", "source": "dashboard"}
-            removed, added = [], []
-            for key in pending.get("remove_keys") or []:
-                if key in sub.data_sources:
-                    sub.data_sources.remove(key)
-                    removed.append(key)
-            for key in pending.get("add_keys") or []:
-                if key not in sub.data_sources:
-                    sub.data_sources.append(key)
-                    added.append(key)
-            store.update(sub)
-            sub_cmd.clear_pending(user_id)
-            parts = []
-            if removed:
-                parts.append(f"移除 {len(removed)} 个数据源")
-            if added:
-                parts.append(f"添加 {len(added)} 个数据源")
-            return {"answer":
-                    f"✅ 已调整看板数据源：{'；'.join(parts)}。下次推送即按新数据源执行。",
-                    "source": "dashboard"}
-
         if intent == "set_per_source":
-            # v1.14.0：每源独立总结（按真实 update 结果回报，禁止吞错谎报）
+            # v1.12.5：每源独立总结（按真实 update 结果回报，禁止吞错谎报）
             sub = store.get(pending.get("sub_id") or 0)
             if not sub:
                 sub_cmd.clear_pending(user_id)
@@ -596,7 +549,7 @@ class DashboardSkill(BaseSkill):
                     "source": "dashboard"}
 
         if intent == "edit_template":
-            # v1.13.0：编辑已有用户模板内容（精确 key 更新，不靠同名匹配）
+            # v1.12.1：编辑已有用户模板内容（精确 key 更新，不靠同名匹配）
             key = pending.get("template_key")
             tpl = cls._match_template_key(key, user_id)
             if not tpl or tpl.scope != "user":
@@ -664,7 +617,7 @@ class DashboardSkill(BaseSkill):
         if not parsed:
             msg = "；".join(errors[:2]) or "无数据"
             return f"（推送前准备失败：{msg}，配置好数据源后每日自动推送）"
-        # 样例推送（识别/预览场景）v1.13.0 改逐源多条：每个数据源单独 LLM 总结
+        # 样例推送（识别/预览场景）v1.12.5 改逐源多条：每个数据源单独 LLM 总结
         # 发一条，逐源聚焦、全面识别不被单条字数限制压缩；而不是一份报告切页。
         # 复用 LLM 组装（失败规则兜底）+ 订阅模板输出格式。
         template = service.resolve_template(sub)
@@ -710,15 +663,18 @@ class DashboardSkill(BaseSkill):
         for index, left in enumerate(subs):
             if not left.enabled:
                 continue
-            left_sources = set(left.data_sources)
+            # v1.12.6（C6）：重合度按实时解析的有效来源集合判断，不再比对
+            # 陈旧绑定快照（新发布/删除的文件自动反映到最新集合）。
+            left_sources = service.effective_source_keys(left)
             for right in subs[index + 1:]:
                 if not right.enabled:
                     continue
                 if (left.push_hour, left.push_minute, left.weekdays or "") != (
                         right.push_hour, right.push_minute, right.weekdays or ""):
                     continue
-                union = left_sources | set(right.data_sources)
-                score = len(left_sources & set(right.data_sources)) / len(union) if union else 1.0
+                right_sources = service.effective_source_keys(right)
+                union = left_sources | right_sources
+                score = len(left_sources & right_sources) / len(union) if union else 1.0
                 if score >= 0.5:
                     overlaps.append((left.id, right.id, round(score * 100)))
         if overlaps:
@@ -945,7 +901,7 @@ class DashboardSkill(BaseSkill):
             pass
         return ""
 
-    # ===== v1.13.0 编辑模板内容（整体重述覆盖） =====
+    # ===== v1.12.1 编辑模板内容（整体重述覆盖） =====
     @classmethod
     def _handle_edit_template(cls, text: str, user_id: str, parsed: dict) -> dict:
         """编辑已有用户模板：目标解析 → 有描述生成 spec 入 pending，无描述展示当前内容引导"""

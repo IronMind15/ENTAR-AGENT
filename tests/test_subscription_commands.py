@@ -11,6 +11,15 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from dashboard import subscription_commands as sc  # noqa: E402
+from dashboard.config_model import SourceConfig  # noqa: E402
+
+# A1（v1.12.6）后静态配置已清空，渲染名需 mock config_model.load_sources
+_FIXTURE_SOURCES = [
+    SourceConfig(key="project_status", name="研发项目现况表",
+                 base_id="b1", enabled=True),
+    SourceConfig(key="test_issues", name="整机下线测试问题",
+                 base_id="b2", enabled=True),
+]
 
 
 class ParseIntentTests(unittest.TestCase):
@@ -207,7 +216,7 @@ class ResolveRecipientTests(unittest.TestCase):
 
 class PendingTests(unittest.TestCase):
     def setUp(self):
-        # v1.13.0（M3）：pending 统一收口到 pending_context，patch 目标迁移
+        # v1.12.1（M3）：pending 统一收口到 pending_context，patch 目标迁移
         import pending_context
         self._patched = mock.patch.object(pending_context, "_pending", {})
         self._patched.start()
@@ -225,7 +234,9 @@ class PendingTests(unittest.TestCase):
 
 
 class RenderConfirmationTests(unittest.TestCase):
-    def test_create_confirmation(self):
+    @mock.patch("dashboard.config_model.load_sources",
+                return_value=_FIXTURE_SOURCES)
+    def test_create_confirmation(self, mock_load):
         pending = {
             "intent": "create",
             "data_sources": ["project_status", "test_issues"],
@@ -300,13 +311,13 @@ class LLMVerifyUnitTests(unittest.TestCase):
         self.assertTrue(sc._needs_llm_verify("不要推给别人", "change_recipients"))
         self.assertFalse(sc._needs_llm_verify("帮我推个看板", "create"))
         self.assertFalse(sc._needs_llm_verify("也推给张工", "change_recipients"))
-        # v1.13.0：概念疑问句命中 query 意图也复核（防被 _QUERY_RE 吞成查订阅状态）
+        # v1.12.3：概念疑问句命中 query 意图也复核（防被 _QUERY_RE 吞成查订阅状态）
         self.assertTrue(sc._needs_llm_verify(
             "现在的看板数据源和看板任务是分开的吗", "query"))
         self.assertFalse(sc._needs_llm_verify("我的看板", "query"))
 
     def test_needs_kanban_ambiguity_check(self):
-        """v1.13.0：看板话题 + 疑问词 → True；明确管理/查询无疑问词 → False"""
+        """v1.12.3：看板话题 + 疑问词 → True；明确管理/查询无疑问词 → False"""
         self.assertTrue(sc.needs_kanban_ambiguity_check(
             "现在的看板数据源和看板任务是分开的吗"))
         self.assertTrue(sc.needs_kanban_ambiguity_check("看板推送是不是要收费"))
@@ -378,54 +389,8 @@ class FeatureRegressionTests(unittest.TestCase):
         self.assertIsNone(sc.parse_doc_dashboard_intent("把文档学习入库"))
 
 
-class ChangeSourcesTests(unittest.TestCase):
-    """v1.14.0：调整订阅数据源意图（数据源话题词，不带「看板」也识别）"""
-
-    def test_parse_remove_variants(self):
-        for text in ("测试ai表格的数据源帮我删掉",
-                     "删掉测试ai表格数据源",
-                     "把整机下线测试问题沟通数据源移除",
-                     "测试ai表格数据源别要了"):
-            r = sc.parse_subscription_command(text)
-            self.assertIsNotNone(r, text)
-            self.assertEqual(r["intent"], "change_sources", text)
-
-    def test_parse_add_variants(self):
-        for text in ("加个项目进度计划表数据源",
-                     "添加一个恩特能源研发项目现况表数据源"):
-            r = sc.parse_subscription_command(text)
-            self.assertIsNotNone(r, text)
-            self.assertEqual(r["intent"], "change_sources", text)
-
-    def test_not_change_sources(self):
-        # 不含「数据源」话题词或增删动词 → 放行（不误拦普通句）
-        for text in ("这个表格帮我删掉", "帮我删除文件",
-                     "测试ai表格是什么", "今天天气怎么样"):
-            self.assertIsNone(sc.parse_subscription_command(text), text)
-
-    def test_delete_subscription_still_delete(self):
-        # 删除订阅（含「看板」）仍是 delete，不被 change_sources 抢
-        self.assertEqual(sc.parse_subscription_command("删除看板订阅")["intent"], "delete")
-
-    def test_action_classifier(self):
-        self.assertEqual(sc.is_change_sources_action("测试ai表格的数据源帮我删掉"), "remove")
-        self.assertEqual(sc.is_change_sources_action("删掉测试ai表格数据源"), "remove")
-        self.assertEqual(sc.is_change_sources_action("加个项目进度计划表数据源"), "add")
-        self.assertEqual(sc.is_change_sources_action("这个看板今天怎么样"), "")
-
-    def test_render_confirmation(self):
-        text = sc.render_confirmation({
-            "intent": "change_sources",
-            "remove_names": ["整机下线测试问题沟通"],
-            "add_names": ["项目进度计划表"],
-        })
-        self.assertIn("❌ 移除：整机下线测试问题沟通", text)
-        self.assertIn("➕ 添加：项目进度计划表", text)
-        self.assertIn("确认", text)
-
-
 class SetPerSourceTests(unittest.TestCase):
-    """v1.14.0：每源独立总结意图（不带「看板」也识别；关开两态）"""
+    """v1.12.5：每源独立总结意图（不带「看板」也识别；关开两态）"""
 
     def test_parse_on_variants(self):
         # 袁会荧实测需求「四份文件各自独立总结」——输出模式调整，无「看板」也能进

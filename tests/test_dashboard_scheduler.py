@@ -80,8 +80,12 @@ class IsDueTests(unittest.TestCase):
         full = _sub(id=5, data_sources=["doc_1", "doc_2", "doc_3"])
         subset_a = _sub(id=4, data_sources=["doc_1", "doc_2"])
         subset_b = _sub(id=6, data_sources=["doc_3"])
-        selected, suppressed = _deduplicate_due_subscriptions(
-            [subset_a, full, subset_b])
+        # C6（v1.12.6）：去重按实时解析的有效来源集合——mock effective_source_keys
+        # 以绑定快照为解析结果，覆盖集合语义与旧实现一致。
+        with mock.patch("dashboard.service.effective_source_keys",
+                        side_effect=lambda sub: set(sub.data_sources or [])):
+            selected, suppressed = _deduplicate_due_subscriptions(
+                [subset_a, full, subset_b])
         self.assertEqual([sub.id for sub in selected], [5])
         self.assertEqual(set(suppressed), {(4, 5), (6, 5)})
 
@@ -197,7 +201,7 @@ class ExecuteSubscriptionTests(unittest.TestCase):
         self.assertTrue(sent_text.startswith("📌 今日无变化"))
 
     def test_key_sources_expanded_into_messages(self):
-        """v1.13.0：汇总报告之外，变化最多 Top N 关键源单独展开一条；空变化不展开"""
+        """v1.12.5：汇总报告之外，变化最多 Top N 关键源单独展开一条；空变化不展开"""
         from types import SimpleNamespace
         sub_id = self._store.create(_sub(alert_mode="always"))
         sub = self._store.get(sub_id)
@@ -236,7 +240,7 @@ class ExecuteSubscriptionTests(unittest.TestCase):
         self.assertEqual(len(texts), 2)          # 空变化源不展开，共 2 条
 
     def test_per_source_uses_per_source_messages(self):
-        """v1.14.0：per_source 订阅走逐源组装（不合并报告、不做关键源展开），
+        """v1.12.5：per_source 订阅走逐源组装（不合并报告、不做关键源展开），
         变化 banner 注入第一条"""
         sub_id = self._store.create(_sub(alert_mode="always", per_source=True))
         sub = self._store.get(sub_id)
@@ -267,7 +271,7 @@ class ExecuteSubscriptionTests(unittest.TestCase):
         self.assertEqual(texts[1], per_source_msgs[1])
 
     def test_non_per_source_does_not_call_per_source(self):
-        """v1.14.0：默认合并订阅不误走逐源组装"""
+        """v1.12.6：默认合并订阅不误走逐源组装"""
         from types import SimpleNamespace
         sub_id = self._store.create(_sub(alert_mode="always"))
         sub = self._store.get(sub_id)

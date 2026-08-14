@@ -1,5 +1,6 @@
 """看板技能测试（v1.11.0）—— 订阅管理对话（mock store/service，不打真实 API）"""
 
+import contextlib
 import os
 import sys
 import unittest
@@ -12,7 +13,59 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from skills.dashboard import DashboardSkill  # noqa: E402
+from dashboard.config_model import SourceConfig  # noqa: E402
 from dashboard.template_store import _DEFAULT_SECTION_SPEC  # noqa: E402
+
+# A1（v1.12.6）后 dashboard_sources.json 静态配置已清空（数据源全走动态候选）。
+# C6（v1.12.6）后创建流程数据源 = owner 当前 enabled 候选（实时解析，新发布自动纳入）。
+# 统一用 fixture 预置 owner 可看板候选 + mock config_model.load_sources（名称兜底）：
+#   - dashboard.doc_candidates.get_candidate_store → 临时库预置可看板候选
+#   - dashboard.config_model.load_sources         → render_confirmation/_format_sources 兜底
+_FIXTURE_SOURCES = [
+    SourceConfig(key="project_status", name="研发项目现况表",
+                 base_id="b1", enabled=True),
+    SourceConfig(key="test_issues", name="整机下线测试问题",
+                 base_id="b2", enabled=True),
+]
+
+
+def _patch_sources_fixture(owner: str = "u1"):
+    """创建流程 fixture：mock 候选存储（2 个可看板文档）+ 静态源名称兜底。
+
+    C6（v1.12.6）：创建订阅的数据源不再来自静态配置，而是 owner 当前 enabled
+    候选——预置与 _FIXTURE_SOURCES 同名的两个候选（id 自动 1、2）。
+    """
+    import os
+    import tempfile
+    from dashboard.doc_candidates import DocCandidate, DocCandidateStore
+
+    stack = contextlib.ExitStack()
+    stack.enter_context(
+        mock.patch("dashboard.config_model.load_sources",
+                   return_value=_FIXTURE_SOURCES))
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    store = DocCandidateStore(db_path=path)
+    store.add(DocCandidate(user_id=owner, url="u1", node_id="n1",
+                           kind="notable", enabled=True, name="研发项目现况表"))
+    store.add(DocCandidate(user_id=owner, url="u2", node_id="n2",
+                           kind="notable", enabled=True, name="整机下线测试问题"))
+    stack.enter_context(
+        mock.patch("dashboard.doc_candidates.get_candidate_store",
+                   return_value=store))
+
+    def _cleanup():
+        store.close()
+        for suffix in ("", "-wal", "-shm"):
+            p = path + suffix
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+
+    stack.callback(_cleanup)
+    return stack
 
 
 class MatchTests(unittest.TestCase):
@@ -23,7 +76,7 @@ class MatchTests(unittest.TestCase):
             self.assertTrue(DashboardSkill.match(text), text)
 
     def test_concept_question_released_to_agent(self):
-        """v1.13.0：概念疑问句「看板数据源和看板任务是分开的吗」→ LLM 判非订阅管理
+        """v1.12.3：概念疑问句「看板数据源和看板任务是分开的吗」→ LLM 判非订阅管理
         放行给 Agent 正常问答（修复 _QUERY_RE 的「看板.*任务」吞问题）"""
         from dashboard import subscription_commands as sub_cmd
         q = "现在的看板数据源和看板任务是分开的吗"
@@ -40,7 +93,7 @@ class MatchTests(unittest.TestCase):
             self.assertTrue(DashboardSkill.match(q))
 
     def test_clear_query_no_llm_fast_path(self):
-        """v1.13.0：明确查询（无疑问词）→ 正则快速路径，不付 LLM 成本"""
+        """v1.12.3：明确查询（无疑问词）→ 正则快速路径，不付 LLM 成本"""
         from dashboard import subscription_commands as sub_cmd
         with mock.patch.object(sub_cmd, "_llm_verify_subscription",
                                side_effect=AssertionError("不应调用 LLM")):
@@ -149,39 +202,43 @@ class HandleCreateTests(unittest.TestCase):
     @mock.patch("skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
     @mock.patch("skills.dashboard.DashboardSkill._user_template_hint", return_value="")
     def test_create_flow(self, mock_hint, mock_staff):
-        # 1. 说「帮我推个看板」→ 反问
-        r = DashboardSkill.handle("帮我推个看板", user_id="union001")
-        self.assertEqual(r["source"], "dashboard")
-        self.assertIn("确认", r["answer"])
-        self.assertIn("研发项目现况表", r["answer"])
-        # 2. 回复「确认」→ 落地 + 推样例（mock push）
-        with mock.patch("skills.dashboard.DashboardSkill._push_sample",
-                        return_value="已推送示例看板") as m_push:
-            r2 = DashboardSkill.handle("确认", user_id="union001")
-        self.assertIn("开通", r2["answer"])
-        # v1.12.x：创建后提醒可自定义格式
-        self.assertIn("自定义格式", r2["answer"])
-        self.assertIn("先写总体结论", r2["answer"])
-        m_push.assert_called_once()
-        subs = self._store.list_for_owner("union001")
-        self.assertEqual(len(subs), 1)
-        self.assertTrue(subs[0].enabled)
-        self.assertEqual(subs[0].owner_union_id, "union001")
-        self.assertEqual(subs[0].owner_staff_id, "staff001")
-        self.assertIn("staff001", subs[0].recipients)
+        # 1. 说「帮我推个看板」→ 反问（C6 后数据源 = owner 当前 enabled 候选）
+        #    2. 回复「确认」→ 落地 + 推样例（mock push）——fixture 需覆盖确认，
+        #    因 _execute_pending → find_exact_duplicate 也走实时有效源解析。
+        with _patch_sources_fixture(owner="union001"):
+            r = DashboardSkill.handle("帮我推个看板", user_id="union001")
+            self.assertEqual(r["source"], "dashboard")
+            self.assertIn("确认", r["answer"])
+            self.assertIn("研发项目现况表", r["answer"])
+            with mock.patch("skills.dashboard.DashboardSkill._push_sample",
+                            return_value="已推送示例看板") as m_push:
+                r2 = DashboardSkill.handle("确认", user_id="union001")
+            self.assertIn("开通", r2["answer"])
+            # v1.12.x：创建后提醒可自定义格式
+            self.assertIn("自定义格式", r2["answer"])
+            self.assertIn("先写总体结论", r2["answer"])
+            m_push.assert_called_once()
+            subs = self._store.list_for_owner("union001")
+            self.assertEqual(len(subs), 1)
+            self.assertTrue(subs[0].enabled)
+            self.assertEqual(subs[0].owner_union_id, "union001")
+            self.assertEqual(subs[0].owner_staff_id, "staff001")
+            self.assertIn("staff001", subs[0].recipients)
 
     @mock.patch("skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
     @mock.patch("skills.dashboard.DashboardSkill._push_sample", return_value="")
     @mock.patch("skills.dashboard.DashboardSkill._user_template_hint", return_value="")
     def test_create_sets_defaults(self, m_hint, m_push, mock_staff):
-        DashboardSkill.handle("帮我推个看板", user_id="u1")
-        DashboardSkill.handle("确认", user_id="u1")
+        # C6（v1.12.6）：创建数据源 = owner 当前 enabled 候选（doc_1/doc_2）
+        with _patch_sources_fixture(owner="u1"):
+            DashboardSkill.handle("帮我推个看板", user_id="u1")
+            DashboardSkill.handle("确认", user_id="u1")
         sub = self._store.list_for_owner("u1")[0]
         self.assertEqual(sub.push_hour, 9)
         self.assertEqual(sub.push_minute, 0)
         self.assertEqual(sub.weekdays, "")
         self.assertEqual(sub.alert_mode, "always")
-        self.assertEqual(sub.data_sources, ["project_status", "test_issues"])
+        self.assertEqual(sorted(sub.data_sources), ["doc_1", "doc_2"])
 
     def test_confirm_without_pending(self):
         r = DashboardSkill.handle("确认", user_id="nobody")
@@ -247,95 +304,8 @@ class HandleChangeTests(unittest.TestCase):
         self.assertIn("还没有订阅", r["answer"])
 
 
-class HandleChangeSourcesTests(unittest.TestCase):
-    """v1.14.0：调整订阅数据源（识别真实源 → 确认 → 落地）"""
-
-    def setUp(self):
-        import tempfile, os
-        from types import SimpleNamespace
-        from dashboard.subscription_store import Subscription, SubscriptionStore
-        self.SimpleNamespace = SimpleNamespace
-        self.patch_pending = mock.patch("pending_context._pending", {})
-        self.patch_pending.start()
-        self.addCleanup(self.patch_pending.stop)
-        fd, path = tempfile.mkstemp(suffix=".db")
-        os.close(fd)
-        self._db_path = path
-        self._store = SubscriptionStore(db_path=path)
-        self.patch_store = mock.patch(
-            "skills.dashboard.get_subscription_store", return_value=self._store)
-        self.patch_store.start()
-        self.addCleanup(self.patch_store.stop)
-        self.addCleanup(self._cleanup_db)
-        sub = Subscription(owner_user_id="u1", owner_staff_id="staff001",
-                           owner_union_id="u1",
-                           data_sources=["project_status", "doc_2"],
-                           recipients=["staff001"])
-        self._sub_id = self._store.create(sub)
-
-    def _cleanup_db(self):
-        self._store.close()
-        for suffix in ("", "-wal", "-shm"):
-            p = self._db_path + suffix
-            if os.path.exists(p):
-                try:
-                    os.remove(p)
-                except OSError:
-                    pass
-
-    def _src(self, key, name):
-        return self.SimpleNamespace(key=key, name=name)
-
-    @mock.patch("dashboard.service.load_all_available_sources")
-    @mock.patch("dashboard.service.resolve_subscription_sources")
-    def test_remove_source_flow(self, mock_resolve, mock_load):
-        mock_resolve.return_value = [
-            self._src("project_status", "研发项目现况表"),
-            self._src("doc_2", "整机下线测试问题沟通"),
-        ]
-        mock_load.return_value = [
-            self._src("project_status", "研发项目现况表"),
-            self._src("doc_5", "项目进度计划表"),
-        ]
-        r = DashboardSkill.handle("把整机下线测试问题沟通数据源移除", user_id="u1")
-        self.assertIn("❌ 移除：整机下线测试问题沟通", r["answer"])
-        self.assertIn("确认", r["answer"])
-        r = DashboardSkill.handle("确认", user_id="u1")
-        self.assertIn("已调整", r["answer"])
-        self.assertEqual(self._store.get(self._sub_id).data_sources,
-                         ["project_status"])
-
-    @mock.patch("dashboard.service.load_all_available_sources")
-    @mock.patch("dashboard.service.resolve_subscription_sources")
-    def test_add_source_flow(self, mock_resolve, mock_load):
-        mock_resolve.return_value = [self._src("project_status", "研发项目现况表")]
-        mock_load.return_value = [
-            self._src("project_status", "研发项目现况表"),
-            self._src("doc_5", "项目进度计划表"),
-        ]
-        r = DashboardSkill.handle("加个项目进度计划表数据源", user_id="u1")
-        self.assertIn("➕ 添加：项目进度计划表", r["answer"])
-        DashboardSkill.handle("确认", user_id="u1")
-        self.assertIn("doc_5", self._store.get(self._sub_id).data_sources)
-
-    @mock.patch("dashboard.service.load_all_available_sources")
-    @mock.patch("dashboard.service.resolve_subscription_sources")
-    def test_remove_not_in_subscription_honest(self, mock_resolve, mock_load):
-        mock_resolve.return_value = [
-            self._src("project_status", "研发项目现况表"),
-            self._src("doc_2", "整机下线测试问题沟通"),
-        ]
-        mock_load.return_value = [self._src("project_status", "研发项目现况表")]
-        # 「测试ai表格」不在订阅里 → 如实提示，不编造「已修改」
-        r = DashboardSkill.handle("测试ai表格的数据源帮我删掉", user_id="u1")
-        self.assertIn("没识别出", r["answer"])
-        # 订阅未被误改
-        self.assertEqual(self._store.get(self._sub_id).data_sources,
-                         ["project_status", "doc_2"])
-
-
 class HandleSetPerSourceTests(unittest.TestCase):
-    """v1.14.0：每源独立总结（开启/关闭 → 确认 → 落地 per_source）"""
+    """v1.12.5：每源独立总结（开启/关闭 → 确认 → 落地 per_source）"""
 
     def setUp(self):
         import tempfile, os
@@ -747,8 +717,9 @@ class HandleResumeDeleteTests(unittest.TestCase):
     def test_exact_duplicate_create_is_reused(self, m_push, mock_staff):
         """相同用户、来源、时间、接收人和模式不得创建第二条订阅。"""
         self._store.create(self._sub(data_sources=["project_status", "test_issues"]))
-        DashboardSkill.handle("帮我推个看板", user_id="u1")
-        r = DashboardSkill.handle("确认", user_id="u1")
+        with _patch_sources_fixture():
+            DashboardSkill.handle("帮我推个看板", user_id="u1")
+            r = DashboardSkill.handle("确认", user_id="u1")
         self.assertIn("已有相同", r["answer"])
         self.assertEqual(len(self._store.list_for_owner("u1")), 1)
 
@@ -941,7 +912,7 @@ class TemplateHintAndAdjustTests(unittest.TestCase):
 
 
 class PushSamplePerSourceTests(unittest.TestCase):
-    """v1.13.0：样例推送改逐源多条（识别/预览场景，每个数据源一条）"""
+    """v1.12.5：样例推送改逐源多条（识别/预览场景，每个数据源一条）"""
 
     def _sub(self):
         from dashboard.subscription_store import Subscription
@@ -975,6 +946,98 @@ class PushSamplePerSourceTests(unittest.TestCase):
         # 逐源组装：两源各一条，交给 push_messages 顺序发送
         m_per_source.assert_called_once()
         self.assertEqual(m_push.call_args[0][2], ["源A总结", "源B总结"])
+
+
+class SpokenChoiceTests(unittest.TestCase):
+    """v1.12.6（B5）：口语序数选择（「我说选第一个」）在看板层接住
+
+    回归背景（2026-08-14 实测）：袁会荧在 create pending 反问中回「我说选第一个」，
+    未达看板层（parse_template_choice 只认 choose_template，其余判定接不住），
+    落 Agent 后无工具可用 → 调 contact_find 查通讯录 → 编造「看板维护转达工单」。
+    B5：新增 parse_spoken_choice，绑 kanban pending + 反问窗口，接住口语序数选择。
+    """
+
+    def setUp(self):
+        self.patch_pending = mock.patch("pending_context._pending", {})
+        self.patch_pending.start()
+        self.addCleanup(self.patch_pending.stop)
+
+    def tearDown(self):
+        from dashboard import subscription_commands as sc
+        sc._activity_by_user.clear()
+        sc._last_activity_ts = 0.0
+
+    # ===== parse_spoken_choice 纯函数 =====
+    def test_parse_spoken_choice_no_pending_returns_none(self):
+        from dashboard import subscription_commands as sc
+        for t in ("我说选第一个", "选第二个", "第一个", "就第三个吧"):
+            self.assertIsNone(sc.parse_spoken_choice(t, "u_spoken"), t)
+
+    def test_parse_spoken_choice_variants(self):
+        from dashboard import subscription_commands as sc
+        sc.set_pending("u_spoken", {"intent": "create", "data_sources": []})
+        cases = [
+            ("我说选第一个", 1), ("我是说选第一个", 1), ("选第二个", 2),
+            ("第一个", 1), ("就第三个吧", 3), ("我说选第5个", 5),
+        ]
+        for t, expect in cases:
+            p = sc.parse_spoken_choice(t, "u_spoken")
+            self.assertIsNotNone(p, t)
+            self.assertEqual(p["index"], expect, t)
+
+    def test_parse_spoken_choice_requires_window(self):
+        from dashboard import subscription_commands as sc
+        sc.set_pending("u_spoken", {"intent": "create", "data_sources": []})
+        sc._activity_by_user["u_spoken"] = 0.0  # 反问窗口过期
+        self.assertIsNone(sc.parse_spoken_choice("选第一个", "u_spoken"))
+
+    def test_parse_spoken_choice_does_not_steal_normal_chat(self):
+        from dashboard import subscription_commands as sc
+        sc.set_pending("u_spoken", {"intent": "create", "data_sources": []})
+        for t in ("第一个文件我要看", "选一个", "第一个人是张工",
+                  "你说第一个方案", "第一个提议不错"):
+            self.assertIsNone(sc.parse_spoken_choice(t, "u_spoken"), t)
+
+    # ===== 技能匹配/处理 =====
+    def test_match_spoken_choice_with_pending(self):
+        from dashboard import subscription_commands as sc
+        sc.set_pending("u_spoken", {"intent": "create", "data_sources": []})
+        self.assertTrue(DashboardSkill.match("我说选第一个", user_id="u_spoken"))
+
+    def test_match_spoken_choice_no_pending_false(self):
+        self.assertFalse(DashboardSkill.match("我说选第一个", user_id="u_spoken"))
+
+    def test_handle_create_pending_honest_no_workorder(self):
+        """create pending 中回「我说选第一个」→ 如实说明无分项候选项，不编造工单"""
+        from dashboard import subscription_commands as sc
+        sc.set_pending("u_spoken", {
+            "intent": "create", "data_sources": [],
+            "push_hour": 9, "push_minute": 0, "weekdays": "",
+            "alert_mode": "always",
+        })
+        r = DashboardSkill.handle("我说选第一个", user_id="u_spoken")
+        self.assertIn("确认", r["answer"])
+        self.assertIn("工单", r["answer"])          # 明确说明无工单功能
+        self.assertNotIn("已生成", r["answer"])     # 不编造完成态
+
+    def test_handle_choose_template_spoken_maps(self):
+        """choose_template 反问中「选第二个」→ 等价数字 2 → weekly"""
+        from dashboard import subscription_commands as sc
+        sc.set_pending("u_spoken", {"intent": "choose_template", "sub_id": 1})
+        with mock.patch.object(
+                DashboardSkill, "_execute_template_choice",
+                return_value={"answer": "ok", "source": "dashboard"}) as m_exec:
+            DashboardSkill.handle("选第二个", user_id="u_spoken")
+        m_exec.assert_called_once()
+        self.assertEqual(m_exec.call_args[0][0]["choice"], "weekly")
+
+    def test_handle_choose_template_spoken_out_of_range(self):
+        """choose_template 中「选第五个」超出 3 项 → 重列模板，不编造"""
+        from dashboard import subscription_commands as sc
+        sc.set_pending("u_spoken", {"intent": "choose_template", "sub_id": 1})
+        r = DashboardSkill.handle("选第五个", user_id="u_spoken")
+        self.assertIn("3 个模板", r["answer"])
+        self.assertIsNotNone(sc.get_pending("u_spoken"))  # pending 保留待再选
 
 
 if __name__ == "__main__":
