@@ -3,6 +3,34 @@
 > 📌 **本文档是项目唯一的版本记录（单一事实源）**——README.md、PROGRESS.md 的版本历史均指向本文件，发版时只在这里追加记录。
 > 相关：待办清单见 [TODO.md](TODO.md)，进度看板见 [PROGRESS.md](PROGRESS.md)。
 
+## v1.12.8（2026-08-14）
+
+**🔒 审查报告修复包 + 🏗 Web 端定位调整（用户层 → 纯管理层）**——20260813 审查报告 5 项修复（C2 密钥进镜像、C3 BM25 缓存永不失效、H4 调度精确分钟、H6 模板 key 路径穿越、H7 推送无重试）+ Web 端砍掉用户层（普通用户只用钉钉，`/ask` 用户名伪造攻击面 C1 随之消失）+ 管理层「按人查看」视图。用户拍板小版本更新（v1.12.8）。
+
+### 🔒 审查修复包（C2 / C3 / H4 / H6 / H7）
+
+- **C2 密钥不进 Docker 镜像**：`.dockerignore` 加 `scripts/local_config.py` + `**/local_config.py`，Dockerfile 在 `COPY scripts/` 前注明凭证由 docker-compose volume 注入——local_config.py（钉钉 ClientSecret/DeepSeek Key）曾随 build context 烧进镜像层。
+- **C3 BM25 缓存永不失效**（Critical）：BM25 索引是进程内缓存，与 Chroma 向量库是**两份数据**——文档变更后混合检索永远用旧索引（新文档向量能查到、BM25 侧查不到）。新增 `invalidate_bm25_cache(collection)`，学习（learn_for_user / learn_file_path / relearn_for_user / delete_for_user）与删除文档（delete_docs）成功后按 collection 失效；覆盖全清 / 按库清 / 未知库 noop。
+- **H4 调度精确分钟匹配漏推**：`is_due` 由 `now.time() == scheduled` 精确比对改宽容窗口（±5 分钟，绝对时间差）——调度器延迟几秒不再漏推；重入去重窗口同步放宽，同窗内不重复推。
+- **H6 模板 key 路径穿越**：`template_store._valid_template_key` 新增黑名单校验（拒绝 `/ \ : * ? " < > |` 空白控制字符 + 纯 `.`/`..`）——key 会拼进本地文件路径 `{key}.json`，此前可穿越出模板目录；**放行中文**（「晨会看板」「周报模板」是既有设计用法，不用 ASCII 白名单）。
+- **H7 推送无重试**：`dingtalk_notifier._post_with_retry`（网络瞬断/5xx 重试 3 次退避 1s/2s，4xx 不重试），token 获取与主动推送统一走重试路径——钉钉 API 偶发断连不再让主动推送整条丢失（失败告警只能事后发现）。
+- 新增测试：`test_dingtalk_notifier.py`（重试 5 用例）、`test_enhanced_search.py`（缓存失效 3 用例）、`test_dashboard_scheduler.py`（窗口边界/去重）、`test_dashboard_templates.py`（路径穿越拒绝，放行中文）、`test_knowledge_review.py`（学习后失效挂载点）。
+
+### 🏗 Web 端定位调整（用户层 → 纯管理层）
+
+- **砍掉 Web 用户层**：`/ask`（Web 问答）、`/feedback`（Web 反馈）路由**物理删除**，`/` 由聊天页改 **302 跳转 `/admin`**；`web_page.py` 停用归档（前端代码完整，恢复指引见 main.py 文件头 docstring）。Web `/ask` 的 `user` 参数是审查 C1「用户名伪造读他人记忆」根因——入口没了攻击面随之消失。**钉钉端反馈（👍/👎，dingtalk_bot 写 feedback 表）不受影响**，`/admin/feedback-stats` 保留。
+- **管理层「按人查看」**：`/admin/people` 接口按 `upload_user_id` 聚合 sync_status（每人文件数 + 已同步/待处理/失败进度 + 明细，空归属沉底、昵称取最近非空）；admin 前端新增「🗂 按人查看」tab（>10 文件原生折叠）。数据基础为上传时记录的归属字段，真实员工数据随钉钉端上传逐步积累。
+- 新增测试：`test_admin_people.py`（聚合 5 用例 + 路由鉴权/结构 2 用例）、`test_web_user_layer_removed.py`（tripwire 4 用例：`/ask`、`/feedback` 路由不存在、`/` 跳转 `/admin`、web_page 不再被 import——防未来从 git history 恢复旧路由重新暴露用户层）。
+
+### 测试
+
+- 新增 23 项，全量回归 **946 项通过**（923 基线 + 23）。
+
+### 已知限制
+
+- 按人查看当前真实员工归属仅袁会荧（5 文件）；admin 历史 308 条待处理文件需在「同步管理」tab 处理。
+- Web 端聊天能力移除后仅钉钉端可用（设计如此）；恢复方式见 main.py 文件头。
+
 ## v1.12.7（2026-08-14）
 
 **📐 看板任务边界明确（D1）+ 推送留档（D2）**——用户拍板三项决策落地：① 双模式不保留，「每个任务对应他自己的数据源，实时算以任务作为边界」（修正 v1.12.6 C6 的「实时拉 owner 全部候选」）；② 留档默认保留最近 30 次，**每个任务 30 次**；③ 其他按既定方向补边界不明确的解决措施。本次为 patch，聚焦看板边界与可追溯性。

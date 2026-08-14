@@ -52,8 +52,30 @@ class IsDueTests(unittest.TestCase):
 
     def test_mismatch_time(self):
         sub = _sub(push_hour=9, push_minute=0)
-        self.assertFalse(is_due(self._now(9, 5), sub))
-        self.assertFalse(is_due(self._now(8, 0), sub))
+        # v1.12.x（审查 High 4）：±5 分钟宽容窗口——9:05 距 9:00 恰在窗口边缘
+        self.assertFalse(is_due(self._now(9, 6), sub))   # 超出 ±5 窗口
+        self.assertFalse(is_due(self._now(8, 0), sub))   # 差一小时
+
+    def test_due_window_gap_up_to_5_minutes(self):
+        """±5 分钟宽容窗口：单次 tick 卡顿/错过精确分钟仍可在窗口内补推"""
+        sub = _sub(push_hour=9, push_minute=0)
+        self.assertTrue(is_due(self._now(9, 4), sub))
+        self.assertTrue(is_due(self._now(9, 5), sub))    # 窗口边缘（≤5）
+        self.assertFalse(is_due(self._now(9, 6), sub))   # 超出窗口
+        self.assertTrue(is_due(self._now(8, 56), sub))   # 提前方向窗口内（差4）
+        self.assertTrue(is_due(self._now(8, 55), sub))   # 提前方向窗口边缘（差5，与9:05对称）
+        self.assertFalse(is_due(self._now(8, 54), sub))  # 提前方向超出（差6）
+
+    def test_due_window_dedup_within_window(self):
+        """窗口内已推过（last_pushed_at 距 now ≤5 分钟）→ 不重复推送"""
+        sub = _sub(push_hour=9, push_minute=0,
+                   last_pushed_at="2026-08-10 08:59:00")
+        # 09:04 距 scheduled 4 分钟到期，但距 last_pushed 5 分钟 → 防重入拦截
+        self.assertFalse(is_due(self._now(9, 4), sub))
+        # 昨天的推送不拦截今天窗口内到期
+        yesterday = _sub(push_hour=9, push_minute=0,
+                         last_pushed_at="2026-08-09 09:01:00")
+        self.assertTrue(is_due(self._now(9, 3), yesterday))
 
     def test_weekday_filter(self):
         sub = _sub(push_hour=9, push_minute=0, weekdays="1,5")

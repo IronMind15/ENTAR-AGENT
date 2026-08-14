@@ -1,6 +1,13 @@
 """
 恩特小助手 — 统一入口
 通过技能注册中心路由到不同技能模块
+
+v1.12.8 起 Web 端砍掉用户层，只做管理层（/admin，普通用户只用钉钉）：
+  - / 由聊天页改为跳转 /admin（管理员鉴权在 /admin 自身处理）
+  - /ask（Web 问答）、/feedback（Web 反馈）路由已物理删除
+  - 钉钉端反馈（dingtalk_bot 的 👍/👎 回调）不受影响，/admin/feedback-stats 保留
+  - 恢复指引：若未来重新开放 Web 聊天，从 git history（v1.12.x 及更早）
+    找回 /ask、/feedback 实现，并重新引用 web_page.py 的 HOME_HTML
 """
 
 import logging
@@ -45,13 +52,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("main")
 
-from fastapi import FastAPI, Form
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
 import uvicorn
 
-from skills import get_matched_skill, get_skill_list
+from skills import get_skill_list
 from skills.dingtalk_bot import start_bot as start_dingtalk_bot
-from web_page import HOME_HTML
 from doc_mgr.router import router as admin_router
 from doc_mgr.scheduler import start_scheduler, stop_scheduler
 from dashboard_scheduler import start_dashboard_scheduler, stop_dashboard_scheduler
@@ -96,75 +102,16 @@ def _startup():
     threading.Thread(target=_preload_reranker, daemon=True).start()
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/", include_in_schema=False)
 def home():
-    """返回聊天风格 Web 页面（HTML/JS 定义在 web_page.py 中）"""
-    return HOME_HTML
+    """根路径 → 管理端（v1.12.8 起 Web 不做用户层，普通用户只用钉钉）"""
+    return RedirectResponse(url="/admin", status_code=302)
 
 
-@app.post("/ask")
-def ask(q: str = Form("", description="用户问题"), user: str = Form("", description="用户名（仅记忆归属，不做权限依据）")):
-    """统一问答接口 — 通过技能注册中心路由
-
-    P1 安全收尾：GET → POST，避免问题内容进入 URL、浏览器历史和代理日志。
-    Web 的 user 参数仅用于会话记忆归属，不作为任何权限依据；
-    敏感操作（上传/删除/同步）一律走 /admin 接口的 password 或 user_store 鉴权。
-    """
-    if not q:
-        return JSONResponse({"answer": "请输入问题"})
-
-    logger.info(f"[{user or '匿名'}] {q}")
-
-    # 遍历已注册技能，找到第一个匹配的处理
-    user_id = f"web_{user}" if user else ""
-
-    skill_cls = get_matched_skill(q, user_id)
-    if skill_cls:
-        logger.info(f"  → {skill_cls.name}")
-        kwargs = {}
-        if user:
-            kwargs["user_id"] = user_id
-        result = skill_cls.handle(q, **kwargs)
-    else:
-        # 理论上不会走到这里（Agent 始终匹配），防御性兜底
-        logger.info(f"  → 备用处理")
-        result = {"answer": f"抱歉，我暂时无法处理这个问题。", "source": "fallback"}
-
-    # Web 页面用户：记录对话到记忆
-    if user:
-        try:
-            from skills import memory
-            uid = f"web_{user}"
-            answer = result.get("answer", "")
-            memory.add(uid, "user", q)
-            memory.add(uid, "assistant", answer)
-        except Exception:
-            pass
-
-    return JSONResponse(result)
-
-
-@app.post("/feedback")
-def feedback(
-    q: str = Form("", description="用户问题"),
-    answer: str = Form("", description="回答摘要"),
-    source: str = Form("", description="来源标识"),
-    rating: str = Form(..., description="up 或 down"),
-    user: str = Form("", description="用户名"),
-):
-    """用户反馈接口 — 👍/👎"""
-    if rating not in ("up", "down"):
-        return JSONResponse({"error": "rating 必须是 up 或 down"}, status_code=400)
-
-    user_id = f"web_{user}" if user else "anonymous"
-    try:
-        from user_store import add_feedback
-        add_feedback(user_id, q, answer, source, rating)
-        logger.info(f"[反馈] {user_id} {rating} — {q[:50]}")
-        return JSONResponse({"ok": True})
-    except Exception as e:
-        logger.error(f"反馈写入失败: {e}")
-        return JSONResponse({"error": str(e)}, status_code=500)
+# ── ⏸️ v1.12.8 已停用 Web 用户层 ─────────────────────────────
+# /ask（Web 问答）、/feedback（Web 反馈）路由已物理删除，普通用户只用钉钉单聊。
+# 钉钉端反馈（dingtalk_bot 👍/👎）与 /admin/feedback-stats 不受影响。
+# 原实现见 git history（v1.12.x）；恢复指引见本文件文件头 docstring。
 
 
 if __name__ == "__main__":

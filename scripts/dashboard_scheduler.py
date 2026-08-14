@@ -96,14 +96,22 @@ def _notify_failure(sub, reason: str):
         logger.warning(f"[看板] 订阅 {sub.id} 失败告警发送失败: {e}")
 
 
+# 到点扫描宽容窗口（分钟）：允许在预定推送时分附近 ±5 分钟内补推，
+# 防单次 tick 因服务器繁忙/锁竞争错过精确分钟而漏推一整天（v1.12.x 审查 High 4）。
+_DUE_WINDOW_MINUTES = 5
+
+
 def is_due(now: datetime.datetime, sub) -> bool:
     """判断订阅是否到推送时间点
 
-    - hour/min 精确匹配（interval tick 每分钟扫一次）
+    - 分钟级宽容窗口：now 距 scheduled（hour:min）≤ _DUE_WINDOW_MINUTES 分钟即到期
+      （interval tick 每分钟扫一次，单次 tick 卡顿/错过精确分钟时窗口内补推）
     - weekdays（""=每天；"1,5"=周一/周五，1-7 制与 isoweekday 对齐）
-    - last_pushed_at 当天同一时分已推过 → 不重复（防 tick 重入）
+    - last_pushed_at 当天窗口内已推过 → 不重复（防 tick 重入 + 窗口内重复）
     """
-    if now.hour != sub.push_hour or now.minute != sub.push_minute:
+    scheduled = now.replace(hour=sub.push_hour, minute=sub.push_minute,
+                            second=0, microsecond=0)
+    if abs((now - scheduled).total_seconds()) > _DUE_WINDOW_MINUTES * 60:
         return False
     weekdays = [d.strip() for d in (sub.weekdays or "").split(",") if d.strip()]
     if weekdays and str(now.isoweekday()) not in weekdays:
@@ -112,7 +120,8 @@ def is_due(now: datetime.datetime, sub) -> bool:
         try:
             last = datetime.datetime.strptime(sub.last_pushed_at, _TS_FORMAT)
             if (last.date() == now.date()
-                    and last.hour == now.hour and last.minute == now.minute):
+                    and abs((now - last).total_seconds())
+                    <= _DUE_WINDOW_MINUTES * 60):
                 return False
         except ValueError:
             pass

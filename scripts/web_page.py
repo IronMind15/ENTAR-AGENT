@@ -1,10 +1,14 @@
 """
 恩特小助手 — Web 页面 UI（纯前端 HTML/CSS/JS）
 
-独立文件存放前端代码，main.py 通过 import HOME_HTML 引用。
-修改前端样式或功能时只需编辑此文件，无需动 main.py。
+⏸️ v1.12.8 已停用：Web 端砍掉用户层（普通用户只用钉钉），本文件的
+HOME_HTML 不再被 main.py import，文件归档保留（前端代码完整，方便
+未来恢复 Web 聊天时直接复用）。
+  - 原引用点：main.py 的 / 路由 + /ask + /feedback（均已删，见 main.py 文件头）
+  - 恢复指引：若重新开放 Web 聊天，从 git history 找回 main.py 三个路由，
+    并在此文件顶部加回 `from web_page import HOME_HTML`。
 
-v1.5 UI 改版：
+v1.5 UI 改版（历史）：
   - 品牌视觉统一（主蓝 #4361ee + 点缀色，参考 docs/恩特小助手介绍页.html）
   - 新增手写 Markdown 渲染器（列表/表格/代码块/粗体等）
   - 新增来源 chip（展示回答来自哪个知识库，读 /ask 返回的 source 字段）

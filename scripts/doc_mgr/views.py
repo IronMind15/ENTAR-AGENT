@@ -431,10 +431,10 @@ ADMIN_HTML = r"""<!DOCTYPE html>
       <button class="nav-item" onclick="switchTab('upload', this)"><span class="nav-icon">📤</span>上传文件</button>
       <button class="nav-item" onclick="switchTab('search', this)"><span class="nav-icon">🔍</span>搜索测试</button>
       <button class="nav-item" onclick="switchTab('sync', this)"><span class="nav-icon">🔄</span>同步管理</button>
+      <button class="nav-item" onclick="switchTab('people', this)"><span class="nav-icon">🗂</span>按人查看</button>
       <button class="nav-item" onclick="switchTab('users', this)"><span class="nav-icon">👥</span>用户管理</button>
     </nav>
     <div class="side-footer">
-      <button onclick="location.href='/'" class="side-back">← 返回聊天</button>
       <button onclick="toggleTheme()" id="themeBtn" title="切换暗黑模式">🌙</button>
     </div>
   </aside>
@@ -583,6 +583,20 @@ ADMIN_HTML = r"""<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- Tab: People（按人查看，v1.12.8 管理层视图） -->
+  <div id="tab-people" class="tab-content">
+    <div class="card">
+      <h3>🗂 按人查看 <small style="font-size:13px;color:var(--text-secondary)">每人上传的文件与学习进度</small></h3>
+      <p style="font-size:13px;color:var(--text-secondary);margin-bottom:16px">
+        数据来自上传时记录的归属（钉钉端自动记录，管理员直传归「未记录上传者」）。
+        同步/重学等操作请到「🔄 同步管理」tab 处理。
+      </p>
+      <div id="peopleContent">
+        <div class="loading-spinner">加载中...</div>
+      </div>
+    </div>
+  </div>
+
   <!-- Tab: User Management -->
   <div id="tab-users" class="tab-content">
     <div class="card">
@@ -632,7 +646,7 @@ function showToast(msg, type) {
 }
 
 // ===== Tabs（侧边栏导航） =====
-var TAB_TITLES = { docs: '📚 文档列表', upload: '📤 上传文件', search: '🔍 搜索测试', sync: '🔄 同步管理', users: '👥 用户管理' };
+var TAB_TITLES = { docs: '📚 文档列表', upload: '📤 上传文件', search: '🔍 搜索测试', sync: '🔄 同步管理', people: '🗂 按人查看', users: '👥 用户管理' };
 function switchTab(name, el) {
   document.querySelectorAll('.side-nav .nav-item').forEach(function(b) {
     b.classList.remove('active');
@@ -647,6 +661,7 @@ function switchTab(name, el) {
   if (name === 'docs') loadDocs();
   if (name === 'search') loadSearchCollections();
   if (name === 'sync') { loadSyncFiles(); loadSyncHistory(); loadSyncStats(); loadSyncProgress(); }
+  if (name === 'people') { loadPeople(); }
   if (name === 'users') { loadUsers(); }
   // 移动端切换后收起侧边栏
   if (window.innerWidth <= 768) {
@@ -1039,6 +1054,62 @@ function loadSyncStats() {
       document.getElementById('statError').textContent = data.error || 0;
     })
     .catch(function() {});
+}
+
+// ===== Tab: 按人查看（v1.12.8 管理层视图） =====
+function loadPeople() {
+  var area = document.getElementById('peopleContent');
+  area.innerHTML = '<div class="loading-spinner">加载中...</div>';
+  var pw = getPw();
+  fetch('/admin/people?password=' + encodeURIComponent(pw))
+    .then(function(r) {
+      if (!r.ok) throw new Error('请求失败 ' + r.status);
+      return r.json();
+    })
+    .then(function(data) {
+      var people = data.people || [];
+      var html = '';
+      if (!people.length) {
+        html = '<div class="empty-state">暂无上传记录</div>';
+      }
+      var statusLabel = {synced: '已同步', pending: '待处理', error: '失败'};
+      for (var i = 0; i < people.length; i++) {
+        var p = people[i];
+        var name = p.upload_user_name
+          || (p.upload_user_id ? ('ID:' + p.upload_user_id) : '未记录上传者');
+        // 文件数多时默认折叠（如管理员历史上传），少时直接展开
+        html += '<details class="collection-group" ' + (p.files.length <= 10 ? 'open' : '') + '>';
+        html += '<summary class="collection-header" style="cursor:pointer">';
+        html += '<h3>👤 ' + esc(name) + '</h3>';
+        html += '<span style="display:flex;gap:6px">';
+        html += '<span class="badge">' + p.files.length + ' 个文件</span>';
+        html += '<span class="badge" style="background:var(--success)">✅ ' + p.synced + '</span>';
+        html += '<span class="badge" style="background:var(--warning)">⏳ ' + p.pending + '</span>';
+        html += '<span class="badge" style="background:var(--danger)">❌ ' + p.error + '</span>';
+        html += '</span>';
+        html += '</summary>';
+        for (var fi = 0; fi < p.files.length; fi++) {
+          var f = p.files[fi];
+          var st = statusLabel[f.sync_status] || f.sync_status;
+          html += '<div class="sync-file-item">';
+          html += '<div class="file-info">';
+          html += '<div class="file-name">📄 ' + esc(f.file_name) + '</div>';
+          html += '<div class="file-meta">';
+          html += '<span class="status-badge ' + f.sync_status + '">' + st + '</span>';
+          html += ' · 目标: ' + esc(f.target_collection || '-');
+          if (f.file_size) html += ' · ' + (f.file_size / 1024).toFixed(1) + 'KB';
+          if (f.last_synced_at) html += ' · 同步于 ' + esc(f.last_synced_at).slice(0, 16);
+          if (f.error_message) html += ' · ❌ ' + esc(f.error_message);
+          html += '</div></div>';
+          html += '</div>';
+        }
+        html += '</details>';
+      }
+      area.innerHTML = html;
+    })
+    .catch(function(err) {
+      area.innerHTML = '<div class="empty-state" style="color:var(--danger)">加载失败: ' + esc(err.message) + '</div>';
+    });
 }
 
 function loadSyncFiles() {

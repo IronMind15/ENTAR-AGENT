@@ -25,6 +25,8 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 复制项目文件（data/ 和 knowledge_base/ 由 docker-compose volumes 挂载，不打进镜像）
+# local_config.py（API Key / 钉钉凭证 / 管理员口令）已被 .dockerignore 排除，不进镜像层——
+# 运行时由 docker-compose 挂载 ../scripts:/app/scripts 提供；裸镜像启动需自行注入该文件
 COPY scripts/ ./scripts/
 
 # 非 root 运行（P1 安全收尾）

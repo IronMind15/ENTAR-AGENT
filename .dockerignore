@@ -13,3 +13,7 @@ venv/
 *.zip
 data/
 knowledge_base/
+# 密钥凭证：local_config.py 含 API Key / 钉钉凭证 / 管理员口令，绝不烧进镜像层
+# 运行时由 docker-compose volume（../scripts:/app/scripts）注入，见 Dockerfile 注释
+scripts/local_config.py
+**/local_config.py

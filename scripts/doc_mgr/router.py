@@ -345,6 +345,8 @@ def delete_docs(
         data = store.get(collection, where={"file_name": file_name})
         if data and data.get("ids"):
             deleted = store.delete(collection, ids=data["ids"])
+            from skills.enhanced_search import invalidate_bm25_cache
+            invalidate_bm25_cache(collection)
             return JSONResponse({
                 "deleted": deleted,
                 "collection": collection,
@@ -361,6 +363,8 @@ def delete_docs(
     data = store.get(collection)
     if data and data.get("ids"):
         deleted = store.delete(collection, ids=data["ids"])
+        from skills.enhanced_search import invalidate_bm25_cache
+        invalidate_bm25_cache(collection)
         return JSONResponse({"deleted": deleted, "collection": collection})
     return JSONResponse({"deleted": 0, "collection": collection})
 
@@ -561,7 +565,6 @@ tr:hover td {{ background: var(--hover); }}
     </div>
     <div class='nav'>
       <a href='/admin{pw_param}' class='primary'>← 返回管理</a>
-      <a href='/'>💬 返回聊天</a>
       <button class='theme-btn' onclick='toggleTheme(this)'>🌙</button>
     </div>
   </div>
@@ -990,6 +993,73 @@ def sync_stats(password: str = Query("", description="管理员密码")):
         stats[dir_key] = count
 
     return JSONResponse(stats)
+
+
+# ===== 按人查看（v1.12.8：Web 端只做管理层，看每人上传的内容与学习进度） =====
+
+
+def _aggregate_files_by_user(records: list[dict]) -> list[dict]:
+    """将 sync_tracker 记录按上传者（upload_user_id）聚合成「按人查看」数据。
+
+    返回每人一条：文件数、各学习状态统计（synced/pending/error）、文件明细，
+    按最近更新倒序；upload_user_id 为空的记录归入「未记录上传者」组并排最后
+    （管理员直传/旧数据无归属）。
+
+    同一人多条记录可能昵称只有部分非空（老数据/补录），取最近一条非空昵称。
+    """
+    groups: dict[str, dict] = {}
+    for r in records:
+        uid = (r.get("upload_user_id") or "").strip()
+        if uid not in groups:
+            groups[uid] = {
+                "upload_user_id": uid,
+                "upload_user_name": "",
+                "files": [],
+                "synced": 0,
+                "pending": 0,
+                "error": 0,
+                "last_updated": "",
+            }
+        g = groups[uid]
+        name = (r.get("upload_user_name") or "").strip()
+        if name:
+            g["upload_user_name"] = name
+        g["files"].append({
+            "file_name": r.get("file_name", ""),
+            "file_path": r.get("file_path", ""),
+            "target_collection": r.get("target_collection", ""),
+            "sync_status": r.get("sync_status", ""),
+            "error_message": r.get("error_message", "") or "",
+            "last_synced_at": r.get("last_synced_at", "") or "",
+            "file_size": r.get("file_size", 0),
+        })
+        st = r.get("sync_status", "")
+        if st in ("synced", "pending", "error"):
+            g[st] += 1
+        up = r.get("updated_at") or ""
+        if up > g["last_updated"]:
+            g["last_updated"] = up
+    # 非空 id 在前（按最近更新倒序），空 id（未记录上传者）沉底
+    return sorted(groups.values(),
+                  key=lambda g: (g["upload_user_id"] != "",
+                                 g["last_updated"] or ""),
+                  reverse=True)
+
+
+@router.get("/people")
+def list_people(password: str = Query("", description="管理员密码")):
+    """按人查看：每人上传的文件与学习进度（管理层视图）
+
+    数据来自 sync_status 表（上传时记录的 upload_user_id/upload_user_name），
+    聚合由 _aggregate_files_by_user 完成，前端「按人查看」tab 消费。
+    """
+    if not _verify_admin_access(password):
+        raise HTTPException(401, "密码错误")
+
+    from .sync_tracker import SyncTracker
+    tracker = SyncTracker()
+    people = _aggregate_files_by_user(tracker.list_all())
+    return JSONResponse({"people": people, "total": len(people)})
 
 
 # ===== 反馈统计 =====

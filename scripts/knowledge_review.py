@@ -396,6 +396,8 @@ class KnowledgeReviewService:
                     "message": str(exc)[:200]}
 
         if doc.status == "done":
+            from skills.enhanced_search import invalidate_bm25_cache
+            invalidate_bm25_cache(collection)
             return {"status": "ok", "file_name": file_name,
                     "collection": collection,
                     "chunk_count": int(getattr(doc, "chunk_count", 0) or 0),
@@ -455,6 +457,8 @@ class KnowledgeReviewService:
                     "message": str(exc)[:200]}
 
         if doc.status == "done":
+            from skills.enhanced_search import invalidate_bm25_cache
+            invalidate_bm25_cache(collection)
             return {"status": "ok", "file_name": fname, "collection": collection,
                     "chunk_count": int(getattr(doc, "chunk_count", 0) or 0),
                     "message": ""}
@@ -504,6 +508,8 @@ class KnowledgeReviewService:
             return {"status": "failed", "file_name": file_name,
                     "message": str(exc)[:200]}
         if doc.status == "done":
+            from skills.enhanced_search import invalidate_bm25_cache
+            invalidate_bm25_cache(collection)
             return {"status": "ok", "file_name": file_name,
                     "collection": collection,
                     "chunk_count": int(getattr(doc, "chunk_count", 0) or 0),
@@ -546,6 +552,8 @@ class KnowledgeReviewService:
             if before_ids:
                 store.delete(collection, ids=before_ids)
                 deleted_chunks = len(before_ids)
+                from skills.enhanced_search import invalidate_bm25_cache
+                invalidate_bm25_cache(collection)
         except Exception as exc:
             logger.warning(f"删除知识库内容失败（继续删源文件）: {exc}")
 

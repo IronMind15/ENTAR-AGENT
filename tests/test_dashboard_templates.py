@@ -137,6 +137,19 @@ class TemplateStoreTests(unittest.TestCase):
             key="ok2", name="同名", user_id="u1")
         self.assertFalse(dup["ok"])
 
+    def test_create_user_template_rejects_unsafe_key(self):
+        """v1.12.x（审查 High 6）：key 拒绝路径穿越/非法文件名字符"""
+        for bad_key in ("../evil", "..\\evil", "a/b", "a:b", "a b",
+                        "a*b", "..", ".", ""):
+            res = self.store.create_user_template(
+                key=bad_key, name="非法", user_id="u1")
+            self.assertFalse(res["ok"], f"key={bad_key!r} 应被拒绝")
+        # 合法 key 仍通过：ASCII 标识与中文模板名（中文 key 是既有设计用法）
+        self.assertTrue(self.store.create_user_template(
+            key="ok_tpl-1", name="合法", user_id="u1")["ok"])
+        self.assertTrue(self.store.create_user_template(
+            key="晨会看板", name="晨会", user_id="u1")["ok"])
+
     def test_delete_only_own_user_template(self):
         self.assertTrue(self.store.create_user_template(
             key="t1", name="我的", user_id="u1")["ok"])

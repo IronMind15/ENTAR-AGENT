@@ -114,6 +114,24 @@ def _load_bm25(collection: str, where=None):
     return index
 
 
+def invalidate_bm25_cache(collection: str | None = None):
+    """文档变更后失效 BM25 缓存（上传学习/删除/重新学习后调用）。
+
+    collection=None 全清；指定则清该 collection 的缓存键（BM25 索引与向量
+    是两份数据，向量靠 Chroma 实时，BM25 靠进程内缓存——缓存不失效会让
+    混合检索永远用旧索引，新文档向量能查到但 BM25 侧查不到（v1.10.2 上传
+    学习功能直接冲突）。变更低频，全清成本在下一次检索时摊销。
+    """
+    global _bm25_cache
+    with _bm25_lock:
+        if collection is None:
+            _bm25_cache.clear()
+        else:
+            prefix = f"{collection}|"
+            _bm25_cache = {k: v for k, v in _bm25_cache.items()
+                           if not k.startswith(prefix)}
+
+
 def _get_reranker():
     """懒加载重排模型（线程安全，失败标记为 False 不重复尝试）"""
     global _reranker

@@ -16,6 +16,7 @@ WAL 模式读写不互斥）。
 import json
 import logging
 import os
+import re
 import sqlite3
 import threading
 from dataclasses import dataclass, field
@@ -121,6 +122,22 @@ _SYSTEM_TEMPLATES = [
 ]
 
 _SYSTEM_KEYS = {tpl["key"] for tpl in _SYSTEM_TEMPLATES}
+
+# 模板 key 安全校验：key 会拼进本地文件路径（sync_user_template_file 写
+# {key}.json），必须拒绝路径穿越与非法文件名字符——但允许中文等正常字符
+# （「晨会看板」「周报模板」等中文模板名是既有设计用法，不能用 ASCII 白名单）。
+# 拒绝：路径分隔符/Windows 非法字符/空白/控制字符 + 纯 "."/".."。
+_TEMPLATE_KEY_BAD = re.compile(r'[\s\\/:*?"<>|\x00-\x1f]')
+
+
+def _valid_template_key(key: str) -> bool:
+    if not key or len(key) > 64:
+        return False
+    if _TEMPLATE_KEY_BAD.search(key):
+        return False
+    if key in (".", ".."):
+        return False
+    return True
 
 
 @dataclass
@@ -309,6 +326,9 @@ class TemplateStore:
         name = (name or "").strip()
         if not key or not name:
             return {"ok": False, "message": "模板标识与名称不能为空"}
+        if not _valid_template_key(key):
+            return {"ok": False,
+                    "message": "模板标识不能含路径分隔或非法字符（/ \\ : * ? \" < > | 空白等），请重新命名"}
         if key in _SYSTEM_KEYS:
             return {"ok": False, "message": f"模板标识「{key}」与系统模板冲突，请换一个名字"}
         with self._lock:

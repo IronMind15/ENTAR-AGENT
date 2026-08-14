@@ -247,6 +247,16 @@ class KnowledgeReviewServiceTests(unittest.TestCase):
         self.assertEqual("public", process.call_args.kwargs["department"])
         self.assertEqual(False, process.call_args.kwargs["force"])
 
+    def test_learn_for_user_invalidates_bm25_cache(self):
+        """v1.12.x（审查 Critical 3）：学习成功后清 BM25 缓存（防混合检索旧索引）"""
+        with patch("doc_mgr.engine.process_file") as process, \
+             patch("skills.enhanced_search.invalidate_bm25_cache") as invalidate:
+            process.return_value = SimpleNamespace(
+                status="done", chunk_count=5, collection="standards", message="")
+            result = self.service.learn_for_user("uploader-union-id", "测试员工")
+        self.assertEqual(result["status"], "ok")
+        invalidate.assert_called_once_with("standards")
+
     def test_learn_md_uses_explicit_experience_collection(self):
         """关键：.md 必须显式传 experience_kb，不能落 engine 默认的 standards"""
         # 移除 setUp 里的 sample.pdf，避免同秒时间戳下「最新」排序不稳定
