@@ -63,37 +63,34 @@ def build_dynamic_source(cand) -> "SourceConfig":
 
 
 def resolve_subscription_sources(sub) -> list:
-    """订阅 → SourceConfig 列表（v1.12.6，C6：每次推送实时解析）
+    """订阅 → SourceConfig 列表（v1.12.7，任务级源选择）
 
-    v1.12.6（C6）改版：订阅取消持久绑定——每次推送实时拉取 owner 当前
-    enabled 的文档候选（doc_candidates.list_dashboard_ready，按 user_id
-    隔离）+ 静态配置源。用户新发布的文件自动进入下次推送（需求「发布的
-    每个文件都能被解读到」）；不同 owner 的文件互不影响（隔离，C7 后不
-    存在跨订阅改数据源）。懒执行：本函数只在推送/预览/查询时被调用。
+    v1.12.7（D1）改版：每个任务绑定自己的数据源集合（sub.data_sources 是
+    任务唯一事实源）——「实时算」只体现在每次推送时对任务绑定的源做实时
+    解析与拉取（内容实时、边界固定），不再实时拉 owner 全部候选。用户新
+    发布的文档默认不进已有任务，需要主动说「把这个文档加进看板」。
 
-    `sub.data_sources` 仅作迁移兜底：owner 无任何动态候选且静态源为空时，
-    回退旧绑定解析（老订阅不丢源；doc_ 键不再参与，防跨用户引用）。
+    doc_<id> 键按候选实时查最新信息（名称/权限/sheet_id）：candidate 被
+    删除或停用 → 该源自动退出推送并计为不可用；非 doc_ 键走静态配置源。
+    懒执行：本函数只在推送/预览/查询时被调用。
     """
-    out = []
-    try:
-        from .doc_candidates import get_candidate_store
-        owner = getattr(sub, "owner_user_id", "") or getattr(sub, "owner_union_id", "")
-        for cand in get_candidate_store().list_dashboard_ready(owner):
-            out.append(build_dynamic_source(cand))
-    except Exception as e:
-        logger.warning(f"拉取订阅 owner 动态候选失败: {e}")
-    out.extend(load_enabled_sources())
-    if out:
-        return out
-    return _resolve_stored_config_sources(sub)
-
-
-def _resolve_stored_config_sources(sub) -> list:
-    """迁移兜底：旧绑定里的配置源 key（doc_ 键由实时候选接管，不再走此路）"""
     from .config_model import get_source, source_usable
     out = []
+    seen = set()
     for key in sub.data_sources or []:
-        if isinstance(key, str) and key.startswith("doc_"):
+        if not isinstance(key, str) or not key or key in seen:
+            continue
+        seen.add(key)
+        if key.startswith("doc_"):
+            cand = None
+            try:
+                from .doc_candidates import get_candidate_store
+                cand = get_candidate_store().get(int(key[len("doc_"):]))
+            except Exception as e:
+                logger.warning(f"解析订阅源 {key} 失败: {e}")
+            if (cand and cand.enabled
+                    and cand.kind in ("notable", "workbook", "doc", "folder")):
+                out.append(build_dynamic_source(cand))
             continue
         src = get_source(key)
         if src and src.enabled and source_usable(src):
@@ -102,7 +99,7 @@ def _resolve_stored_config_sources(sub) -> list:
 
 
 def effective_source_keys(sub) -> set:
-    """订阅当前生效的数据源 key 集合（C6：实时解析，去重/覆盖判断用）"""
+    """订阅当前生效的数据源 key 集合（v1.12.7：任务绑定解析，去重/覆盖判断用）"""
     try:
         return {s.key for s in resolve_subscription_sources(sub)}
     except Exception:
@@ -110,11 +107,11 @@ def effective_source_keys(sub) -> set:
 
 
 def source_resolution_warnings(sub, resolved_sources: list) -> list[str]:
-    """C6 后：仅当订阅当前全无数据源、但曾绑定过时提示（迁移兜底）。
+    """v1.12.7：仅当订阅当前全无数据源、但曾绑定过时提示（迁移兜底）。
 
-    旧逻辑比对 sub.data_sources 与解析结果差集——C6 订阅实时拉取 owner
-    enabled 候选，旧绑定不再参与解析，「部分源缺失」不再是常见态。仅当
-    解析为空而旧绑定非空（老订阅源全部失效）时提醒，避免静默空推。
+    任务绑定解析下，绑定键对应的源可能已被删除/停用/未配置——部分源缺失
+    时任务照常推剩余源，不打断；仅当全部不可用而旧绑定非空时提醒，避免
+    静默空推。
     """
     if resolved_sources:
         return []

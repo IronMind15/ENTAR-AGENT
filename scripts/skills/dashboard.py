@@ -54,6 +54,14 @@ class DashboardSkill(BaseSkill):
         # 第 0 步：「按这几个文档做每日看板」（_NEGATIVE_RE 含「文档」会拦常规路径，需提前）
         if sub_cmd.parse_doc_dashboard_intent(q) is not None:
             return True
+        # v1.12.7：任务级源增删（「把部门周报加进看板」「从看板去掉」同样含「文档/文件」词，
+        # 必须在 _NEGATIVE_RE 拦进 Agent 前接住）
+        if sub_cmd.parse_source_edit_intent(q) is not None:
+            return True
+        # v1.12.7：历史留档回放（看上次的看板/查看板历史）——只读查询，同样
+        # 须在 is_kanban_topic 的歧义 LLM 判定前接住，避免付无谓的 LLM 成本
+        if sub_cmd.parse_history_intent(q) is not None:
+            return True
         if sub_cmd.is_kanban_topic(q):
             # v1.12.3：概念疑问句（「看板数据源和看板任务是分开的吗」）→ LLM 判歧义，
             # 判定非订阅管理 → 放行给 Agent 正常问答（修复 query 意图吞问题）。
@@ -124,6 +132,15 @@ class DashboardSkill(BaseSkill):
         # 「按这几个文档做每日看板」→ 动态数据源创建
         if sub_cmd.parse_doc_dashboard_intent(q) is not None:
             return cls._handle_doc_create(uid)
+        # v1.12.7：任务级源增删（把XX加进看板 / 从看板去掉）
+        source_edit = sub_cmd.parse_source_edit_intent(q)
+        if source_edit:
+            return cls._handle_change_sources(uid, source_edit)
+        # v1.12.7：历史留档回放（只读，回放最近一次推送内容）——独立于
+        # parse_subscription_command（那是查订阅配置，历史查询语义不同）
+        if sub_cmd.parse_history_intent(q) is not None:
+            sub_cmd.touch_activity(uid)
+            return {"answer": cls._render_push_history(uid), "source": "dashboard"}
 
         parsed = sub_cmd.parse_subscription_command(q)
         if not parsed:
@@ -322,10 +339,87 @@ class DashboardSkill(BaseSkill):
         return {"answer": sub_cmd.render_confirmation(pending), "source": "dashboard"}
 
     @classmethod
+    def _handle_change_sources(cls, user_id: str, parsed: dict) -> dict:
+        """v1.12.7：任务级源增删（把XX加进看板 / 从看板去掉 → 确认 → 落地）
+
+        目标任务 = 该用户最近一个订阅（list_for_owner 升序，最近创建在最后）。
+        文档名匹配候选：精确 → 模糊包含 → 未知名兜底最近候选；匹配不到列出
+        当前任务源 + 可加候选引导，不编造「已加入」。
+        """
+        store = get_subscription_store()
+        subs = store.list_for_owner(user_id)
+        if not subs:
+            return {"answer":
+                    "您还没有看板任务。说「帮我推个看板」先开通，再增减数据源。",
+                    "source": "dashboard"}
+        target = subs[-1]
+        doc = cls._match_source_doc(user_id, parsed.get("doc_name") or "")
+        if doc is None:
+            return {"answer": cls._source_candidates_hint(user_id, target),
+                    "source": "dashboard"}
+        action = parsed.get("action") or "add"
+        pending = {"intent": "change_sources", "sub_id": target.id,
+                   "action": action,
+                   "doc_name": doc.name or f"文档{doc.node_id[:8]}",
+                   "doc_key": f"doc_{doc.id}"}
+        sub_cmd.set_pending(user_id, pending)
+        return {"answer": sub_cmd.render_confirmation(pending), "source": "dashboard"}
+
+    @classmethod
+    def _match_source_doc(cls, user_id: str, name: str):
+        """按文档名匹配候选：精确 → 模糊包含 → 未知名兜底最近候选。
+
+        find_by_name 是精确匹配；补一层包含匹配容错（如「周报」命中
+        「33周部门周报」）。返回 DocCandidate 或 None（可加源且 enabled）。
+        """
+        try:
+            from dashboard.doc_candidates import get_candidate_store
+            store = get_candidate_store()
+            if not name:
+                cand = store.get_pending(user_id)
+                return cand if cand and cand.enabled else None
+            cand = store.find_by_name(user_id, name)
+            if cand and cand.enabled:
+                return cand
+            for c in store.list_dashboard_ready(user_id):
+                cname = c.name or ""
+                if cname and (name in cname or cname in name):
+                    return c
+        except Exception as e:
+            logger.warning(f"匹配看板源文档失败({name}): {e}")
+        return None
+
+    @classmethod
+    def _source_candidates_hint(cls, user_id: str, target) -> str:
+        """匹配不到文档时：列出当前任务绑定源 + 可加候选，引导用户说清名字。"""
+        lines = ["没认出您说的文档。当前看板任务的数据源："]
+        try:
+            src_names = "、".join(
+                x.name for x in service.resolve_subscription_sources(target))
+        except Exception:
+            src_names = ""
+        lines.append(f"· {src_names or '（未配置）'}")
+        lines.append("")
+        lines.append("您登记过的可加文档：")
+        try:
+            from dashboard.doc_candidates import get_candidate_store
+            cands = get_candidate_store().list_dashboard_ready(user_id)
+        except Exception:
+            cands = []
+        if cands:
+            lines.extend(f"· {c.name or f'文档{c.node_id[:8]}'}" for c in cands)
+        else:
+            lines.append("·（暂无登记文档，先发文档链接给机器人）")
+        lines.append("")
+        lines.append("回复「把<文档名>加进看板」或「把<文档名>从看板去掉」即可调整。")
+        return "\n".join(lines)
+
+    @classmethod
     def _build_create_pending(cls, user_id: str) -> dict:
         staff_id = cls._staff_id_of(user_id)
-        # v1.12.6（C6）：静态配置已清空（A1），创建时即快照 owner 当前 enabled
-        # 候选做确认展示；推送真正发生时按实时解析拉取（新发布自动纳入）。
+        # v1.12.7（D1）：任务级绑定——创建时快照 owner 当前 enabled 候选做
+        # 任务唯一事实源；之后新发布的文档默认不进此任务，需主动说
+        # 「把这个文档加进看板」（change_sources 意图）。
         sources = []
         try:
             from dashboard.doc_candidates import get_candidate_store
@@ -508,6 +602,46 @@ class DashboardSkill(BaseSkill):
                     f"✅ 已切换订阅输出方式：{mode}。下次推送即按新方式出板。",
                     "source": "dashboard"}
 
+        if intent == "change_sources":
+            # v1.12.7（D1）：任务级源增删落地（按真实 update 结果回报）
+            sub = store.get(pending.get("sub_id") or 0)
+            if not sub:
+                sub_cmd.clear_pending(user_id)
+                return {"answer": "订阅不存在，可能是已删除。说「帮我推个看板」重新开通。",
+                        "source": "dashboard"}
+            owned_ids = {s.id for s in store.list_for_owner(user_id)}
+            if sub.id not in owned_ids:
+                sub_cmd.clear_pending(user_id)
+                return {"answer": "该任务不属于您，无法修改数据源。", "source": "dashboard"}
+            action = pending.get("action")
+            key = str(pending.get("doc_key") or "")
+            name = pending.get("doc_name") or ""
+            current = [str(x) for x in (sub.data_sources or [])]
+            if action == "add":
+                if not key:
+                    sub_cmd.clear_pending(user_id)
+                    return {"answer": "未找到要加入的文档，请重发文档链接后再试。",
+                            "source": "dashboard"}
+                if key in current:
+                    sub_cmd.clear_pending(user_id)
+                    return {"answer": f"《{name}》已在任务中，无需重复添加。",
+                            "source": "dashboard"}
+                current.append(key)
+                sub.data_sources = current
+                store.update(sub)
+                sub_cmd.clear_pending(user_id)
+                return {"answer": f"✅ 已将《{name}》加入看板任务，下次推送即包含该文件。",
+                        "source": "dashboard"}
+            if key in current:
+                current.remove(key)
+                sub.data_sources = current
+                store.update(sub)
+                sub_cmd.clear_pending(user_id)
+                return {"answer": f"✅ 已将《{name}》从看板任务移除，下次推送不再包含该文件。",
+                        "source": "dashboard"}
+            sub_cmd.clear_pending(user_id)
+            return {"answer": f"《{name}》不在当前任务中，无需移除。", "source": "dashboard"}
+
         if intent == "set_template":
             # v1.12.0：切换模板到订阅（按真实 update 结果回报）
             tpl = cls._match_template_key(pending.get("template_key"), user_id)
@@ -663,8 +797,8 @@ class DashboardSkill(BaseSkill):
         for index, left in enumerate(subs):
             if not left.enabled:
                 continue
-            # v1.12.6（C6）：重合度按实时解析的有效来源集合判断，不再比对
-            # 陈旧绑定快照（新发布/删除的文件自动反映到最新集合）。
+            # v1.12.7（D1）：重合度按任务绑定解析的有效来源集合判断（每个
+            # 任务绑定自己的源，实时算以任务为边界）。
             left_sources = service.effective_source_keys(left)
             for right in subs[index + 1:]:
                 if not right.enabled:
@@ -683,6 +817,45 @@ class DashboardSkill(BaseSkill):
                          for a, b, score in overlaps)
             lines.append("如需清理，可说「删除看板」，我会列出数量并再次确认。")
         return "\n".join(lines)
+
+    @classmethod
+    def _render_push_history(cls, user_id: str) -> str:
+        """v1.12.7：回放最近一次推送留档（只读）。
+
+        用户拍板「留档默认保留最近 30 次，每个任务 30 次」——这里取该用户
+        最近一个订阅（list_for_owner 升序，最近创建在最后）的最近一次留档。
+        无订阅/无留档分别引导；内容超长截断到钉钉安全长度，避免整条发不出。
+        """
+        store = get_subscription_store()
+        subs = store.list_for_owner(user_id)
+        if not subs:
+            return "您还没有订阅看板。说「帮我推个看板」开通后，每次推送都会留档，随时可回看。"
+        target = subs[-1]
+        try:
+            from dashboard.push_history import get_push_history_store
+            latest = get_push_history_store().latest(target.id)
+        except Exception as e:
+            logger.warning(f"回放看板留档失败({target.id}): {e}")
+            latest = None
+        if latest is None:
+            return ("该任务还没有推送留档——第一次推送成功后会存档，"
+                    "届时说「看上次的看板」即可回放。")
+        title = latest.title or "恩特能源每日项目看板"
+        body = latest.content or ""
+        if len(body) > 4500:
+            body = body[:4500] + "\n\n…（内容较长已截断，可查看留档原文）"
+        lines = [f"📚 {title}（{latest.pushed_at}）", "", body]
+        lines.extend(["", f"（该任务最近 {cls._history_count(target.id)} 次推送已留档，"
+                          "可追溯）"])
+        return "\n".join(lines)
+
+    @staticmethod
+    def _history_count(sub_id: int) -> int:
+        try:
+            from dashboard.push_history import get_push_history_store
+            return get_push_history_store().count(sub_id)
+        except Exception:
+            return 0
 
     @classmethod
     def _stop_subscription(cls, user_id: str) -> str:

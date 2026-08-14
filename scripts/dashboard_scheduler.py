@@ -221,6 +221,16 @@ def _execute_subscription(sub) -> dict:
 
     get_subscription_store().set_snapshot(
         sub.id, snap, last_pushed_at=service.now_str())
+
+    # v1.12.7：推送成功写留档（每任务保留最近 30 次，可追溯历史看板）。
+    # 留档失败不影响主流程（日志警告即可，不重复告警）。
+    try:
+        from dashboard.push_history import get_push_history_store
+        get_push_history_store().record(
+            sub.id, sub.owner_user_id, sub.title, messages)
+    except Exception as e:
+        logger.warning(f"[看板] 订阅 {sub.id} 留档写入失败: {e}")
+
     logger.info("[看板] 订阅 %s 已推送（%s 人，%s 页；核验=%s；per_source=%s）",
                 sub.id, len(sub.recipients), len(messages),
                 getattr(report, "verification", None) if report else "-",
@@ -231,8 +241,9 @@ def _execute_subscription(sub) -> dict:
 def _deduplicate_due_subscriptions(subs: list) -> tuple[list, list[tuple[int, int]]]:
     """保留来源覆盖最全的订阅，返回 (待执行, [(被抑制ID, 覆盖者ID)])。
 
-    v1.12.6（C6）：来源集合改为实时解析 effective_source_keys——订阅不再
-    绑定固定数据源，同 owner 同时刻同接收人的订阅解析出相同来源即视为重复。
+    v1.12.7（D1）：来源集合按任务绑定解析 effective_source_keys（每个任务
+    绑定自己的数据源，实时算以任务为边界）——同 owner 同时刻同接收人且
+    解析来源被另一任务完整覆盖的订阅，只推覆盖最全的一条，防重复推送。
     """
     from dashboard import service
 

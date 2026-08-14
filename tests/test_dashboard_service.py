@@ -77,11 +77,11 @@ class ResolveSubscriptionSourcesTests(unittest.TestCase):
     def _sub(self, data_sources):
         return Subscription(owner_user_id="u1", data_sources=data_sources)
 
-    def test_owner_enabled_candidates_used_real_time(self):
-        """C6：解析不再看绑定快照——实时拉 owner 当前 enabled 候选。
+    def test_new_document_does_not_auto_join_task(self):
+        """v1.12.7（D1）：任务只解析自己绑定的源。
 
-        订阅创建时只绑了 doc_1，但后来用户又发布了 doc_2——推送必须包含
-        新文档（需求「发布的每个文件都能被解读到」）。
+        订阅绑定 doc_1；之后用户又发布了 doc_2——任务边界固定，doc_2 默认
+        不进已有任务（需主动「把这个文档加进看板」）。
         """
         self._store.add(DocCandidate(user_id="u1", url="u", node_id="n1",
                                      kind="notable", enabled=True))
@@ -90,10 +90,10 @@ class ResolveSubscriptionSourcesTests(unittest.TestCase):
         sub = self._sub(["doc_1"])
         with mock.patch("dashboard.config_model.load_sources", return_value=[]):
             sources = resolve_subscription_sources(sub)
-        self.assertEqual(sorted(s.key for s in sources), ["doc_1", "doc_2"])
+        self.assertEqual([s.key for s in sources], ["doc_1"])
 
     def test_other_owner_candidates_isolated(self):
-        """C6：不同 owner 的文件互不影响（隔离）——只解析本人候选"""
+        """v1.12.7（D1）：不同 owner 的文件互不影响（隔离）——只解析任务绑定候选"""
         self._store.add(DocCandidate(user_id="u1", url="u", node_id="n1",
                                      kind="notable", enabled=True))
         self._store.add(DocCandidate(user_id="u2", url="u", node_id="n2",
@@ -104,7 +104,7 @@ class ResolveSubscriptionSourcesTests(unittest.TestCase):
         self.assertEqual([s.key for s in sources], ["doc_1"])
 
     def test_disabled_candidate_excluded(self):
-        """C6：停用/删除的文档自动退出推送（隔离的停用手段）"""
+        """v1.12.7（D1）：绑定源停用/删除 → 自动退出推送（任务内隔离的停用手段）"""
         self._store.add(DocCandidate(user_id="u1", url="u", node_id="n1",
                                      kind="notable", enabled=False))
         sub = self._sub(["doc_1"])
@@ -112,21 +112,27 @@ class ResolveSubscriptionSourcesTests(unittest.TestCase):
             sources = resolve_subscription_sources(sub)
         self.assertEqual(sources, [])
 
-    def test_static_config_sources_merged(self):
-        """C6：静态配置源仍并入（公司级共享源，A1 后为空的兜底通道）"""
+    def test_static_config_sources_only_bound(self):
+        """v1.12.7（D1）：任务只解析自己绑定的源——绑 project_status 就只出它。
+
+        即使 owner 有动态候选 doc_1，任务边界固定不并入（用户没把它加进任务）。
+        """
         from dashboard.config_model import SourceConfig
         self._store.add(DocCandidate(user_id="u1", url="u", node_id="n1",
                                      kind="notable", enabled=True))
         sub = self._sub(["project_status"])
-        with mock.patch("dashboard.config_model.load_sources", return_value=[
-                SourceConfig(key="project_status", name="研发项目现况表",
-                             base_id="b1")]):
+        with mock.patch("dashboard.config_model.get_source",
+                        return_value=SourceConfig(key="project_status",
+                                                  name="研发项目现况表",
+                                                  base_id="b1")):
             sources = resolve_subscription_sources(sub)
-        self.assertEqual(sorted(s.key for s in sources),
-                         ["doc_1", "project_status"])
+        self.assertEqual([s.key for s in sources], ["project_status"])
 
     def test_migration_fallback_stored_config_only(self):
-        """迁移兜底：owner 无候选且静态源为空 → 回退旧绑定（仅配置键，doc_ 不再走）"""
+        """迁移兜底：任务绑定的源逐个解析——配置键从 config 取，doc_ 键查候选。
+
+        绑定的 project_status 存在 → 出；doc_999 无对应候选 → 跳过，不崩。
+        """
         from dashboard.config_model import SourceConfig
         sub = self._sub(["project_status", "doc_999"])
         with mock.patch("dashboard.config_model.get_source",
@@ -145,7 +151,7 @@ class ResolveSubscriptionSourcesTests(unittest.TestCase):
         self.assertEqual(sources, [])
 
     def test_warning_only_when_all_sources_gone(self):
-        """C6：仅当解析为空且旧绑定非空才提醒（避免静默空推）"""
+        """v1.12.7（D1）：仅当任务绑定源全部不可用且旧绑定非空才提醒（避免静默空推）"""
         sub = self._sub(["doc_1", "doc_2"])
         warnings = source_resolution_warnings(sub, [])
         self.assertEqual(len(warnings), 1)

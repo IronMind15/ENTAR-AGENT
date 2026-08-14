@@ -428,5 +428,76 @@ class SetPerSourceTests(unittest.TestCase):
         self.assertIn("合并成一份看板报告", off)
 
 
+class ParseSourceEditTests(unittest.TestCase):
+    """v1.12.7：任务级源增删意图（把XX加进看板 / 从看板去掉）"""
+
+    def test_parse_add_variants(self):
+        for text in ("把部门周报加进看板", "把33周部门周报加进我的看板",
+                     "将这份周报加入看板", "把研发项目现况表加进看板"):
+            r = sc.parse_source_edit_intent(text)
+            self.assertIsNotNone(r, text)
+            self.assertEqual(r["intent"], "change_sources", text)
+            self.assertEqual(r["action"], "add", text)
+            self.assertTrue(r["doc_name"], text)
+
+    def test_parse_add_deictic_empty_name(self):
+        """「将这个文档加入看板」——指代词无具体名 → 空名交给技能层最近候选兜底"""
+        r = sc.parse_source_edit_intent("将这个文档加入看板")
+        self.assertEqual(r["intent"], "change_sources")
+        self.assertEqual(r["action"], "add")
+        self.assertEqual(r["doc_name"], "")
+
+    def test_parse_remove_variants(self):
+        for text in ("把部门周报从看板去掉", "从看板移除33周部门周报",
+                     "把研发项目现况表从看板删掉", "看板去掉部门周报"):
+            r = sc.parse_source_edit_intent(text)
+            self.assertIsNotNone(r, text)
+            self.assertEqual(r["intent"], "change_sources", text)
+            self.assertEqual(r["action"], "remove", text)
+            self.assertTrue(r["doc_name"], text)
+
+    def test_parse_clean_name(self):
+        """清洗：剥句首指代词 + 句尾载体词，保留「周报」等文档名主体"""
+        r = sc.parse_source_edit_intent("把这个部门周报文件加进看板")
+        self.assertEqual(r["doc_name"], "部门周报")
+
+    def test_not_source_edit_released(self):
+        # 不含看板/加去动词的普通聊天 → 不误判为源操作
+        for text in ("今天天气怎么样", "帮我总结一下", "推个看板给我"):
+            self.assertIsNone(sc.parse_source_edit_intent(text), text)
+
+    def test_render_confirmation_add_remove(self):
+        add = sc.render_confirmation({"intent": "change_sources",
+                                      "action": "add", "doc_name": "部门周报"})
+        self.assertIn("部门周报", add)
+        self.assertIn("加入", add)
+        rem = sc.render_confirmation({"intent": "change_sources",
+                                      "action": "remove", "doc_name": "部门周报"})
+        self.assertIn("部门周报", rem)
+        self.assertIn("移除", rem)
+
+
+class ParseHistoryIntentTests(unittest.TestCase):
+    """v1.12.7：历史留档回放意图（看上次的看板/查看板历史）"""
+
+    def test_parse_history_variants(self):
+        for text in ("看上次的看板", "查看板历史", "看板历史",
+                     "回放上次的看板", "看之前的看板推送", "看板留档"):
+            r = sc.parse_history_intent(text)
+            self.assertIsNotNone(r, text)
+            self.assertEqual(r["intent"], "history", text)
+
+    def test_not_history_released(self):
+        # 普通查询/聊天不误判成历史回放
+        for text in ("看板今天怎么样", "看板几点推送", "帮我推个看板",
+                     "今天天气怎么样"):
+            self.assertIsNone(sc.parse_history_intent(text), text)
+
+    def test_render_confirmation_not_needed(self):
+        # 只读查询，不生成确认文案（render_confirmation 无 history 分支也安全）
+        r = sc.parse_history_intent("看上次的看板")
+        self.assertEqual(r, {"intent": "history"})
+
+
 if __name__ == "__main__":
     unittest.main()

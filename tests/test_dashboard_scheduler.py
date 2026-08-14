@@ -80,7 +80,7 @@ class IsDueTests(unittest.TestCase):
         full = _sub(id=5, data_sources=["doc_1", "doc_2", "doc_3"])
         subset_a = _sub(id=4, data_sources=["doc_1", "doc_2"])
         subset_b = _sub(id=6, data_sources=["doc_3"])
-        # C6（v1.12.6）：去重按实时解析的有效来源集合——mock effective_source_keys
+        # v1.12.7（D1）：去重按任务绑定解析的有效来源集合——mock effective_source_keys
         # 以绑定快照为解析结果，覆盖集合语义与旧实现一致。
         with mock.patch("dashboard.service.effective_source_keys",
                         side_effect=lambda sub: set(sub.data_sources or [])):
@@ -142,6 +142,39 @@ class ExecuteSubscriptionTests(unittest.TestCase):
         got = self._store.get(sub_id)
         self.assertEqual(got.last_pushed_at, "2026-08-10 09:00:00")
         self.assertIsNotNone(got.last_snapshot)
+
+    def test_push_writes_history_archive(self):
+        """v1.12.7：推送成功后写留档（每任务保留 30 次）"""
+        import tempfile
+        from dashboard.push_history import PushHistoryStore
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        hist = PushHistoryStore(db_path=path)
+        self.patch_hist = mock.patch(
+            "dashboard.push_history.get_push_history_store", return_value=hist)
+        self.patch_hist.start()
+        self.addCleanup(self.patch_hist.stop)
+        self.addCleanup(lambda: (hist.close(),
+                                 *[os.path.exists(path + s) and os.remove(path + s)
+                                   for s in ("", "-wal", "-shm")]))
+        sub_id = self._store.create(_sub(alert_mode="always"))
+        sub = self._store.get(sub_id)
+        with mock.patch("dashboard.service.resolve_subscription_sources",
+                        return_value=self._fake_sources()), \
+             mock.patch("dashboard.service.collect_and_parse",
+                        return_value=(_parsed(), [])), \
+             mock.patch("dashboard.service.assemble",
+                        return_value="# 看板"), \
+             mock.patch("dashboard.service.push",
+                        return_value=(True, "")), \
+             mock.patch("dashboard.service.now_str",
+                        return_value="2026-08-10 09:00:00"):
+            result = _execute_subscription(sub)
+        self.assertTrue(result["ok"])
+        self.assertEqual(hist.count(sub_id), 1)
+        latest = hist.latest(sub_id)
+        self.assertIsNotNone(latest)
+        self.assertEqual(latest.sub_id, sub_id)
 
     def test_changes_only_no_change_is_silent(self):
         sub_id = self._store.create(_sub(alert_mode="changes_only"))

@@ -239,13 +239,12 @@ class SubscriptionStore:
     def find_exact_duplicate(self, candidate: Subscription) -> Optional[Subscription]:
         """查找与候选订阅业务配置完全相同的记录。
 
-        v1.12.6（C6）：来源集合按实时解析的有效 key 比较（effective_source_keys）
-        ——订阅不再绑定固定快照，同 owner 当前候选相同即视为同一订阅（新发布/
-        删除的文档自动反映，不会因快照不同误建第二条订阅）。模板/每源独立总结/
-        时间/接收人/提醒模式仍参与区分，允许故意并存的不同输出。
+        v1.12.7（D1）：来源集合按任务绑定的 data_sources 直接比较——每个任务
+        绑定自己的源集合，集合相同才视为同一订阅；不再用 C6 的实时全量解析
+        （那时新发布文档自动进所有任务，导致任务间无边界）。模板/每源独立
+        总结/时间/接收人/提醒模式仍参与区分，允许故意并存的不同输出。
         """
-        from dashboard.service import effective_source_keys
-        wanted = set(effective_source_keys(candidate))
+        wanted = {str(x) for x in (candidate.data_sources or [])}
         for existing in self.list_for_owner(candidate.owner_user_id):
             if (int(existing.push_hour) == int(candidate.push_hour)
                     and int(existing.push_minute) == int(candidate.push_minute)
@@ -257,7 +256,7 @@ class SubscriptionStore:
                     and (existing.template_id or "daily")
                     == (candidate.template_id or "daily")
                     and int(existing.per_source) == int(candidate.per_source)
-                    and set(effective_source_keys(existing)) == wanted):
+                    and {str(x) for x in (existing.data_sources or [])} == wanted):
                 return existing
         return None
 

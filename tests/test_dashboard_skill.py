@@ -17,7 +17,8 @@ from dashboard.config_model import SourceConfig  # noqa: E402
 from dashboard.template_store import _DEFAULT_SECTION_SPEC  # noqa: E402
 
 # A1（v1.12.6）后 dashboard_sources.json 静态配置已清空（数据源全走动态候选）。
-# C6（v1.12.6）后创建流程数据源 = owner 当前 enabled 候选（实时解析，新发布自动纳入）。
+# v1.12.7（D1）创建流程数据源 = 任务级快照 owner 当前 enabled 候选（任务唯一
+# 事实源，新发布文档需主动「把这个文档加进看板」才纳入）。
 # 统一用 fixture 预置 owner 可看板候选 + mock config_model.load_sources（名称兜底）：
 #   - dashboard.doc_candidates.get_candidate_store → 临时库预置可看板候选
 #   - dashboard.config_model.load_sources         → render_confirmation/_format_sources 兜底
@@ -32,8 +33,8 @@ _FIXTURE_SOURCES = [
 def _patch_sources_fixture(owner: str = "u1"):
     """创建流程 fixture：mock 候选存储（2 个可看板文档）+ 静态源名称兜底。
 
-    C6（v1.12.6）：创建订阅的数据源不再来自静态配置，而是 owner 当前 enabled
-    候选——预置与 _FIXTURE_SOURCES 同名的两个候选（id 自动 1、2）。
+    v1.12.7（D1）：创建订阅的数据源不再来自静态配置，而是任务级快照 owner
+    当前 enabled 候选——预置与 _FIXTURE_SOURCES 同名的两个候选（id 自动 1、2）。
     """
     import os
     import tempfile
@@ -202,9 +203,10 @@ class HandleCreateTests(unittest.TestCase):
     @mock.patch("skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
     @mock.patch("skills.dashboard.DashboardSkill._user_template_hint", return_value="")
     def test_create_flow(self, mock_hint, mock_staff):
-        # 1. 说「帮我推个看板」→ 反问（C6 后数据源 = owner 当前 enabled 候选）
+        # 1. 说「帮我推个看板」→ 反问（v1.12.7 创建数据源 = 任务级快照
+        #    owner 当前 enabled 候选）
         #    2. 回复「确认」→ 落地 + 推样例（mock push）——fixture 需覆盖确认，
-        #    因 _execute_pending → find_exact_duplicate 也走实时有效源解析。
+        #    因 _execute_pending → find_exact_duplicate 也按任务绑定源集合判重。
         with _patch_sources_fixture(owner="union001"):
             r = DashboardSkill.handle("帮我推个看板", user_id="union001")
             self.assertEqual(r["source"], "dashboard")
@@ -229,7 +231,7 @@ class HandleCreateTests(unittest.TestCase):
     @mock.patch("skills.dashboard.DashboardSkill._push_sample", return_value="")
     @mock.patch("skills.dashboard.DashboardSkill._user_template_hint", return_value="")
     def test_create_sets_defaults(self, m_hint, m_push, mock_staff):
-        # C6（v1.12.6）：创建数据源 = owner 当前 enabled 候选（doc_1/doc_2）
+        # v1.12.7（D1）：创建数据源 = 任务级快照 owner 当前 enabled 候选（doc_1/doc_2）
         with _patch_sources_fixture(owner="u1"):
             DashboardSkill.handle("帮我推个看板", user_id="u1")
             DashboardSkill.handle("确认", user_id="u1")
@@ -715,8 +717,13 @@ class HandleResumeDeleteTests(unittest.TestCase):
     @mock.patch("skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
     @mock.patch("skills.dashboard.DashboardSkill._push_sample", return_value="")
     def test_exact_duplicate_create_is_reused(self, m_push, mock_staff):
-        """相同用户、来源、时间、接收人和模式不得创建第二条订阅。"""
-        self._store.create(self._sub(data_sources=["project_status", "test_issues"]))
+        """相同用户、来源、时间、接收人和模式不得创建第二条订阅。
+
+        v1.12.7（D1）：任务级绑定后判重按任务绑定的 data_sources 集合比较——
+        setup 用与创建流程一致的候选 key（doc_1/doc_2，fixture 预置），
+        existing 与 candidate 集合相同 → 判重复用，不新建。
+        """
+        self._store.create(self._sub(data_sources=["doc_1", "doc_2"]))
         with _patch_sources_fixture():
             DashboardSkill.handle("帮我推个看板", user_id="u1")
             r = DashboardSkill.handle("确认", user_id="u1")
@@ -1038,6 +1045,198 @@ class SpokenChoiceTests(unittest.TestCase):
         r = DashboardSkill.handle("选第五个", user_id="u_spoken")
         self.assertIn("3 个模板", r["answer"])
         self.assertIsNotNone(sc.get_pending("u_spoken"))  # pending 保留待再选
+
+
+class ChangeSourcesTests(unittest.TestCase):
+    """v1.12.7：任务级源增删端到端（把XX加进看板 / 从看板去掉 → 确认 → 落地）"""
+
+    def setUp(self):
+        import tempfile
+        from dashboard.subscription_store import Subscription, SubscriptionStore
+        from dashboard.doc_candidates import DocCandidate, DocCandidateStore
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self._db_path = path
+        self._store = SubscriptionStore(db_path=path)
+        fd2, path2 = tempfile.mkstemp(suffix=".db")
+        os.close(fd2)
+        self._cand_path = path2
+        self._cands = DocCandidateStore(db_path=path2)
+        self._cands.add(DocCandidate(user_id="u1", url="u1", node_id="n1",
+                                     kind="notable", enabled=True,
+                                     name="部门周报"))
+        self._cands.add(DocCandidate(user_id="u1", url="u2", node_id="n2",
+                                     kind="notable", enabled=True,
+                                     name="研发项目现况表"))
+        self.patch_store = mock.patch(
+            "skills.dashboard.get_subscription_store", return_value=self._store)
+        self.patch_store.start()
+        self.patch_cand = mock.patch(
+            "dashboard.doc_candidates.get_candidate_store",
+            return_value=self._cands)
+        self.patch_cand.start()
+        self.addCleanup(self.patch_store.stop)
+        self.addCleanup(self.patch_cand.stop)
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self):
+        self._store.close()
+        self._cands.close()
+        for p in (self._db_path, self._cand_path):
+            for suffix in ("", "-wal", "-shm"):
+                if os.path.exists(p + suffix):
+                    try:
+                        os.remove(p + suffix)
+                    except OSError:
+                        pass
+
+    def _sub(self, data_sources=None):
+        from dashboard.subscription_store import Subscription
+        return Subscription(
+            owner_user_id="u1", owner_staff_id="staff001", owner_union_id="u1",
+            data_sources=data_sources or ["doc_1"],
+            recipients=["staff001"], created_at="t")
+
+    def test_add_source_confirms_then_applies(self):
+        """把部门周报加进看板 → 反问确认 → 确认后真实加入任务绑定源"""
+        self._store.create(self._sub(["doc_2"]))
+        r = DashboardSkill.handle("把部门周报加进看板", user_id="u1")
+        self.assertIn("确认", r["answer"])
+        self.assertIn("部门周报", r["answer"])
+        # 未确认不入任务
+        subs = self._store.list_for_owner("u1")
+        self.assertEqual([str(x) for x in subs[0].data_sources], ["doc_2"])
+        r2 = DashboardSkill.handle("确认", user_id="u1")
+        self.assertIn("加入", r2["answer"])
+        subs = self._store.list_for_owner("u1")
+        self.assertEqual(sorted(str(x) for x in subs[0].data_sources),
+                         ["doc_1", "doc_2"])
+
+    def test_remove_source_confirms_then_applies(self):
+        """把研发项目现况表从看板去掉 → 确认 → 真实移除"""
+        self._store.create(self._sub(["doc_1", "doc_2"]))
+        r = DashboardSkill.handle("把研发项目现况表从看板去掉", user_id="u1")
+        self.assertIn("确认", r["answer"])
+        r2 = DashboardSkill.handle("确认", user_id="u1")
+        self.assertIn("移除", r2["answer"])
+        subs = self._store.list_for_owner("u1")
+        self.assertEqual([str(x) for x in subs[0].data_sources], ["doc_1"])
+
+    def test_add_duplicate_reports_already_in_task(self):
+        """已绑定源再次加入 → 不重复追加，如实提示"""
+        self._store.create(self._sub(["doc_1"]))
+        r = DashboardSkill.handle("把部门周报加进看板", user_id="u1")
+        r2 = DashboardSkill.handle("确认", user_id="u1")
+        self.assertIn("已在任务中", r2["answer"])
+        subs = self._store.list_for_owner("u1")
+        self.assertEqual([str(x) for x in subs[0].data_sources], ["doc_1"])
+
+    def test_unknown_doc_lists_candidates_not_fabricate(self):
+        """匹配不到文档 → 列出可加候选引导，不编造「已加入」"""
+        self._store.create(self._sub(["doc_1"]))
+        r = DashboardSkill.handle("把不存在的表加进看板", user_id="u1")
+        self.assertIn("没认出", r["answer"])
+        self.assertIn("部门周报", r["answer"])  # 引导可加候选
+        subs = self._store.list_for_owner("u1")
+        self.assertEqual([str(x) for x in subs[0].data_sources], ["doc_1"])
+
+    def test_no_subscription_guides_first(self):
+        r = DashboardSkill.handle("把部门周报加进看板", user_id="nobody")
+        self.assertIn("还没有看板任务", r["answer"])
+
+    def test_cannot_edit_others_task(self):
+        """他人任务不可改：pending 指向的 sub 非本用户所有 → 拒绝"""
+        self._store.create(self._sub(["doc_1"]))  # u1 的
+        from dashboard.subscription_store import Subscription
+        self._store.create(Subscription(
+            owner_user_id="u2", data_sources=["doc_1"], recipients=["s2"]))
+        # 手动构造指向 u2 订阅的 pending（绕过 handle 只能命中最近订阅的限制）
+        from dashboard import subscription_commands as sc
+        sub2 = self._store.list_for_owner("u2")[0]
+        sc.set_pending("u1", {"intent": "change_sources", "sub_id": sub2.id,
+                              "action": "add", "doc_name": "部门周报",
+                              "doc_key": "doc_1"})
+        r = DashboardSkill.handle("确认", user_id="u1")
+        self.assertIn("不属于", r["answer"])
+        # u2 的源未被改动
+        self.assertEqual([str(x) for x in
+                          self._store.get(sub2.id).data_sources], ["doc_1"])
+
+
+class PushHistorySkillTests(unittest.TestCase):
+    """v1.12.7：历史留档回放（看上次的看板）—— 技能层端到端"""
+
+    def setUp(self):
+        import tempfile
+        from dashboard.subscription_store import Subscription, SubscriptionStore
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self._db_path = path
+        self._store = SubscriptionStore(db_path=path)
+        self.patch_store = mock.patch(
+            "skills.dashboard.get_subscription_store", return_value=self._store)
+        self.patch_store.start()
+        self.addCleanup(self.patch_store.stop)
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self):
+        self._store.close()
+        for suffix in ("", "-wal", "-shm"):
+            p = self._db_path + suffix
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+
+    def test_handle_history_replays_latest(self):
+        """「看上次的看板」→ 回放最近一次留档内容"""
+        import tempfile
+        from dashboard.push_history import PushHistoryStore
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        hist = PushHistoryStore(db_path=path)
+        self.patch_hist = mock.patch(
+            "dashboard.push_history.get_push_history_store", return_value=hist)
+        self.patch_hist.start()
+        self.addCleanup(self.patch_hist.stop)
+        self.addCleanup(lambda: (hist.close(),
+                                 *[os.path.exists(path + s) and os.remove(path + s)
+                                   for s in ("", "-wal", "-shm")]))
+        from dashboard.subscription_store import Subscription
+        sub_id = self._store.create(Subscription(
+            owner_user_id="u1", owner_staff_id="s", owner_union_id="u1",
+            data_sources=["doc_1"], recipients=["s"]))
+        hist.record(sub_id, "u1", "恩特能源每日项目看板",
+                    ["今天三个项目滞后", "其余正常"])
+        r = DashboardSkill.handle("看上次的看板", user_id="u1")
+        self.assertIn("今天三个项目滞后", r["answer"])
+        self.assertIn("已留档", r["answer"])
+
+    def test_handle_history_no_archive_guides(self):
+        """任务无留档 → 引导（不谎称有历史）"""
+        import tempfile
+        from dashboard.push_history import PushHistoryStore
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        hist = PushHistoryStore(db_path=path)
+        self.patch_hist = mock.patch(
+            "dashboard.push_history.get_push_history_store", return_value=hist)
+        self.patch_hist.start()
+        self.addCleanup(self.patch_hist.stop)
+        self.addCleanup(lambda: (hist.close(),
+                                 *[os.path.exists(path + s) and os.remove(path + s)
+                                   for s in ("", "-wal", "-shm")]))
+        from dashboard.subscription_store import Subscription
+        self._store.create(Subscription(
+            owner_user_id="u1", owner_staff_id="s", owner_union_id="u1",
+            data_sources=["doc_1"], recipients=["s"]))
+        r = DashboardSkill.handle("查看板历史", user_id="u1")
+        self.assertIn("还没有推送留档", r["answer"])
+
+    def test_handle_history_no_subscription(self):
+        r = DashboardSkill.handle("看上次的看板", user_id="nobody")
+        self.assertIn("还没有订阅看板", r["answer"])
 
 
 if __name__ == "__main__":

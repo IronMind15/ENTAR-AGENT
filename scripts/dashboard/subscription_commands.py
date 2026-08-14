@@ -154,6 +154,34 @@ _CONTEXT_DELETE_RE = re.compile(
 # 事实源，is_confirmation_text 委托其 is_confirm_text），此处旧定义已无任何引用，
 # 删除防两表漂移——修改确认词只改 pending_context 一处。
 _CANCEL_TEXT_RE = re.compile(r"^(?:取消|算了|不要了|不执行|先不弄了)[。！!]?$")
+# v1.12.7：任务级源增删（把XX加进看板 / 把XX从看板去掉）。含「文档/文件」词，
+# 必须在 _NEGATIVE_RE（160 行）之前判定——match 层单独提前接（parse_source_edit_intent）。
+# 触发门槛：必须含「看板」+ 明确的加/去动词，防把普通聊天误判成源操作。
+_SOURCE_EDIT_RE = re.compile(
+    r"(?:把|将)?[^，。！？\n]{0,16}?(?:加进|加入|加到|纳入|放进|加上)[^，。！？\n]{0,8}?看板"
+    r"|看板[^，。！？\n]{0,8}?(?:加上|加入|纳入)[^，。！？\n]{0,16}?"
+    r"|(?:把|将)[^，。！？\n]{0,16}?从[^，。！？\n]{0,8}?看板[^，。！？\n]{0,8}?(?:去掉|移除|删掉|剔除|解除)"
+    r"|看板[^，。！？\n]{0,8}?(?:去掉|移除|删掉|剔除)[^，。！？\n]{0,16}?"
+    r"|(?:把|将)[^，。！？\n]{0,16}?(?:从看板|看板里?|看板中)?(?:去掉|移除|删掉|剔除|不要了|不看了)")
+_SOURCE_ADD_NAME_RE = re.compile(
+    r"(?:把|将)?(?P<n1>[^，。！？\n:：]{1,20}?)(?:这个)?(?:加进|加入|加到|纳入|放进|加上)[^，。！？\n]{0,8}?看板"
+    r"|看板[^，。！？\n]{0,8}?(?:加上|加入|纳入)(?P<n2>[^，。！？\n]{1,20}?)"
+    r"|(?:把|将)(?P<n3>[^，。！？\n]{1,20}?)(?:加进|加入|加到|纳入|放进)看板")
+_SOURCE_REMOVE_NAME_RE = re.compile(
+    r"(?:把|将)?(?P<n1>[^，。！？\n:：]{1,20}?)从[^，。！？\n]{0,8}?看板[^，。！？\n]{0,8}?(?:去掉|移除|删掉|剔除)"
+    r"|看板[^，。！？\n]{0,8}?(?:去掉|移除|删掉|剔除)(?P<n2>[^，。！？\n]{1,20}?)"
+    r"|(?:把|将)(?P<n3>[^，。！？\n]{1,20}?)(?:从看板|看板里?|看板中)?(?:去掉|移除|删掉|剔除|不要了|不看了)")
+# 名称清洗：剥句首指代词（这个/这份/刚发的...）与句尾泛指载体词（文件/文档/表格）；
+# 「周报」等可能是文档名一部分，不剥。清洗后为空 → 表示「最近发的那个文档」。
+_SOURCE_NAME_CLEAN_RE = re.compile(
+    r"^(?:这个|这份|那个|刚发的?|刚传的?|新发的?|新传的?|刚才|之前|前面|上面|上述|"
+    r"我(?:刚)?(?:发|传)(?:的)?|我发的?|我传的?)+(.*)$")
+
+# v1.12.7：历史留档回放（看上次的看板 / 查看板历史 / 留档）。只读查询，
+# 不进 _NEGATIVE_RE 判定（不含文档/文件词），独立于 _QUERY_RE（后者是查配置）。
+_HISTORY_RE = re.compile(
+    r"(?:历史|留档|上次|前几期|上几次|以前的?|之前的?)(?:的)?(?:看板|推送|报告|内容)|"
+    r"(?:看板|每日看板)(?:的)?(?:历史|留档|上次|之前|前几期)")
 
 # 周次用 1-7（周一=1 … 周日=7），与 datetime.isoweekday() 对齐
 _WEEKDAY_MAP = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "日": 7, "天": 7}
@@ -183,6 +211,59 @@ def parse_doc_dashboard_intent(text: str,
     if _LEARN_ONLY_RE.search(t):
         return None  # 「把文档学习入库」是学习，不是做看板
     return {"intent": "doc_create", **(ctx or {})}
+
+
+def parse_source_edit_intent(text: str) -> Optional[dict]:
+    """识别任务级源增删（v1.12.7）：把XX加进看板 / 把XX从看板去掉。
+
+    含「文档/文件」词，独立于 _NEGATIVE_RE 判定（match 层提前接，防被
+    「文档」否定词拦进 Agent）。返回 {"intent": "change_sources",
+    "action": "add|remove", "doc_name": str}；非源操作返回 None。
+
+    名称可能抓不到（如「把这个加进看板」）——doc_name 为空交给技能层
+    用「最近候选」兜底；动词判不准则默认 remove（去掉类动词更常见）。
+    """
+    t = (text or "").strip()
+    if not t or "看板" not in t:
+        return None
+    if not _SOURCE_EDIT_RE.search(t):
+        return None
+    action, raw = None, ""
+    for pat, a in ((_SOURCE_REMOVE_NAME_RE, "remove"),
+                   (_SOURCE_ADD_NAME_RE, "add")):
+        m = pat.search(t)
+        if m:
+            action, raw = a, (next((g for g in m.groups() if g), "") or "")
+            break
+    if action is None:
+        action = ("remove" if re.search(r"(?:去掉|移除|删掉|剔除|解除|不要了|不看了)", t)
+                  else "add")
+    return {"intent": "change_sources", "action": action,
+            "doc_name": _clean_source_name(raw)}
+
+
+def _clean_source_name(raw: str) -> str:
+    """清洗源编辑意图里提取的文档名：剥句首指代词 + 句尾泛指载体词。"""
+    name = (raw or "").strip()
+    m = _SOURCE_NAME_CLEAN_RE.match(name)
+    if m:
+        name = m.group(1).strip()
+    name = re.sub(r"(?:文件|文档|表格)$", "", name).strip()
+    return name
+
+
+def parse_history_intent(text: str) -> Optional[dict]:
+    """识别历史留档回放（v1.12.7）：看上次的看板 / 查看板历史 / 看板留档。
+
+    返回 {"intent": "history"}；非历史查询返回 None。只读查询，技能层直接
+    回放该任务最近一次留档（push_history.latest），不设 pending 确认。
+    """
+    t = (text or "").strip()
+    if not t:
+        return None
+    if not _HISTORY_RE.search(t):
+        return None
+    return {"intent": "history"}
 
 
 def parse_subscription_command(text: str, ctx: Optional[dict] = None) -> Optional[dict]:
@@ -457,6 +538,10 @@ _INTENT_DEFS: list[dict] = [
     {"id": "doc_create", "name": "文档动态看板", "trigger": "按这几个文档做每日看板",
      "regex": _DOC_REF_RE, "desc": "发钉钉文档动态做看板（bot 带链接路径放宽引用词）",
      "status": "enabled"},
+    {"id": "change_sources", "name": "增减任务数据源", "trigger": "把部门周报加进看板 / 从看板去掉",
+     "regex": _SOURCE_EDIT_RE,
+     "desc": "任务级源增删（含文档/文件词，在否定词前判定；名称匹配最近候选兜底）",
+     "status": "enabled"},
     {"id": "create", "name": "开通订阅", "trigger": "帮我推个看板 / 做每日看板",
      "regex": _CREATE_RE, "desc": "创建订阅（须明确创建意图，防误建）", "status": "enabled"},
     {"id": "stop", "name": "停用订阅", "trigger": "停掉看板",
@@ -471,6 +556,9 @@ _INTENT_DEFS: list[dict] = [
      "status": "enabled"},
     {"id": "query", "name": "查询配置", "trigger": "看板几点推送 / 我的看板设置",
      "regex": _QUERY_RE, "desc": "查订阅配置（不含「时间」防改时间被误判）", "status": "enabled"},
+    {"id": "history", "name": "历史看板回放", "trigger": "看上次的看板 / 查看板历史 / 看板留档",
+     "regex": _HISTORY_RE, "desc": "回放最近一次推送留档（每任务保留 30 次，只读不确认）",
+     "status": "enabled"},
     {"id": "change_time", "name": "改推送时间", "trigger": "改看板时间到10点",
      "regex": _TIME_RE, "desc": "修改推送时间点", "status": "enabled"},
     {"id": "change_freq", "name": "改推送频率", "trigger": "每周一和周五",
@@ -643,7 +731,7 @@ def render_confirmation(pending: dict, current=None) -> str:
         lines.append("好的，我可以为您开通每日项目看板推送，请确认：")
         lines.append("")
         lines.append(f"📋 数据板块：{_format_sources(sources)}")
-        lines.append("🆕 之后您新发布的文档会自动纳入每日推送（每次发送时实时计算，无需重新订阅）。")
+        lines.append("📌 该任务固定跟踪以上文件源；之后新发布的文档需主动说「把这个文档加进看板」才会纳入。")
         lines.append(f"⏰ 推送时间：{format_weekdays(pending.get('weekdays', ''))} "
                      f"{pending.get('push_hour', 9):02d}:{pending.get('push_minute', 0):02d}")
         lines.append(f"🔔 提醒模式：{'仅数据有变化时推送' if pending.get('alert_mode', 'always') == 'changes_only' else '每天固定推送（附今日变化）'}")
@@ -656,7 +744,7 @@ def render_confirmation(pending: dict, current=None) -> str:
         lines.append("好的，将按以下文档做每日看板，请确认：")
         lines.append("")
         lines.append(f"📋 数据板块：{_format_sources(sources)}")
-        lines.append("🆕 之后您新发布的文档会自动纳入每日推送（每次发送时实时计算，无需重新订阅）。")
+        lines.append("📌 该任务固定跟踪以上文件源；之后新发布的文档需主动说「把这个文档加进看板」才会纳入。")
         lines.append(f"⏰ 推送时间：{format_weekdays(pending.get('weekdays', ''))} "
                      f"{pending.get('push_hour', 9):02d}:{pending.get('push_minute', 0):02d}")
         lines.append(f"🔔 提醒模式：{'仅数据有变化时推送' if pending.get('alert_mode', 'always') == 'changes_only' else '每天固定推送（附今日变化）'}")
@@ -700,6 +788,15 @@ def render_confirmation(pending: dict, current=None) -> str:
                               "所有数据源合并成一份看板报告（总体结论先行）"))
         lines.append("")
         lines.append("回复「确认」生效；或告诉我其他调整（如「改到10点」「也推给张工」）。")
+
+    elif intent == "change_sources":
+        # v1.12.7：任务级源增删确认
+        action = pending.get("action")
+        name = pending.get("doc_name") or ""
+        verb = "加入" if action == "add" else "移除"
+        lines.append(f"好的，将把《{name}》{verb}看板任务的数据源：")
+        lines.append("")
+        lines.append("回复「确认」生效；回复「取消」则不改动。")
 
     elif intent == "stop":
         count = len(pending.get("sub_ids") or [])
