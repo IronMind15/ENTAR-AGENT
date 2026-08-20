@@ -21,6 +21,7 @@ import logging
 import os
 import sqlite3
 import threading
+import atexit
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Optional
@@ -1298,6 +1299,19 @@ class SQLiteUserStore(UserStore):
 # ===== 全局单例 =====
 _store: Optional[SQLiteUserStore] = None
 _store_lock = threading.Lock()
+
+
+def _close_global_store():
+    """进程退出时释放主线程的全局 SQLite 连接。"""
+    global _store
+    if _store is not None:
+        try:
+            _store.close()
+        except Exception:
+            pass
+
+
+atexit.register(_close_global_store)
 
 
 def get_store() -> SQLiteUserStore:

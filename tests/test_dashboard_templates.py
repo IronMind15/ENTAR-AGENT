@@ -71,7 +71,8 @@ class TemplateStoreTests(unittest.TestCase):
                     res["template"], staff_id="staff001")
             self.assertTrue(path.startswith(tmp))
             self.assertTrue(os.path.exists(path))
-            payload = json.load(open(path, encoding="utf-8"))
+            with open(path, encoding="utf-8") as f:
+                payload = json.load(f)
             self.assertEqual(payload["key"], "my_tpl")
             self.assertEqual(payload["name"], "我的模板")
             self.assertEqual(payload["reduce_instructions"], "先总体后各表")
@@ -103,7 +104,7 @@ class TemplateStoreTests(unittest.TestCase):
 
     def test_system_seeds_exist_and_daily_is_regression_anchor(self):
         keys = [t.key for t in self.store.list_visible()]
-        self.assertEqual(sorted(keys), ["daily", "project", "weekly"])
+        self.assertEqual(sorted(keys), ["coordination", "daily", "project", "weekly"])
         daily = self.store.get("daily")
         self.assertEqual(daily.scope, "system")
         # daily section_spec 必须与硬编码默认一致（_render spec=None 用它做逐字锚点）
@@ -882,6 +883,18 @@ class DashboardSkillTemplateTests(unittest.TestCase):
         r = DashboardSkill.handle("我的看板", user_id="union001")
         self.assertIn("每日简报", r["answer"])
         self.assertIn("模板", r["answer"])
+
+    def test_subscription_status_shows_actual_failed_run(self):
+        """最近一次失败及其告警投递结果必须对订阅所有者可见。"""
+        sub_id = self._sub_store.list_for_owner("union001")[0].id
+        self._sub_store.set_execution_status(
+            sub_id, status="failed", stage="push",
+            reason="推送失败：权限不足", alert_status="failed")
+        from skills.dashboard import DashboardSkill
+        answer = DashboardSkill.handle("我的看板", user_id="union001")["answer"]
+        self.assertIn("❌ 失败", answer)
+        self.assertIn("推送失败：权限不足", answer)
+        self.assertIn("失败提醒发送失败", answer)
 
 
 class TemplateChoiceFlowTests(unittest.TestCase):

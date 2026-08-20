@@ -496,6 +496,24 @@ class HandleDocCreateTests(unittest.TestCase):
 
     @mock.patch("skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
     @mock.patch("skills.dashboard.DashboardSkill._push_sample", return_value="已推送")
+    def test_doc_request_uses_natural_time_and_coordination_template(self, m_push, mock_staff):
+        """长请求的时间和三段式输出在确认前必须作为同一草稿保留。"""
+        self._seed_candidates()
+        request = "每天早晨八点半发，给出结论、需要关注的问题、需要协调的事情"
+        draft = DashboardSkill._handle_doc_create(
+            "u1", source_candidate_ids=[1, 2], request_text=request)
+        self.assertIn("08:30", draft["answer"])
+        self.assertIn("需要协调的事情", draft["answer"])
+        # 确认前再次口语调整，应更新这份草稿而不是提示“还没有订阅”。
+        changed = DashboardSkill.handle("改到九点半", user_id="u1")
+        self.assertIn("09:30", changed["answer"])
+        DashboardSkill.handle("确认", user_id="u1")
+        sub = self._store.list_for_owner("u1")[0]
+        self.assertEqual((sub.push_hour, sub.push_minute), (9, 30))
+        self.assertEqual(sub.template_id, "coordination")
+
+    @mock.patch("skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
+    @mock.patch("skills.dashboard.DashboardSkill._push_sample", return_value="已推送")
     @mock.patch("skills.dashboard.DashboardSkill._user_template_hint", return_value="")
     def test_natural_confirm_word_duide_executes_pending(self, m_hint, m_push, mock_staff):
         """v1.12.4 回归（袁会荧实测）：发链接+「做每日看板」意图 → 反问确认 →
@@ -823,19 +841,24 @@ class QueryDashboardToolContractTests(unittest.TestCase):
 
     def test_dash_push_scopes_to_current_user(self):
         """v1.11.10：dash_push 主动推送必须按当前用户隔离——
-        只采本人数据源、只推本人订阅，防『现在推看板』把别人的私人表格
-        推给所有订阅接收人"""
+        只操作本人任务绑定的数据源和该任务接收人，防『现在推看板』把别人的
+        私人表格或本人其他任务的接收人带入。"""
         from tools.dash_push import execute as push_exec
         import inspect
         src = inspect.getsource(push_exec)
-        self.assertIn("load_all_available_sources(user_id=uid)", src)
+        self.assertIn("resolve_subscription_sources(sub0)", src)
         self.assertIn("owner_user_id == uid", src)
-        self.assertNotIn("load_all_available_sources()", src)
+        self.assertIn("recipients = list(sub0.recipients)", src)
 
     def test_dash_push_definition_mentions_own_subscription(self):
         from tools.dash_push import DEFINITION
         self.assertIn("当前用户", DEFINITION["description"])
         self.assertIn("该用户启用的订阅", DEFINITION["description"])
+
+    def test_immediate_demo_is_released_to_agent_push_tool(self):
+        """演示/模拟是一次性外发，不能被订阅管理或接收人规则截走。"""
+        self.assertFalse(DashboardSkill.match("现在推给我一个演示", user_id="u1"))
+        self.assertFalse(DashboardSkill.match("模拟一份看板现在推给我", user_id="u1"))
 
 
 class TemplateHintAndAdjustTests(unittest.TestCase):
@@ -950,9 +973,11 @@ class PushSamplePerSourceTests(unittest.TestCase):
                         return_value=(True, "")) as m_push:
             note = DashboardSkill._push_sample(self._sub())
         self.assertIn("每个数据源一条", note)
-        # 逐源组装：两源各一条，交给 push_messages 顺序发送
+        # 首条固定提示词 → 每源总结 → 最后一条来源链接（无链接时只保留前三条）。
         m_per_source.assert_called_once()
-        self.assertEqual(m_push.call_args[0][2], ["源A总结", "源B总结"])
+        pushed = m_push.call_args[0][2]
+        self.assertTrue(pushed[0].startswith("📜 本次看板任务固定提示词"))
+        self.assertEqual(pushed[1:3], ["源A总结", "源B总结"])
 
 
 class SpokenChoiceTests(unittest.TestCase):

@@ -38,11 +38,15 @@ class _TempDB(unittest.TestCase):
 class RecordAndTrimTests(_TempDB):
     def test_record_creates_history(self):
         h = self._store.record(1, "u1", "恩特能源每日项目看板",
-                               ["第一条", "第二条"])
+                               ["第一条", "第二条"],
+                               prompt_version="task-prompt-user-v1",
+                               prompt_hash="abc123")
         self.assertEqual(h.sub_id, 1)
         self.assertEqual(h.message_count, 2)
         self.assertIn("第一条", h.content)
         self.assertIn("第二条", h.content)
+        self.assertEqual("task-prompt-user-v1", h.prompt_version)
+        self.assertEqual("abc123", h.prompt_hash)
         self.assertEqual(self._store.count(1), 1)
 
     def test_join_messages_separates(self):

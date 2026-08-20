@@ -66,6 +66,20 @@ app = FastAPI(title="恩特小助手")
 app.include_router(admin_router)
 
 
+def _validate_security_config():
+    """生产部署必须显式配置管理端认证，避免漏变量就暴露 /admin。"""
+    from config import APP_ENV, ADMIN_PASSWORD, IS_PRODUCTION
+    if IS_PRODUCTION and not ADMIN_PASSWORD:
+        raise RuntimeError(
+            "ENTAR_ENV=production 时必须设置 ADMIN_PASSWORD；"
+            "已拒绝启动，避免 /admin 管理接口无认证暴露。"
+        )
+    if not ADMIN_PASSWORD:
+        logger.warning("管理端当前未设置 ADMIN_PASSWORD，仅允许 development 环境本地使用")
+    else:
+        logger.info("管理端认证已启用（环境：%s）", APP_ENV)
+
+
 @app.on_event("startup")
 def _startup():
     """启动时：先崩溃恢复（同步），再后台预热重排模型。
@@ -73,6 +87,7 @@ def _startup():
     顺序执行避免并发触发 numpy 循环导入（chromadb 与 sentence_transformers
     都依赖 numpy，两线程同时 import 会 circular import 失败）。
     """
+    _validate_security_config()
     try:
         from doc_mgr.recovery import recover_crashed_data
         from doc_mgr.storage import get_store

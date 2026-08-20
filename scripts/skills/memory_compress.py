@@ -73,6 +73,9 @@ def _call_llm(messages: list[dict], max_tokens: int = 1000) -> str | None:
         import httpx
         import importlib
         cfg = importlib.import_module("config")
+        if getattr(cfg, "TESTING", False):
+            logger.info("测试模式跳过长期记忆压缩的 DeepSeek 调用")
+            return None
         api_key = getattr(cfg, "DEEPSEEK_API_KEY", "")
         if not api_key:
             logger.warning("DEEPSEEK_API_KEY 未配置，跳过长期记忆压缩")

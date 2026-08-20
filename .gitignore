@@ -39,6 +39,9 @@ data/uploads/
 # ── 看板用户模板文件（运行产物，不退版本） ──
 data/dashboard_templates/
 
+# ── 看板任务提示词快照（运行产物，可能含业务内容，不退版本） ──
+data/dashboard_tasks/
+
 # ── MinerU OCR 中间产物（可重新生成，不退版本） ──
 data/standards/mineru_output/
 

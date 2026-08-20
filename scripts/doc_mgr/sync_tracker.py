@@ -57,6 +57,19 @@ class SyncTracker:
             conn.close()
             self._local.conn = None
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+
+    def __del__(self):
+        """短生命周期路由实例的兜底释放；显式 close 仍是首选。"""
+        try:
+            self.close()
+        except Exception:
+            pass
+
     def _init_db(self):
         """幂等建表 + 迁移旧表"""
         with self._lock:

@@ -1,4 +1,4 @@
-"""Web 用户层移除 tripwire（v1.13.0）
+"""Web 用户层移除 tripwire（v1.13.1）
 
 /ask（Web 问答）、/feedback（Web 反馈）路由已物理删除，/ 改为跳转 /admin，
 普通用户只用钉钉——Web 端 /ask 的 user 参数（用户名伪造攻击面）随之消失。

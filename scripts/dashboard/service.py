@@ -174,24 +174,96 @@ def collect_and_parse(sources: list, operator_id: str = "", staff_id: str = ""):
 
 
 def resolve_template(sub) -> Optional["DashboardTemplate"]:
-    """订阅 → 其输出格式模板；模板缺失/不可见 → None（回落 daily 旧行为）
+    """订阅 → 任务提示词对应的模板快照；旧订阅才回落到实时模板。
 
-    v1.12.0：用户私有模板被删时订阅仍引用它，这里优雅回落而不是崩。
+    v1.13.1：有 task_prompt_spec 时只使用创建/明确修改任务时保存的结构，
+    不因同名模板后来被编辑而悄悄改变历史任务行为。
     """
     if sub is None:
         return None
     try:
         from .template_store import get_template_store
+        spec = getattr(sub, "task_prompt_spec", None) or {}
+        if spec:
+            from .template_store import DashboardTemplate
+            return DashboardTemplate(
+                key=spec.get("key", getattr(sub, "template_id", "daily")),
+                name=spec.get("name", "每日简报"),
+                title=spec.get("title", ""),
+                map_instructions=spec.get("map_instructions", ""),
+                reduce_instructions=spec.get("reduce_instructions", ""),
+                section_spec=spec.get("section_spec", []) or [],
+            )
         return get_template_store().get(sub.template_id, user_id=sub.owner_user_id)
     except Exception as e:
         logger.warning(f"取看板模板失败({getattr(sub, 'template_id', '?')}): {e}")
         return None
 
 
+def ensure_task_prompt(sub, *, force: bool = False) -> str:
+    """为订阅生成一次任务提示词快照；返回固定提示词文本。
+
+    旧任务首次执行时懒迁移，之后也固定。``force=True`` 只用于用户明确
+    切换或编辑模板，不能由每次定时运行触发。
+    """
+    if getattr(sub, "task_prompt", "") and getattr(sub, "task_prompt_spec", None) and not force:
+        return sub.task_prompt
+    from .template_store import get_template_store
+    from .task_prompt import build_prompt
+    template = get_template_store().get(
+        getattr(sub, "template_id", "daily"), user_id=getattr(sub, "owner_user_id", ""))
+    if template is None:
+        template = get_template_store().get("daily")
+    prompt, spec, digest, created_at = build_prompt(sub, template)
+    sub.task_prompt = prompt
+    sub.task_prompt_spec = spec
+    sub.task_prompt_version = "task-prompt-v1"
+    sub.task_prompt_hash = digest
+    sub.task_prompt_created_at = created_at
+    # 已有任务在生成/刷新快照时立即同步到该用户专属文件夹；新建任务 id 尚未
+    # 分配，创建后会由调用方再同步一次。
+    if getattr(sub, "id", 0):
+        try:
+            from .task_prompt import sync_prompt_file
+            sync_prompt_file(sub)
+        except Exception as exc:
+            logger.warning("任务提示词文件同步失败(%s): %s", getattr(sub, "id", "?"), exc)
+    return prompt
+
+
+def sync_task_prompt_file(sub) -> str:
+    """显式同步任务提示词文件（新建任务获得数据库 ID 后调用）。"""
+    try:
+        from .task_prompt import sync_prompt_file
+        return sync_prompt_file(sub)
+    except Exception as exc:
+        logger.warning("任务提示词文件同步失败(%s): %s", getattr(sub, "id", "?"), exc)
+        return ""
+
+
+def render_task_prompt_message(sub) -> str:
+    """看板主动消息的首条固定提示词。"""
+    from .task_prompt import render_prompt_message
+    return render_prompt_message(sub)
+
+
+def render_source_links(sources: list) -> str:
+    """全局最后一条来源链接，保证用户无需从报告正文里翻找。"""
+    lines = ["🔗 本次看板数据来源"]
+    for source in sources or []:
+        name = getattr(source, "name", "数据源") or "数据源"
+        url = getattr(source, "source_url", "") or ""
+        if url:
+            lines.append(f"- [{name}]({url})")
+        else:
+            lines.append(f"- {name}（未提供可访问链接）")
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
 def assemble(parsed: list, title: str = "恩特能源每日项目看板",
              date_str: str = "", llm_func=None, old_snapshot=None,
              evidence_pipeline: bool = False, errors: list[str] | None = None,
-             template=None) -> str:
+             template=None, task_prompt: str = "") -> str:
     """组装 Markdown。
 
     evidence_pipeline=True 使用完整字段、分批 LLM 和来源校验；默认保留旧接口，
@@ -201,7 +273,8 @@ def assemble(parsed: list, title: str = "恩特能源每日项目看板",
         from .llm_pipeline import build_dashboard_report
         return build_dashboard_report(
             parsed, old_snapshot, llm_func, title=title, date_str=date_str,
-            collection_errors=errors, template=template).text
+            collection_errors=errors, template=template,
+            task_prompt=task_prompt).text
     from .assembler import assemble_markdown, llm_assemble
     if llm_func:
         return llm_assemble(parsed, title=title, date_str=date_str,
@@ -211,18 +284,19 @@ def assemble(parsed: list, title: str = "恩特能源每日项目看板",
 
 def assemble_report(parsed: list, title: str = "恩特能源每日项目看板",
                     date_str: str = "", llm_func=None, old_snapshot=None,
-                    errors: list[str] | None = None, template=None):
+                    errors: list[str] | None = None, template=None,
+                    task_prompt: str = ""):
     """返回含语义分页的证据报告；定时推送使用此接口。"""
     from .llm_pipeline import build_dashboard_report
     return build_dashboard_report(
         parsed, old_snapshot, llm_func, title=title, date_str=date_str,
-        collection_errors=errors, template=template)
+        collection_errors=errors, template=template, task_prompt=task_prompt)
 
 
 def assemble_per_source_messages(parsed: list, title: str = "恩特能源每日项目看板",
                                  date_str: str = "", llm_func=None,
                                  old_snapshot=None, errors: list[str] | None = None,
-                                 template=None) -> list[str]:
+                                 template=None, task_prompt: str = "") -> list[str]:
     """每个数据源单独跑一轮组装 → 每个源总结一条（识别/预览逐源聚焦）。
 
     v1.12.5（消息流）：数据源多时一次性全塞 LLM reduce 复杂/超限。这里按源
@@ -240,7 +314,16 @@ def assemble_per_source_messages(parsed: list, title: str = "恩特能源每日�
     for item in parsed:
         report = build_dashboard_report(
             [item], old_snapshot, llm_func, title=title, date_str=date_str,
-            collection_errors=errors, template=template)
+            collection_errors=errors, template=template, task_prompt=task_prompt)
+        logger.info(
+            "[看板逐源总结] source=%s accepted=%s fallback=%s rejected=%s "
+            "evidence_repaired=%s llm_errors=%s pages=%s",
+            item.get("name") or item.get("source_key"),
+            report.verification.get("accepted_claims", 0),
+            report.verification.get("fallback_claims", 0),
+            report.verification.get("rejected_claims", 0),
+            report.verification.get("repaired_evidence_claims", 0),
+            report.verification.get("llm_errors", 0), len(report.messages))
         msgs.extend(report.messages)
     return msgs
 

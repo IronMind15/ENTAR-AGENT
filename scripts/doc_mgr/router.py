@@ -5,8 +5,9 @@
 所有路由以 /admin 为前缀，由 main.py 挂载。
 
 权限说明：
-  - 未设 ADMIN_PASSWORD 时，/admin 页面、上传、删除均开放（向后兼容）
-  - 设置 ADMIN_PASSWORD 后，需在请求中带 ?password=xxx 参数
+  - 开发环境未设 ADMIN_PASSWORD 时，保留本地开放兼容；生产环境 fail-closed
+  - 设置 ADMIN_PASSWORD 后，通过 POST 登录签发 HttpOnly 会话 Cookie
+    （旧 ?password= 参数仅为兼容已有自动化调用，管理页面不再使用）
   - 钉钉端上传由 user_store.check_permission() 控制（基于 leader/role）
 """
 
@@ -16,9 +17,12 @@ import os
 import re
 import uuid
 import logging
+import hashlib
+import hmac
+from contextvars import ContextVar
 from datetime import datetime as dt
-from fastapi import APIRouter, UploadFile, File, Form, Query, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import APIRouter, Depends, UploadFile, File, Form, Query, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from .engine import process_file
 from .storage import get_store
@@ -52,6 +56,9 @@ _ALLOWED_COLLECTIONS = {"standards", "error_codes", "experience_kb"}
 # 数据根目录：sync-delete / sync-trigger 等接受 file_path 的接口
 # 只能操作此目录内的文件，防止未授权删除/处理服务器任意路径
 _DATA_ROOT = os.path.join(_PROJECT_ROOT, "data")
+_ADMIN_SESSION_COOKIE = "entar_admin_session"
+_ADMIN_SESSION_VALID: ContextVar[bool] = ContextVar(
+    "entar_admin_session_valid", default=False)
 
 
 def _is_within_data_dir(path: str) -> bool:
@@ -98,17 +105,48 @@ def _get_admin_password() -> str:
         return ""
 
 
+def _admin_session_signature() -> str:
+    """从当前管理密码派生不可逆会话标识，不把明文密码存进 Cookie。"""
+    password = _get_admin_password()
+    if not password:
+        return ""
+    return hmac.new(
+        password.encode("utf-8"), b"entar-admin-session-v1", hashlib.sha256,
+    ).hexdigest()
+
+
+def _has_valid_admin_session(request: Request) -> bool:
+    expected = _admin_session_signature()
+    supplied = request.cookies.get(_ADMIN_SESSION_COOKIE, "")
+    return bool(expected and supplied and hmac.compare_digest(supplied, expected))
+
+
+async def _bind_admin_session(request: Request):
+    """为所有管理端路由绑定当前请求的会话认证结果。"""
+    _ADMIN_SESSION_VALID.set(_has_valid_admin_session(request))
+
+
 def _verify_admin_access(password: str = "") -> bool:
     """验证管理员访问权限"""
     admin_pw = _get_admin_password()
     if not admin_pw:
-        return True  # 没设密码 = 开放
-    return password == admin_pw
+        # 本地开发兼容：production/prod 必须由 main.py 在启动时拒绝。
+        # 这里同样 fail-closed，避免测试外的 ASGI 宿主绕过 main.py 直接挂载 router。
+        try:
+            from config import IS_PRODUCTION
+            return not IS_PRODUCTION
+        except Exception:
+            return False
+    return bool(_ADMIN_SESSION_VALID.get() or
+                (password and hmac.compare_digest(password, admin_pw)))
 
 
 def _check_password(request: Request) -> str | None:
-    """从请求参数中获取密码"""
+    """读取兼容旧调用的 query 密码；管理页面自身使用会话 Cookie。"""
     return request.query_params.get("password", "")
+
+
+router.dependencies.append(Depends(_bind_admin_session))
 
 
 def _check_user_permission(user_id: str = "", action: str = "upload") -> bool:
@@ -129,7 +167,7 @@ def admin_home(request: Request):
     if not _verify_admin_access(password):
         return HTMLResponse(
             content="<h2>需要密码</h2>"
-                     "<form method='get'>"
+                     "<form method='post' action='/admin/login'>"
                      "密码：<input name='password' type='password'>"
                      "<input type='submit' value='进入'>"
                      "</form>"
@@ -137,6 +175,25 @@ def admin_home(request: Request):
             status_code=401,
         )
     return ADMIN_HTML
+
+
+@router.post("/login")
+def admin_login(password: str = Form("")):
+    """管理端登录：只接受 POST，签发 HttpOnly 签名 Cookie 后跳转。"""
+    if not _verify_admin_access(password):
+        return HTMLResponse("<h2>密码错误</h2><a href='/admin'>返回重试</a>",
+                            status_code=401)
+    response = RedirectResponse(url="/admin", status_code=303)
+    try:
+        from config import IS_PRODUCTION
+        secure = IS_PRODUCTION
+    except Exception:
+        secure = False
+    response.set_cookie(
+        _ADMIN_SESSION_COOKIE, _admin_session_signature(), max_age=8 * 3600,
+        httponly=True, samesite="lax", secure=secure, path="/admin",
+    )
+    return response
 
 
 @router.get("/collections")
@@ -281,6 +338,7 @@ async def upload_file(
             upload_user_name="管理员",
             suggested_department=department,
         )
+        tracker.close()
     except Exception as track_err:
         logger.warning(f"记录同步追踪失败（不影响文件保存）: {track_err}")
 
@@ -1060,6 +1118,34 @@ def list_people(password: str = Query("", description="管理员密码")):
     tracker = SyncTracker()
     people = _aggregate_files_by_user(tracker.list_all())
     return JSONResponse({"people": people, "total": len(people)})
+
+
+@router.get("/dashboard-status")
+def dashboard_status(password: str = Query("", description="管理员密码")):
+    """看板任务最近一次实际运行状态。
+
+    不把“订阅存在”伪装成“今天已经成功推送”：页面需要展示任务是否真的运行，
+    失败发生在哪一段，以及失败提醒是否已送达。
+    """
+    if not _verify_admin_access(password):
+        raise HTTPException(401, "密码错误")
+    from dashboard.subscription_store import get_subscription_store
+    items = []
+    for sub in get_subscription_store().list_all():
+        items.append({
+            "id": sub.id,
+            "title": sub.title,
+            "owner_user_id": sub.owner_user_id,
+            "enabled": sub.enabled,
+            "schedule": f"{int(sub.push_hour):02d}:{int(sub.push_minute):02d}",
+            "last_pushed_at": sub.last_pushed_at,
+            "last_run_at": sub.last_run_at,
+            "last_run_status": sub.last_run_status,
+            "last_run_stage": sub.last_run_stage,
+            "last_run_reason": sub.last_run_reason,
+            "last_alert_status": sub.last_alert_status,
+        })
+    return JSONResponse({"subscriptions": items, "total": len(items)})
 
 
 # ===== 反馈统计 =====

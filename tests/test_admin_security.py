@@ -147,5 +147,52 @@ class XSSTests(unittest.TestCase):
         self.assertIn("&lt;img", html)
 
 
+class ProductionAdminGuardTests(unittest.TestCase):
+    """生产环境不能因漏配变量把 /admin 直接暴露。"""
+
+    def test_empty_password_fails_closed_in_production(self):
+        from doc_mgr import router
+        import config
+        with mock.patch.object(router, "_get_admin_password", return_value=""), \
+             mock.patch.object(config, "IS_PRODUCTION", True):
+            self.assertFalse(router._verify_admin_access(""))
+
+    def test_empty_password_keeps_local_development_compatibility(self):
+        from doc_mgr import router
+        import config
+        with mock.patch.object(router, "_get_admin_password", return_value=""), \
+             mock.patch.object(config, "IS_PRODUCTION", False):
+            self.assertTrue(router._verify_admin_access(""))
+
+
+class AdminSessionTests(unittest.TestCase):
+    """管理页面不应把密码留在 URL；登录后接口由 HttpOnly Cookie 鉴权。"""
+
+    def setUp(self):
+        from doc_mgr import router
+        self.router = router
+        self.password = mock.patch.object(router, "_get_admin_password", return_value="secret")
+        self.password.start()
+        app = FastAPI()
+        app.include_router(router.router)
+        self.client = TestClient(app)
+
+    def tearDown(self):
+        self.password.stop()
+
+    def test_post_login_uses_cookie_without_password_query(self):
+        response = self.client.post("/admin/login", data={"password": "secret"},
+                                    follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        cookie = response.headers.get("set-cookie", "")
+        self.assertIn("entar_admin_session=", cookie)
+        self.assertIn("HttpOnly", cookie)
+        self.assertNotIn("secret", cookie)
+        # TestClient 保留 Cookie；后续受保护接口不带 password 也能通过会话认证。
+        page = self.client.get("/admin")
+        self.assertEqual(page.status_code, 200)
+        self.assertNotIn("name='password'", page.text)
+
+
 if __name__ == "__main__":
     unittest.main()

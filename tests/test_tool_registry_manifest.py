@@ -106,7 +106,7 @@ class ToolRegistryTests(unittest.TestCase):
 
 class CapabilityManifestTests(unittest.TestCase):
     def test_manifest_integrity(self):
-        """能力清单完整性：10 工具 / 5 技能 / 17 意图 / enabled 命令 + regex 可编译"""
+        """能力清单完整性：10 工具 / 5 技能 / 20 意图 / enabled 命令 + regex 可编译"""
         import capability_manifest as cm
 
         tools = cm.collect_tools()
@@ -118,7 +118,7 @@ class CapabilityManifestTests(unittest.TestCase):
         self.assertFalse(any("error" in s for s in skills))
 
         intents = cm.collect_dashboard_intents()
-        self.assertEqual(len(intents), 19)  # v1.12.7：新增 change_sources（任务级源增删）+ history（留档回放）
+        self.assertEqual(len(intents), 20)  # v1.13.1：新增 edit_task_prompt（任务固定提示词编辑）
         self.assertFalse(any("error" in i for i in intents))
 
         cmds = cm.collect_bot_commands()

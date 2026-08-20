@@ -31,15 +31,27 @@ class MemoryTestBase(unittest.TestCase):
     def setUp(self):
         import user_store
         from user_store import SQLiteUserStore
+        from skills import memory_compress
         self._tmp = tempfile.mkdtemp()
         self.db_path = os.path.join(self._tmp, "test.db")
         self.store = SQLiteUserStore(db_path=self.db_path)
         # 让 memory.py / memory_compress.py 的 get_store() 指向本用例临时库
+        # 若先前模块导入已创建默认单例，先关闭它再替换，避免泄漏真实 data 库连接。
+        previous = user_store._store
+        if previous is not None and previous is not self.store:
+            previous.close()
         user_store._store = self.store
+        # 压缩防抖是模块级集合；此前其他测试的后台任务可能残留同一 user_id，
+        # 导致本类调度断言受测试执行顺序影响。
+        with memory_compress._pending_lock:
+            memory_compress._pending.clear()
 
     def tearDown(self):
         import user_store
+        from skills import memory_compress
         user_store._store = None
+        with memory_compress._pending_lock:
+            memory_compress._pending.clear()
         try:
             self.store._close_conn()
         except Exception:
@@ -363,7 +375,8 @@ class TestBackfill(MemoryTestBase):
         conn.close()
 
         # 初始化触发迁移 + backfill
-        SQLiteUserStore(db_path=db)
+        migrated = SQLiteUserStore(db_path=db)
+        migrated._close_conn()
 
         c = sqlite3.connect(db)
         c.row_factory = sqlite3.Row

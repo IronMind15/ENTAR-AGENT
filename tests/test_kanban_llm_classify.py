@@ -131,14 +131,14 @@ class ParseLlmFallbackTests(unittest.TestCase):
             r = sub_cmd.parse_subscription_command("全部删除", {"user_id": uid})
         self.assertIsNone(r)
 
-    def test_cache_single_llm_call(self):
-        """同 query 两次 parse → LLM 只调一次（match+handle 双调被缓存挡住）"""
+    def test_cache_single_llm_call_for_implicit_reference(self):
+        """无明确任务指代的口语承接，match+handle 双调仍应只问 LLM 一次。"""
         uid = "u-cache"
         sub_cmd.touch_activity(uid)
         with mock.patch.object(sub_cmd, "_llm_verify_subscription",
                                return_value="stop") as llm:
-            r1 = sub_cmd.parse_subscription_command("帮我停掉这个", {"user_id": uid})
-            r2 = sub_cmd.parse_subscription_command("帮我停掉这个", {"user_id": uid})
+            r1 = sub_cmd.parse_subscription_command("把它停掉吧", {"user_id": uid})
+            r2 = sub_cmd.parse_subscription_command("把它停掉吧", {"user_id": uid})
         self.assertEqual(r1 and r1["intent"], "stop")
         self.assertEqual(r2 and r2["intent"], "stop")
         self.assertEqual(llm.call_count, 1)
@@ -149,7 +149,7 @@ class ParseLlmFallbackTests(unittest.TestCase):
         sub_cmd.touch_activity(uid)
         with mock.patch.object(sub_cmd, "_llm_verify_subscription",
                                return_value=None):
-            r = sub_cmd.parse_subscription_command("帮我停掉这个", {"user_id": uid})
+            r = sub_cmd.parse_subscription_command("把它停掉吧", {"user_id": uid})
         self.assertIsNone(r)
 
     def test_kanban_word_message_not_sent_to_llm_fallback(self):

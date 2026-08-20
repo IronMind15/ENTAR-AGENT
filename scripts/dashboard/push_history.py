@@ -69,6 +69,8 @@ class PushHistory:
     content: str = ""
     source_keys: list = field(default_factory=list)
     message_count: int = 0
+    prompt_version: str = ""
+    prompt_hash: str = ""
 
 
 class PushHistoryStore:
@@ -111,12 +113,26 @@ class PushHistoryStore:
                 title          TEXT DEFAULT '',
                 content        TEXT DEFAULT '',
                 source_keys    TEXT DEFAULT '[]',
-                message_count  INTEGER DEFAULT 0
+                message_count  INTEGER DEFAULT 0,
+                prompt_version TEXT DEFAULT '',
+                prompt_hash    TEXT DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_dash_history_sub
                 ON dashboard_push_history(sub_id, id);
         """)
         conn.commit()
+        # v1.13.1：记录本次推送采用的固定任务提示词版本/哈希，
+        # 历史回放可以证明“这次总结按哪份任务指令执行”。
+        self._ensure_column("prompt_version", "TEXT DEFAULT ''")
+        self._ensure_column("prompt_hash", "TEXT DEFAULT ''")
+        conn.commit()
+
+    def _ensure_column(self, column: str, ddl: str):
+        cols = {r[1] for r in self._get_conn().execute(
+            "PRAGMA table_info(dashboard_push_history)").fetchall()}
+        if column not in cols:
+            self._get_conn().execute(
+                f"ALTER TABLE dashboard_push_history ADD COLUMN {column} {ddl}")
 
     @staticmethod
     def _row_to_h(row) -> PushHistory:
@@ -129,10 +145,13 @@ class PushHistoryStore:
             content=row["content"] or "",
             source_keys=_loads_list(row["source_keys"]),
             message_count=row["message_count"],
+            prompt_version=row["prompt_version"] or "",
+            prompt_hash=row["prompt_hash"] or "",
         )
 
     def record(self, sub_id: int, owner_user_id: str, title: str,
-               messages: list) -> PushHistory:
+               messages: list, *, prompt_version: str = "",
+               prompt_hash: str = "") -> PushHistory:
         """记录一次推送留档；随后裁剪该任务超出 KEEP_RECENT 的旧档。
 
         messages 为该次全部发送消息（含语义分页/每源一条/关键源展开），
@@ -146,10 +165,11 @@ class PushHistoryStore:
             cur = conn.execute(
                 """INSERT INTO dashboard_push_history
                    (sub_id, owner_user_id, pushed_at, title, content,
-                    source_keys, message_count)
-                   VALUES (?,?,?,?,?,?,?)""",
+                   source_keys, message_count, prompt_version, prompt_hash)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
                 (sub_id, owner_user_id or "", now, title or "",
-                 content, _dumps(source_keys), int(len(messages) or 0)),
+                 content, _dumps(source_keys), int(len(messages) or 0),
+                 prompt_version or "", prompt_hash or ""),
             )
             hist_id = cur.lastrowid
             conn.execute(
@@ -162,7 +182,8 @@ class PushHistoryStore:
         return PushHistory(
             id=hist_id, sub_id=sub_id, owner_user_id=owner_user_id or "",
             pushed_at=now, title=title or "", content=content,
-            source_keys=source_keys, message_count=int(len(messages) or 0))
+            source_keys=source_keys, message_count=int(len(messages) or 0),
+            prompt_version=prompt_version or "", prompt_hash=prompt_hash or "")
 
     def list_for_sub(self, sub_id: int, limit: int = 10) -> list[PushHistory]:
         """某任务最近 N 次留档（倒序：最新在前）"""

@@ -7,6 +7,7 @@ LLM 负责从完整非敏感业务数据中提炼重点；代码只做分批、�
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 import re
@@ -136,7 +137,12 @@ def _catalog(results: list[dict]) -> tuple[dict, dict, list[dict]]:
     return valid, labels, records
 
 
-def _prompt(stage: str, payload: dict) -> str:
+def _prompt(stage: str, payload: dict, task_prompt: str = "") -> str:
+    # 不在日志中重复记录用户提示词正文；记录哈希即可让“任务首条展示的提示词”、
+    # 模型实际输入和推送留档三者相互核对。stage 会在 map/reduce 各记录一次。
+    prompt_hash = hashlib.sha256((task_prompt or "").encode("utf-8")).hexdigest()[:16]
+    logger.info("[看板执行模型] stage=%s 已注入固定提示词 hash=%s chars=%s",
+                stage, prompt_hash, len(task_prompt or ""))
     output_schema = (
         {"selected_refs": ["source_key:record_id"]}
         if stage == "map" else {
@@ -167,6 +173,9 @@ def _prompt(stage: str, payload: dict) -> str:
             "max_claim_text_chars": 100,
             "max_evidence_per_claim": 3,
         },
+        # 任务提示词是创建/明确改模板时固化的快照；payload 才是本次运行的
+        # 临时文档数据。两者分开，便于审计“任务怎么要求”和“本次看到了什么”。
+        "task_prompt": task_prompt,
         "payload": payload,
     }
     return json.dumps(envelope, ensure_ascii=False, default=str)
@@ -195,8 +204,39 @@ def _selected_refs(value: dict) -> list[str]:
     return [str(ref) for ref in refs[:8] if str(ref).strip()]
 
 
-def _verify(claims: list[dict], valid_refs: dict) -> tuple[list[dict], int]:
-    accepted, rejected = [], 0
+def _preferred_evidence_field(fields: dict) -> tuple[str, object] | None:
+    """选一项最能解释记录的字段，供受控的 evidence 自动回填使用。
+
+    文档型来源常把 ``类型=表格`` 放在第一个字段；它只能说明载体，不能支撑
+    一条业务结论。因此优先选择内容、事项、进展、问题、计划等语义字段，最后
+    才退回第一个非空字段。这个函数不生成结论，只决定应回填哪条已有原值。
+    """
+    pairs = [(str(key), value) for key, value in (fields or {}).items()
+             if value not in (None, "")]
+    if not pairs:
+        return None
+    preferred = (
+        "事项", "项目", "产品", "标题", "名称", "内容", "工作", "进展",
+        "问题", "风险", "计划", "状态", "描述", "结论",
+    )
+    for needle in preferred:
+        for key, value in pairs:
+            if needle in key:
+                return key, value
+    for key, value in pairs:
+        if key not in {"类型", "分类", "序号", "编号"}:
+            return key, value
+    return pairs[0]
+
+
+def _verify(claims: list[dict], valid_refs: dict) -> tuple[list[dict], int, int]:
+    """校验证据引用，并仅为“漏填 evidence”的有效引用自动回填原值。
+
+    不能接受伪造/错误字段：只要模型给出了 evidence 但字段不存在，仍拒绝该
+    结论。自动回填只处理模型已给出有效 refs、却完全遗漏 evidence 数组的情况；
+    回填内容也只能来自这些 refs 中实际存在的字段。
+    """
+    accepted, rejected, repaired = [], 0, 0
     for claim in claims:
         refs = claim.get("refs", [])
         evidence_ok = set()
@@ -216,9 +256,24 @@ def _verify(claims: list[dict], valid_refs: dict) -> tuple[list[dict], int]:
             normalized = dict(claim)
             normalized["evidence"] = normalized_evidence
             accepted.append(normalized)
+        elif refs and not claim.get("evidence") and all(ref in valid_refs for ref in refs):
+            repaired_evidence = []
+            for ref in refs:
+                selected = _preferred_evidence_field(valid_refs[ref].get("fields", {}))
+                if selected is None:
+                    break
+                field, actual = selected
+                repaired_evidence.append({"ref": ref, "field": field, "value": str(actual)})
+            if len(repaired_evidence) == len(refs):
+                normalized = dict(claim)
+                normalized["evidence"] = repaired_evidence
+                accepted.append(normalized)
+                repaired += 1
+            else:
+                rejected += 1
         else:
             rejected += 1
-    return accepted, rejected
+    return accepted, rejected, repaired
 
 
 def _source_lines(results: list[dict], labels: dict, title: str = "数据来源") -> list[str]:
@@ -247,40 +302,67 @@ def _fallback_claims(results: list[dict], labels: dict) -> list[dict]:
             fields = [(k, v) for k, v in item.get("fields", {}).items() if v]
             if not fields:
                 continue
-            title = _plain_text(fields[0][1], 120)
+            selected = _preferred_evidence_field(dict(fields))
+            if selected is None:
+                continue
+            title_field, title_value = selected
+            title = _plain_text(title_value, 180)
             details = "；".join(f"{_plain_text(k, 30)}：{_plain_text(v, 160)}"
-                               for k, v in fields[1:4])
+                               for k, v in fields if k != title_field and
+                               k not in {"类型", "分类", "序号", "编号"})
             evidence = item.get("evidence", {})
             ref = f"{result.get('source_key')}:{evidence.get('record_id')}"
             claims.append({
                 "text": title + (f"（{details}）" if details else ""),
                 "level": "info", "refs": [ref],
-                "evidence": [{"ref": ref, "field": fields[0][0],
-                              "value": _plain_text(fields[0][1], 160)}],
+                "evidence": [{"ref": ref, "field": title_field,
+                              "value": _plain_text(title_value, 160)}],
             })
     return claims[:12]
 
 
 def _fallback_claims_from_units(units: list[dict]) -> list[dict]:
     """兜底也先写今日变更，再补充存量上下文。"""
-    claims = []
+    # 不能按输入顺序截前 12 条：大文件夹会吞掉全部配额，让后续数据源在兜底
+    # 报告中完全消失。先按源保留各自优先级，再轮询取材，保证每个有内容的源都有
+    # 至少一条可核对事实；总上限仍为 12，避免钉钉消息膨胀。
+    by_source: dict[str, list[dict]] = {}
     for unit in units:
-        fields = [(k, v) for k, v in unit.get("fields", {}).items() if v]
-        if not fields:
-            continue
-        change = unit.get("change", {})
-        kind = change.get("change")
-        prefix = {"added": "新增：", "updated": "更新：", "removed": "移除："}.get(kind, "")
-        title = _plain_text(fields[0][1], 120)
-        details = "；".join(f"{_plain_text(k, 30)}：{_plain_text(v, 160)}"
-                           for k, v in fields[1:4])
-        claims.append({
-            "text": prefix + title + (f"（{details}）" if details else ""),
-            "level": "update" if kind else "info", "refs": [unit["ref"]],
-            "evidence": [{"ref": unit["ref"], "field": fields[0][0],
-                          "value": _plain_text(fields[0][1], 160)}],
-        })
-    return claims[:12]
+        source_key = str(unit.get("source_key") or "unknown")
+        by_source.setdefault(source_key, []).append(unit)
+    claims, offset = [], 0
+    groups = list(by_source.values())
+    while len(claims) < 12:
+        added = False
+        for group in groups:
+            if offset >= len(group) or len(claims) >= 12:
+                continue
+            unit = group[offset]
+            fields = [(k, v) for k, v in unit.get("fields", {}).items() if v]
+            if fields:
+                change = unit.get("change", {})
+                kind = change.get("change")
+                prefix = {"added": "新增：", "updated": "更新：", "removed": "移除："}.get(kind, "")
+                selected = _preferred_evidence_field(dict(fields))
+                if selected is None:
+                    continue
+                title_field, title_value = selected
+                title = _plain_text(title_value, 180)
+                details = "；".join(
+                    f"{_plain_text(k, 30)}：{_plain_text(v, 160)}"
+                    for k, v in fields if k != title_field and
+                    k not in {"类型", "分类", "序号", "编号"})
+                claims.append({
+                    "text": prefix + title + (f"（{details}）" if details else ""),
+                    "level": "update" if kind else "info", "refs": [unit["ref"]],
+                    "evidence": [{"ref": unit["ref"], "field": title_field,
+                                  "value": _plain_text(title_value, 160)}],
+                })
+                added = True
+        if not added:
+            break
+        offset += 1
+    return claims
 
 
 def _claim_source_names(claim: dict, valid_refs: dict) -> list[str]:
@@ -467,7 +549,7 @@ def build_dashboard_report(results: list[dict], old_snapshot: list[dict] | None,
                            date_str: str = "", batch_size: int | None = None,
                            max_batch_chars: int | None = None,
                            collection_errors: list[str] | None = None,
-                           template=None) -> DashboardReport:
+                           template=None, task_prompt: str = "") -> DashboardReport:
     """完整数据分批提炼，再汇总并校验引用；任一步失败均可降级。
 
     v1.12.0：template 为 DashboardTemplate，控制输出格式（map/reduce 补充指令
@@ -540,7 +622,7 @@ def build_dashboard_report(results: list[dict], old_snapshot: list[dict] | None,
     batch_size = batch_size or int(os.getenv("DASHBOARD_LLM_BATCH_SIZE", "250"))
     max_batch_chars = max_batch_chars or int(
         os.getenv("DASHBOARD_LLM_BATCH_CHARS", "220000"))
-    selected_refs, rejected, headline = [], 0, ""
+    selected_refs, rejected, repaired_evidence_claims, headline = [], 0, 0, ""
     map_completed = 0
     llm_errors = 0
     if llm_func:
@@ -560,7 +642,7 @@ def build_dashboard_report(results: list[dict], old_snapshot: list[dict] | None,
                 _prompt("map", {
                     "records": batch,
                     "instruction": map_instruction,
-                }),
+                }, task_prompt),
                 # 模型偶尔会无视“最多8个”而列出大量 ID；给足额度保证 JSON
                 # 完整闭合，解析后 _selected_refs 仍只取前 8 个。
                 max_tokens=10000,
@@ -607,9 +689,10 @@ def build_dashboard_report(results: list[dict], old_snapshot: list[dict] | None,
                             "status_counts": r.get("status_counts", {}),
                         } for r in results],
                         "instruction": reduce_instruction,
-                    }), max_tokens=5000)
+                    }, task_prompt), max_tokens=5000)
                 reduced = _json_object(reduce_future.result(timeout=remaining))
-                final_claims, reduce_rejected = _verify(_claims(reduced), valid_refs)
+                final_claims, reduce_rejected, repaired_evidence_claims = _verify(
+                    _claims(reduced), valid_refs)
                 rejected += reduce_rejected
             except FutureTimeout:
                 llm_errors += 1
@@ -648,27 +731,51 @@ def build_dashboard_report(results: list[dict], old_snapshot: list[dict] | None,
     text = _render(results, final_claims, labels, title,
                    date_str or datetime.now().strftime("%Y-%m-%d"), headline,
                    render_errors, spec=section_spec, valid_refs=valid_refs)
-    if not validate_markdown(text)[0]:
+
+    # 不能把“整份报告超过 5000 字”视为内容非法。逐源总结本来就可能超过单条
+    # 钉钉消息的上限，正确行为是先按完整段落分页，再对每一页校验。此前这里在
+    # 分页前做全量校验，导致已经通过 LLM+证据校验的 12 条结论被替换为前 4 条
+    # 原始记录兜底（部门周报正是这个分支）。
+    messages = _paginate_markdown(text, title)
+    valid_messages = []
+    invalid_reason = ""
+    for message in messages:
+        ok, reason = validate_markdown(message)
+        if not ok and "表格语法" in reason:
+            message = message.replace("|", "｜")
+            ok, reason = validate_markdown(message)
+        if not ok:
+            invalid_reason = reason
+            break
+        valid_messages.append(message)
+
+    # 只有单页内容本身仍无法发送时才启用规则兜底；不能因整份报告可分页而降级。
+    if invalid_reason:
+        logger.warning("看板分页后第 %s 页仍未通过通道校验（%s），规则兜底",
+                       len(valid_messages) + 1, invalid_reason)
+        used_fallback = True
         final_claims = _fallback_claims_from_units(analysis_units)[:4]
         text = _render(results, final_claims, labels,
                        title, date_str or datetime.now().strftime("%Y-%m-%d"),
                        "已生成来源可核验的规则兜底摘要", render_errors,
                        spec=section_spec, valid_refs=valid_refs)
-    # 第二次仍不合法时做通道级净化；禁止未经校验的 fallback 直接外发。
-    if not validate_markdown(text)[0]:
-        text = text.replace("|", "｜")
-    messages = _paginate_markdown(text, title)
-    valid_messages = []
-    for message in messages:
-        if not validate_markdown(message)[0]:
-            message = message.replace("|", "｜")
-        valid_messages.append(message)
+        valid_messages = []
+        for message in _paginate_markdown(text.replace("|", "｜"), title):
+            ok, reason = validate_markdown(message)
+            if not ok:
+                # 这里不再以未经验证的任意文本替代；保留可控的通道级净化结果。
+                logger.warning("规则兜底第 %s 页仍未通过校验：%s", len(valid_messages) + 1, reason)
+                message = message[:MAX_MARKDOWN_LEN].rsplit("\n", 1)[0] + "\n"
+            valid_messages.append(message)
     return DashboardReport(
         text=valid_messages[0], messages=valid_messages,
         snapshot=snapshot, changes=changes,
         verification={"accepted_claims": verified_claim_count,
                       "fallback_claims": len(final_claims) if used_fallback else 0,
-                      "rejected_claims": rejected, "llm_errors": llm_errors,
+                      "rejected_claims": rejected,
+                      "repaired_evidence_claims": repaired_evidence_claims,
+                      "llm_errors": llm_errors,
                       "map_batches": len(batches) if llm_func else 0,
-                      "completed_map_batches": map_completed},
+                      "completed_map_batches": map_completed,
+                      "message_pages": len(valid_messages)},
     )

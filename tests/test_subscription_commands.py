@@ -37,11 +37,32 @@ class ParseIntentTests(unittest.TestCase):
         for text in ("我想看看板", "帮我看看板", "看板今天怎么样", "现在推看板", "马上推看板"):
             self.assertIsNone(sc.parse_subscription_command(text), text)
 
+    def test_immediate_demo_is_not_hijacked_as_recipient_change(self):
+        """真实回归：『现在推给我一个演示』的推给不是改订阅接收人。"""
+        for text in ("现在推给我一个演示", "模拟一份看板现在推给我"):
+            self.assertTrue(sc.is_immediate_push_request(text), text)
+            self.assertIsNone(sc.parse_subscription_command(text), text)
+
     def test_change_time(self):
         r = sc.parse_subscription_command("改看板时间到10点")
         self.assertEqual(r["intent"], "change_time")
         self.assertEqual(r["push_hour"], 10)
         self.assertEqual(r["push_minute"], 0)
+
+    def test_contextual_task_delete_is_deterministic(self):
+        """刚操作过看板时，「删除这个任务」不应退回泛聊天 Agent。"""
+        with mock.patch.object(sc, "has_recent_kanban_activity", return_value=True):
+            result = sc.parse_subscription_command(
+                "帮我删除这个任务吧", {"user_id": "test-user"})
+        self.assertEqual(result["intent"], "delete")
+
+    def test_contextual_natural_time_requires_and_uses_kanban_context(self):
+        self.assertIsNone(sc.parse_subscription_command("改到八点半"))
+        with mock.patch.object(sc, "has_recent_kanban_activity", return_value=True):
+            result = sc.parse_subscription_command(
+                "改到八点半", {"user_id": "test-user"})
+        self.assertEqual(result["intent"], "change_time")
+        self.assertEqual((result["push_hour"], result["push_minute"]), (8, 30))
 
     def test_change_freq(self):
         r = sc.parse_subscription_command("每周一和周五推看板")
@@ -167,6 +188,11 @@ class ParseTimeTests(unittest.TestCase):
 
     def test_bounds(self):
         self.assertEqual(sc._parse_time("25点"), (23, 0))
+
+    def test_chinese_natural_time(self):
+        self.assertEqual(sc._parse_time("每天早晨八点半"), (8, 30))
+        self.assertEqual(sc._parse_time("下午三点推送"), (15, 0))
+        self.assertIsNone(sc._parse_time("改到半小时后"))
 
 
 class ParseWeekdaysTests(unittest.TestCase):

@@ -248,22 +248,42 @@ class BotDocLinkTests(unittest.TestCase):
         self.assertIsNotNone(answer)
         self.assertIn("0 条记录", answer)
 
-    def test_doc_link_with_kanban_intent_merges(self):
-        """v1.11.2：文档链接 + 「做每日看板」意图 → 文档摘要 + 看板确认合并"""
+    def test_doc_link_with_kanban_intent_becomes_task_draft(self):
+        """链接 + 建每日任务 → 草稿优先，不能只回轻量文档概要。"""
         handler = self._make_handler()
         fake = {"ok": True, "kind": "notable", "node_id": "n1",
                 "records": [{"fields": {"名称": "A"}}], "message": "ok"}
         with patch("dingtalk_doc_client.get_doc_client") as mock_get, \
              patch("skills.dashboard.DashboardSkill._handle_doc_create",
                    return_value={"answer": "好的，将按以下文档做每日看板，请确认："
-                                        "📋 数据板块：…\n回复「确认」即可订阅。"}):
+                                        "📋 数据板块：…\n回复「确认」即可订阅。"}) as create:
             mock_get.return_value.resolve_operator_id.return_value = "union1"
             mock_get.return_value.read_document.return_value = fake
             answer = handler._handle_doc_link_with_kanban(
                 "帮我把这几个文件做成每日看板 https://alidocs.dingtalk.com/i/nodes/n1",
                 "u1", "s1")
-        self.assertIn("概要", answer)
+        self.assertIn("已识别并纳入", answer)
         self.assertIn("做每日看板，请确认", answer)
+        self.assertEqual(create.call_args.kwargs["source_candidate_ids"], [1])
+        self.assertIn("request_text", create.call_args.kwargs)
+
+    def test_long_request_preserves_time_and_report_intent(self):
+        """真实式长请求（链接+任务+八点半+三段式）必须交给任务草稿。"""
+        handler = self._make_handler()
+        fake = {"ok": True, "kind": "folder", "node_id": "f1", "name": "部门周报",
+                "children": [{"nodeId": "a1", "name": "周报", "nodeType": "file"}]}
+        request = ("把这个文件夹建立一个每日看板任务，每天早晨八点半发给我，"
+                   "给出结论、需要关注的问题和需要协调的事情 "
+                   "https://alidocs.dingtalk.com/i/nodes/f1")
+        with patch("dingtalk_doc_client.get_doc_client") as mock_get, \
+             patch("skills.dashboard.DashboardSkill._handle_doc_create",
+                   return_value={"answer": "任务草稿：08:30，管理晨报模板，回复确认。"}) as create:
+            mock_get.return_value.resolve_operator_id.return_value = "union1"
+            mock_get.return_value.read_document.return_value = fake
+            answer = handler._handle_doc_link_with_kanban(request, "u1", "s1")
+        self.assertIn("任务草稿", answer)
+        self.assertNotIn("回复「把这个文件夹", answer)
+        self.assertEqual(create.call_args.kwargs["request_text"], request)
 
     def test_doc_link_without_kanban_no_merge(self):
         """v1.11.2：只发文档不涉及看板 → 只回文档摘要，不触发看板技能"""
@@ -297,7 +317,7 @@ class BotDocLinkTests(unittest.TestCase):
             handler._handle_interactive_card_message(content, bot_msg, "u1", "s1", "s")
         call = handler.reply_markdown.call_args
         call_text = call.kwargs.get("text") if call.kwargs else call[0][1]
-        self.assertIn("概要", call_text)
+        self.assertIn("已识别并纳入", call_text)
         self.assertIn("做每日看板，请确认", call_text)
 
 

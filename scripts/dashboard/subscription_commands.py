@@ -51,6 +51,12 @@ _QUERY_RE = re.compile(
     r"看板.*(几点|什么时候|设置|在哪|是谁|订阅)|"
     r"看板.*任务|任务.*看板|看板.*列表|"
     r"我的看板|看板状态|订阅.*看板")
+# 提示词查看必须有明确的查看动作/问法。此前第二段只要出现「看板…提示词」
+# 就命中，导致「刚改完提示词，模拟一份看板」等执行请求被只读查看劫持。
+_PROMPT_RE = re.compile(
+    r"(?:查看|看看|显示|告诉我|列出).{0,8}(?:看板|任务).{0,8}提示词|"
+    r"(?:看板|任务).{0,6}提示词\s*(?:是什么|内容|怎么写|长什么样)\s*[？?]?$"
+)
 _RECIPIENT_RE = re.compile(r"推给|发给|也推|推送给|加上|捎上")
 _ADD_RECIPIENT_RE = re.compile(r"推给|发给|也推|推送给|加上|捎上")
 _REMOVE_RECIPIENT_RE = re.compile(r"不要推给|不发给|去掉|移除|别推给")
@@ -115,6 +121,29 @@ _EDIT_TEMPLATE_RE = re.compile(
     r"(?:编辑|修改|调整|改改|重做)"                       # 门槛 C：编辑<名>改成：<格式>
     r"[^，。！？：:]{0,12}?(?:看板)?\s*(?:模板|样式|格式)?"  # 模板词可省（编辑自定义周报改成：…）
     r"[^，。！？：:]{0,12}?(?:改成|改为|换成)[：:]")
+# 编辑固定提示词只能采用明确的覆盖形式「编辑…提示词改成：新内容」。
+# 不能因一句末尾的「按照这个要求重写提示词」就截走前面本应作为新内容的需求。
+_EDIT_TASK_PROMPT_RE = re.compile(
+    r"(?:编辑|修改|调整|改改|重写)[^，。！？：:]{0,16}?"
+    r"(?:看板)?\s*(?:任务)?\s*(?:提示词|任务指令|总结指令)"
+    r"[^，。！？：:]{0,16}?(?:改成|改为|换成)[：:]", re.S)
+_EDIT_TASK_PROMPT_DESC_RE = re.compile(
+    r"(?:改成|改为|换成)[：:]\s*(?P<desc>[\s\S]{1,4000})")
+_EDIT_TASK_PROMPT_SUFFIX_RE = re.compile(
+    r"^(?P<desc>[\s\S]{1,4000}?)[：:，,\s]*"
+    r"(?:按照|按|根据)(?:这个|上述|以上|前面)?(?:要求|内容|格式)?\s*"
+    r"(?:重写|编辑|修改|调整)(?:看板)?(?:任务)?(?:提示词|任务指令|总结指令)\s*$",
+    re.S)
+_EDIT_TASK_PROMPT_REQUEST_RE = re.compile(
+    r"^(?:我想|我要|帮我|请)?\s*(?:编辑|修改|调整|重写)"
+    r"(?:看板)?(?:任务)?(?:提示词|任务指令|总结指令)\s*$")
+_TASK_ID_RE = re.compile(r"(?:任务|编号)\s*#?\s*(?P<id>\d+)")
+# 明确的即时演示/模拟推送由 Agent 的 dash_push 工具承接（工具会二次确认外发）。
+# 必须早于「推给」接收人正则，防「现在推给我一个演示」被误改为接收人设置。
+_IMMEDIATE_PUSH_RE = re.compile(
+    r"(?:现在|马上|立刻|立即).{0,8}?(?:推送?|发).{0,12}?(?:看板|演示|示例|模拟)|"
+    r"(?:模拟|演示|示例).{0,12}?(?:看板|推送?|发)|"
+    r"看板.{0,12}?(?:现在|马上|立刻|立即).{0,8}?(?:推送?|发)", re.S)
 # desc 提取：整句任意位置「改成/改为/换成：<内容>」即新格式描述（须带冒号，
 # 防「改成周报模板」无冒号的切换被误当格式）。
 _EDIT_DESC_RE = re.compile(r"(?:改成|改为|换成)[：:]\s*(?P<desc>\S.{0,160})")
@@ -134,7 +163,14 @@ _TEMPLATE_CHOICE_OPTIONS = [
     ("weekly", ("周报", "每周", "周总结", "周更")),
     ("project", ("项目看板", "项目模板", "里程碑")),
 ]
-_TIME_RE = re.compile(r"\d{1,2}[点时:：]|半")
+# 时间表达必须带明确的小时，不能因一句无关的「半」误入时间修改后又静默
+# 回退 09:00。覆盖阿拉伯数字和常见中文数字：八点半 / 早晨八点半 / 8:30。
+_CN_TIME_NUM = "零〇一二两三四五六七八九十"
+_TIME_RE = re.compile(
+    rf"(?:\d{{1,2}}|[{_CN_TIME_NUM}]{{1,3}})\s*[点时:：](?:\s*(?:半|\d{{1,2}}))?")
+_CONTEXTUAL_TASK_RE = re.compile(
+    r"(?:这个|该|当前|刚才的?|前面的?)(?:看板|任务|订阅|推送)?|(?:看板)?(?:任务|订阅|推送)"
+)
 _FREQ_RE = re.compile(r"每周|周一到|周[一二三四五六日天]|星期|周末|每隔|隔天|频率")
 # v1.11.5：明确的创建/开通意图才建订阅；否则含「看板」文本放行给 Agent
 # 「帮我推个看板/给我推个看板」= 开通订阅（前缀 帮/给/替 必填）；
@@ -266,6 +302,35 @@ def parse_history_intent(text: str) -> Optional[dict]:
     return {"intent": "history"}
 
 
+def parse_prompt_intent(text: str) -> Optional[dict]:
+    """查看任务固定提示词（只读，不触发模型、不修改任务）。"""
+    if _EDIT_TASK_PROMPT_RE.search((text or "").strip()):
+        return None
+    return {"intent": "prompt"} if _PROMPT_RE.search((text or "").strip()) else None
+
+
+def parse_edit_task_prompt(text: str) -> Optional[dict]:
+    """识别用户对单个看板任务固定提示词的整体覆盖请求。"""
+    raw = (text or "").strip()
+    desc = _EDIT_TASK_PROMPT_DESC_RE.search(raw) if _EDIT_TASK_PROMPT_RE.search(raw) else None
+    suffix = _EDIT_TASK_PROMPT_SUFFIX_RE.match(raw)
+    request_only = _EDIT_TASK_PROMPT_REQUEST_RE.match(raw)
+    if not desc and not suffix and not request_only:
+        return None
+    task_id = _TASK_ID_RE.search(raw)
+    return {
+        "intent": "edit_task_prompt",
+        "task_id": int(task_id.group("id")) if task_id else 0,
+        "task_prompt": ((desc.group("desc") if desc else suffix.group("desc")) or "")
+        .strip(" ：:，,") if (desc or suffix) else "",
+    }
+
+
+def is_immediate_push_request(text: str) -> bool:
+    """是否是一次性看板演示/立即推送，而非订阅配置修改。"""
+    return bool(_IMMEDIATE_PUSH_RE.search((text or "").strip()))
+
+
 def parse_subscription_command(text: str, ctx: Optional[dict] = None) -> Optional[dict]:
     """解析订阅管理指令；非看板管理指令返回 None
 
@@ -274,6 +339,8 @@ def parse_subscription_command(text: str, ctx: Optional[dict] = None) -> Optiona
     text = (text or "").strip()
     if not text:
         return None
+    if is_immediate_push_request(text):
+        return None  # 放行 Agent 走受治理的 dash_push（二次确认外发）
     if _NEGATIVE_RE.search(text):
         return None  # 讨论文档/方案等，不是操作订阅
     # 门槛：含「看板」或明确的接收人指令（"也推给张工"是订阅上下文内的追加指令），
@@ -283,9 +350,20 @@ def parse_subscription_command(text: str, ctx: Optional[dict] = None) -> Optiona
     ctx_user_id = (ctx or {}).get("user_id", "")
     if not (_HAS_KANBAN_RE.search(text) or _RECIPIENT_RE.search(text)
             or _EDIT_TEMPLATE_RE.search(text)
+            or parse_edit_task_prompt(text) is not None
             or _PER_SOURCE_ON_RE.search(text) or _PER_SOURCE_OFF_RE.search(text)
             or is_kanban_context(text, ctx_user_id)):
         return None
+
+    # 用户刚查看、创建或调整过看板时，“这个任务”就是当前看板任务。先以
+    # 确定性规则承接，避免落 Agent 后出现“我没有删除功能”的机械答复。
+    # 仅在已有看板上下文且含明确任务指代时生效，普通聊天不受影响。
+    if (ctx_user_id and is_kanban_context(text, ctx_user_id)
+            and _CONTEXTUAL_TASK_RE.search(text)):
+        if re.search(r"删除|删掉|移除|清除", text):
+            return {"intent": "delete", **(ctx or {})}
+        if re.search(r"停掉|暂停|关闭|关掉", text):
+            return {"intent": "stop", **(ctx or {})}
 
     if _STOP_RE.search(text):
         return {"intent": "stop", **(ctx or {})}
@@ -309,6 +387,9 @@ def parse_subscription_command(text: str, ctx: Optional[dict] = None) -> Optiona
             return {"intent": "describe_template", "description": desc, **(ctx or {})}
     if _TEMPLATE_SUBMIT_RE.search(text):
         return {"intent": "submit_template", **(ctx or {})}
+    task_prompt_edit = parse_edit_task_prompt(text)
+    if task_prompt_edit is not None:
+        return {**task_prompt_edit, **(ctx or {})}
     # v1.12.1：编辑模板（在 set 之前——「把XX模板改成：<格式>」是编辑不是切换）
     # 目标模板名不在解析层捕获，由技能层 TemplateStore.resolve(text) 从整句解析；
     # desc 可为 ""（「编辑看板模板」无格式描述 → 技能层引导）。
@@ -340,7 +421,10 @@ def parse_subscription_command(text: str, ctx: Optional[dict] = None) -> Optiona
         # v1.11.5：捕获到的人名全是代词/助词（你了、我自己）→ 不是接收人操作，
         # 继续下一个意图，避免误判
     if _TIME_RE.search(text):
-        hour, minute = _parse_time(text)
+        parsed_time = _parse_time(text)
+        if parsed_time is None:
+            return None
+        hour, minute = parsed_time
         return {"intent": "change_time", "push_hour": hour, "push_minute": minute,
                 **(ctx or {})}
     if _FREQ_RE.search(text):
@@ -468,18 +552,46 @@ def is_cancel_text(text: str) -> bool:
 
 
 # ===== 时间解析 =====
-def _parse_time(text: str) -> tuple[int, int]:
-    """从文本提取 (小时, 分钟)。支持 '10点' '9点半' '10:30' '每天10:15'"""
-    m = re.search(r"(\d{1,2})[点时:：](半|(\d{1,2}))?", text)
+def _cn_number_to_int(value: str) -> int | None:
+    """解析 0~23 范围内常见中文数字（八、十、十二、二十三）。"""
+    if value.isdigit():
+        return int(value)
+    digits = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3,
+              "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+    if value == "十":
+        return 10
+    if "十" in value:
+        left, right = value.split("十", 1)
+        tens = digits.get(left, 1) if left else 1
+        ones = digits.get(right, 0) if right else 0
+        return tens * 10 + ones
+    return digits.get(value)
+
+
+def _parse_time(text: str) -> tuple[int, int] | None:
+    """提取时间；支持 10点、9点半、10:30、早晨八点半、下午三点。
+
+    无法确定小时返回 None，调用方必须要求澄清，禁止把用户意图悄悄变为
+    默认的 09:00。
+    """
+    m = re.search(rf"(\d{{1,2}}|[{_CN_TIME_NUM}]{{1,3}})\s*[点时:：]"
+                  r"\s*(半|(\d{1,2}))?", text)
     if not m:
-        return 9, 0
-    hour = min(23, max(0, int(m.group(1))))
+        return None
+    raw_hour = _cn_number_to_int(m.group(1))
+    if raw_hour is None:
+        return None
+    hour = min(23, max(0, raw_hour))
     if m.group(2) == "半":
         minute = 30
     elif m.group(3):
         minute = min(59, max(0, int(m.group(3))))
     else:
         minute = 0
+    # 「下午三点 / 晚上七点」按自然语言转为 24 小时制；12 点保持 12。
+    prefix = text[:m.start()]
+    if re.search(r"下午|晚上|傍晚", prefix) and 1 <= hour < 12:
+        hour += 12
     return hour, minute
 
 
@@ -576,6 +688,9 @@ _INTENT_DEFS: list[dict] = [
     {"id": "history", "name": "历史看板回放", "trigger": "看上次的看板 / 查看板历史 / 看板留档",
      "regex": _HISTORY_RE, "desc": "回放最近一次推送留档（每任务保留 30 次，只读不确认）",
      "status": "enabled"},
+    {"id": "edit_task_prompt", "name": "编辑任务提示词", "trigger": "编辑看板任务提示词改成：…",
+     "regex": _EDIT_TASK_PROMPT_RE,
+     "desc": "确认后覆盖指定任务的固定总结指令，保留证据和来源校验硬约束", "status": "enabled"},
     {"id": "change_time", "name": "改推送时间", "trigger": "改看板时间到10点",
      "regex": _TIME_RE, "desc": "修改推送时间点", "status": "enabled"},
     {"id": "change_freq", "name": "改推送频率", "trigger": "每周一和周五",
@@ -805,6 +920,8 @@ def render_confirmation(pending: dict, current=None) -> str:
                      f"{pending.get('push_hour', 9):02d}:{pending.get('push_minute', 0):02d}")
         lines.append(f"🔔 提醒模式：{'仅数据有变化时推送' if pending.get('alert_mode', 'always') == 'changes_only' else '每天固定推送（附今日变化）'}")
         lines.append(f"👤 接收人：您自己")
+        if pending.get("output_summary"):
+            lines.append(f"📑 输出结构：{pending['output_summary']}")
         lines.append("")
         lines.append("回复「确认」即可订阅；或直接告诉我调整（如「改到10点」「每周一和周五」「也推给张工」）。")
 
@@ -890,6 +1007,16 @@ def render_confirmation(pending: dict, current=None) -> str:
         lines.append(f"好的，将把「{name}」模板调整为以下结构：")
         lines.append(f"📐 {format_spec_summary(pending.get('section_spec'))}")
         lines.append("回复「确认」覆盖保存；回复「取消」则不改动。")
+
+    elif intent == "edit_task_prompt":
+        lines.append(f"好的，将覆盖任务编号 {pending.get('sub_id')} 的固定提示词。")
+        lines.append("新的提示词如下：")
+        lines.append("---")
+        lines.append((pending.get("task_prompt") or "")[:1200])
+        if len(pending.get("task_prompt") or "") > 1200:
+            lines.append("…（确认后保存完整内容）")
+        lines.append("---")
+        lines.append("回复「确认」后生效；回复「取消」则保留旧提示词。证据引用、不得编造和来源校验仍是系统硬约束。")
 
     else:
         lines.append("收到，请问您想对看板做什么调整？")

@@ -911,12 +911,21 @@ class ErrorQueryHandler(ChatbotHandler):
             from dashboard.subscription_commands import parse_doc_dashboard_intent
             # v1.11.10：带链接路径放宽文档引用词——杨妍发完链接补一句
             # 「我想做一个每日看板」不再重复文档词，仍应识别创建意图。
-            if parse_doc_dashboard_intent(text, require_doc_ref=False) is not None:
+            # 长消息的主意图若是“建立每日推送任务”，不能被链接识别的轻量摘要
+            # 抢走。除了既有正则，还兼容「每日推送的任务 / 发给我」这类自然
+            # 说法；链接已经存在是前提，仍不会影响普通文档识别。
+            wants_dashboard = (
+                parse_doc_dashboard_intent(text, require_doc_ref=False) is not None
+                or bool(re.search(r"(?:建立|创建|安排|设置).{0,12}(?:任务|推送)|"
+                                  r"(?:每日|每天).{0,12}(?:推送|发给我)", text)))
+            if wants_dashboard:
                 from skills.dashboard import DashboardSkill
                 kb = DashboardSkill._handle_doc_create(
-                    user_id, source_candidate_ids=cand_ids)
+                    user_id, source_candidate_ids=cand_ids, request_text=text)
                 if kb and kb.get("answer"):
-                    return doc_answer + "\n\n" + kb["answer"]
+                    return (f"已识别并纳入本次消息中的 {len(cand_ids)} 个文档/文件夹数据源。"
+                            "文件夹将在每次推送时展开读取全部可访问的子文档；"
+                            "读取失败项会在报告中明确列出。\n\n" + kb["answer"])
         except Exception as e:
             logger.warning(f"合并看板意图失败: {e}")
         return doc_answer

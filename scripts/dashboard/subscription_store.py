@@ -68,8 +68,18 @@ class Subscription:
     title: str = "恩特能源每日项目看板"
     template_id: str = "daily"           # 看板模板键（v1.12.0，输出格式）
     per_source: bool = False   # v1.12.5：每源独立总结（True=每个数据源单独一条，False=合并一份报告）
+    task_prompt: str = ""       # 创建/明确改模板时固化的任务提示词
+    task_prompt_spec: dict = field(default_factory=dict)  # 模板结构快照
+    task_prompt_version: str = ""
+    task_prompt_hash: str = ""
+    task_prompt_created_at: str = ""
     last_snapshot: Optional[list] = None   # alerts.make_snapshot 输出
     last_pushed_at: str = ""
+    last_run_at: str = ""                 # 最近一次调度实际执行/跳过时间
+    last_run_status: str = ""             # success | skipped | failed
+    last_run_stage: str = ""              # resolve_sources | collect | push | notify | archive
+    last_run_reason: str = ""             # 面向管理员的短原因，不伪称成功
+    last_alert_status: str = ""           # not_needed | sent | failed | not_sent
     enabled: bool = True
     created_at: str = ""
     updated_at: str = ""
@@ -156,6 +166,29 @@ class SubscriptionStore:
         # v1.12.5 迁移：老库补 per_source 列（默认 0=合并总结，等价于旧行为）
         self._ensure_column(conn, "dashboard_subscriptions", "per_source",
                             "INTEGER DEFAULT 0")
+        # v1.13.1：任务提示词快照——执行行为不再随 template_id 的动态内容漂移。
+        self._ensure_column(conn, "dashboard_subscriptions", "task_prompt",
+                            "TEXT DEFAULT ''")
+        self._ensure_column(conn, "dashboard_subscriptions", "task_prompt_spec",
+                            "TEXT DEFAULT '{}'")
+        self._ensure_column(conn, "dashboard_subscriptions", "task_prompt_version",
+                            "TEXT DEFAULT ''")
+        self._ensure_column(conn, "dashboard_subscriptions", "task_prompt_hash",
+                            "TEXT DEFAULT ''")
+        self._ensure_column(conn, "dashboard_subscriptions", "task_prompt_created_at",
+                            "TEXT DEFAULT ''")
+        # v1.13.1：用户与管理员必须能看到最近一次任务的实际运行结果。
+        # 状态直接存订阅表，避免调度失败只留在服务端日志而无人知晓。
+        self._ensure_column(conn, "dashboard_subscriptions", "last_run_at",
+                            "TEXT DEFAULT ''")
+        self._ensure_column(conn, "dashboard_subscriptions", "last_run_status",
+                            "TEXT DEFAULT ''")
+        self._ensure_column(conn, "dashboard_subscriptions", "last_run_stage",
+                            "TEXT DEFAULT ''")
+        self._ensure_column(conn, "dashboard_subscriptions", "last_run_reason",
+                            "TEXT DEFAULT ''")
+        self._ensure_column(conn, "dashboard_subscriptions", "last_alert_status",
+                            "TEXT DEFAULT ''")
         conn.commit()
 
     @staticmethod
@@ -180,8 +213,18 @@ class SubscriptionStore:
             title=row["title"],
             template_id=row["template_id"] or "daily",
             per_source=bool(row["per_source"]),
+            task_prompt=row["task_prompt"] or "",
+            task_prompt_spec=_loads_json(row["task_prompt_spec"]) or {},
+            task_prompt_version=row["task_prompt_version"] or "",
+            task_prompt_hash=row["task_prompt_hash"] or "",
+            task_prompt_created_at=row["task_prompt_created_at"] or "",
             last_snapshot=_loads_json(row["last_snapshot"]),
             last_pushed_at=row["last_pushed_at"],
+            last_run_at=row["last_run_at"] or "",
+            last_run_status=row["last_run_status"] or "",
+            last_run_stage=row["last_run_stage"] or "",
+            last_run_reason=row["last_run_reason"] or "",
+            last_alert_status=row["last_alert_status"] or "",
             enabled=bool(row["enabled"]),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
@@ -196,13 +239,18 @@ class SubscriptionStore:
                 """INSERT INTO dashboard_subscriptions
                    (owner_user_id, owner_staff_id, owner_union_id, data_sources,
                     push_hour, push_minute, weekdays, alert_mode, recipients, title,
-                    template_id, per_source, last_snapshot, last_pushed_at, enabled,
+                    template_id, per_source, task_prompt, task_prompt_spec,
+                    task_prompt_version, task_prompt_hash, task_prompt_created_at,
+                    last_snapshot, last_pushed_at, enabled,
                     created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (sub.owner_user_id, sub.owner_staff_id, sub.owner_union_id,
                  _dumps(sub.data_sources), sub.push_hour, sub.push_minute,
                  sub.weekdays, sub.alert_mode, _dumps(sub.recipients), sub.title,
                  sub.template_id or "daily", int(sub.per_source),
+                 sub.task_prompt or "", _dumps(sub.task_prompt_spec or {}),
+                 sub.task_prompt_version or "", sub.task_prompt_hash or "",
+                 sub.task_prompt_created_at or "",
                  _dumps(sub.last_snapshot), sub.last_pushed_at,
                  int(sub.enabled), now, now),
             )
@@ -282,12 +330,17 @@ class SubscriptionStore:
                      owner_staff_id=?, owner_union_id=?, data_sources=?,
                      push_hour=?, push_minute=?, weekdays=?, alert_mode=?,
                      recipients=?, title=?, template_id=?, per_source=?,
+                     task_prompt=?, task_prompt_spec=?, task_prompt_version=?,
+                     task_prompt_hash=?, task_prompt_created_at=?,
                      updated_at=?
                    WHERE id=?""",
                 (sub.owner_staff_id, sub.owner_union_id, _dumps(sub.data_sources),
                  sub.push_hour, sub.push_minute, sub.weekdays, sub.alert_mode,
                  _dumps(sub.recipients), sub.title, sub.template_id or "daily",
-                 int(sub.per_source), _now(), sub.id),
+                 int(sub.per_source), sub.task_prompt or "",
+                 _dumps(sub.task_prompt_spec or {}), sub.task_prompt_version or "",
+                 sub.task_prompt_hash or "", sub.task_prompt_created_at or "",
+                 _now(), sub.id),
             )
             self._get_conn().commit()
 
@@ -299,6 +352,24 @@ class SubscriptionStore:
                 "UPDATE dashboard_subscriptions SET last_snapshot=?, "
                 "last_pushed_at=COALESCE(?, last_pushed_at), updated_at=? WHERE id=?",
                 (_dumps(snapshot), last_pushed_at, _now(), sub_id),
+            )
+            self._get_conn().commit()
+
+    def set_execution_status(self, sub_id: int, *, status: str, stage: str,
+                             reason: str = "", alert_status: str = ""):
+        """记录订阅最近一次运行结果，供管理员和用户状态查询如实查看。
+
+        这里不抛异常给调度主流程：状态留档失败会单独记录日志，但不能掩盖
+        已发生的推送/采集结果。
+        """
+        with self._lock:
+            self._get_conn().execute(
+                """UPDATE dashboard_subscriptions SET
+                     last_run_at=?, last_run_status=?, last_run_stage=?,
+                     last_run_reason=?, last_alert_status=?, updated_at=?
+                   WHERE id=?""",
+                (_now(), status, stage, (reason or "")[:500],
+                 alert_status or "", _now(), sub_id),
             )
             self._get_conn().commit()
 

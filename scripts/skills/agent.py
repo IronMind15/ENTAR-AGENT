@@ -22,7 +22,7 @@ if _PARENT not in sys.path:
 
 import httpx
 
-from config import (DEEPSEEK_API_KEY, MAX_CONCURRENT_LLM,
+from config import (DASHBOARD_LLM_MODEL, DEEPSEEK_API_KEY, MAX_CONCURRENT_LLM, TESTING,
                     MAX_CONTEXT_ROUNDS, KEEP_CONTEXT_ROUNDS)
 from skills import BaseSkill, register
 from tools import (get_tool_definitions, execute_tool as _execute_registered_tool,
@@ -32,6 +32,16 @@ logger = logging.getLogger("agent")
 
 # 共享 HTTP 客户端（复用连接，避免每次建新连接）
 _HTTP_CLIENT = httpx.Client(timeout=60, trust_env=False)
+
+
+def _test_mocked_http_method(method_name: str) -> bool:
+    """测试模式下仅允许 unittest.mock 替身承接 HTTP 请求。
+
+    这样保留请求体、重试、并发等单元测试的价值，同时避免某个漏 mock 的
+    测试把开发机配置或占位 key 发往真实 DeepSeek 服务。
+    """
+    method = getattr(_HTTP_CLIENT, method_name, None)
+    return type(method).__module__.startswith("unittest.mock")
 
 # DeepSeek 并发限流：最多 MAX_CONCURRENT_LLM 个请求同时进行
 # （多人并发时防费用失控 / API 429；acquire 阻塞发生在 to_thread 线程，
@@ -216,6 +226,26 @@ def call_deepseek_json(prompt: str, max_tokens: int = 4000) -> str:
     return ""
 
 
+def call_dashboard_json(prompt: str, max_tokens: int = 4000) -> str:
+    """看板专用的一次性结构化调用。
+
+    它不进入主 Agent 对话历史，也不共享主 Agent 的 system prompt；模型名
+    通过 DASHBOARD_LLM_MODEL 单独配置。默认值与旧行为相同，便于渐进切换。
+    """
+    try:
+        logger.info("[看板执行模型] 调用 model=%s payload_chars=%s（独立于主 Agent 对话）",
+                    DASHBOARD_LLM_MODEL, len(prompt or ""))
+        resp = _call_deepseek([{"role": "user", "content": prompt}],
+                              max_tokens=max_tokens, thinking=False,
+                              json_output=True, timeout_seconds=100,
+                              model=DASHBOARD_LLM_MODEL)
+        if resp and resp.get("content"):
+            return resp["content"]
+    except Exception as e:
+        logger.warning(f"call_dashboard_json 失败: {e}")
+    return ""
+
+
 def _call_deepseek(
     messages: list[dict],
     tools: list | None = None,
@@ -223,6 +253,7 @@ def _call_deepseek(
     thinking: bool = True,
     json_output: bool = False,
     timeout_seconds: float = 60,
+    model: str = "deepseek-v4-flash",
 ) -> dict | None:
     """调用 DeepSeek API（通用封装）
 
@@ -237,11 +268,14 @@ def _call_deepseek(
     if not DEEPSEEK_API_KEY:
         logger.warning("DEEPSEEK_API_KEY 未配置")
         return None
+    if TESTING and not _test_mocked_http_method("post"):
+        logger.warning("测试模式禁止未 mock 的 DeepSeek 网络调用")
+        return None
 
     _t0 = time.time()
 
     body = {
-        "model": "deepseek-v4-flash",
+        "model": model,
         "messages": messages,
         "temperature": 0.3,
         "max_tokens": max_tokens,
@@ -328,6 +362,9 @@ def _call_deepseek_stream(
     """
     if not DEEPSEEK_API_KEY:
         logger.warning("DEEPSEEK_API_KEY 未配置")
+        return None
+    if TESTING and not _test_mocked_http_method("stream"):
+        logger.warning("测试模式禁止未 mock 的 DeepSeek 流式网络调用")
         return None
 
     _t0 = time.time()

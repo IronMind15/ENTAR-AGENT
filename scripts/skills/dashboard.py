@@ -27,6 +27,8 @@ _HELP_TEXT = (
     "· 「改看板时间到10点」「每周一和周五」「也推给张工」「停掉看板」\n"
     "· 「看板模板」— 查看模板；「用周报模板」— 切换输出格式；\n"
     "  「按这个格式做看板：负责人/今日进展/明日计划」— 自定义模板"
+    "\n· 「查看看板任务提示词」— 查看每个任务实际使用的固定总结指令"
+    "\n· 「编辑看板任务提示词改成：……」— 确认后覆盖该任务的总结指令"
 )
 
 
@@ -61,6 +63,14 @@ class DashboardSkill(BaseSkill):
         # v1.12.7：历史留档回放（看上次的看板/查看板历史）——只读查询，同样
         # 须在 is_kanban_topic 的歧义 LLM 判定前接住，避免付无谓的 LLM 成本
         if sub_cmd.parse_history_intent(q) is not None:
+            return True
+        # 「现在推/模拟/演示」是一次性外发请求，交 Agent 的 dash_push 工具做
+        # 统一二次确认；不能被后续「看板」话题或「推给」接收人规则劫持。
+        if sub_cmd.is_immediate_push_request(q):
+            return False
+        if sub_cmd.parse_edit_task_prompt(q) is not None:
+            return True
+        if sub_cmd.parse_prompt_intent(q) is not None:
             return True
         if sub_cmd.is_kanban_topic(q):
             # v1.12.3：概念疑问句（「看板数据源和看板任务是分开的吗」）→ LLM 判歧义，
@@ -143,6 +153,13 @@ class DashboardSkill(BaseSkill):
         if sub_cmd.parse_history_intent(q) is not None:
             sub_cmd.touch_activity(uid)
             return {"answer": cls._render_push_history(uid), "source": "dashboard"}
+        prompt_edit = sub_cmd.parse_edit_task_prompt(q)
+        if prompt_edit is not None:
+            sub_cmd.touch_activity(uid)
+            return cls._handle_edit_task_prompt(uid, prompt_edit)
+        if sub_cmd.parse_prompt_intent(q) is not None:
+            sub_cmd.touch_activity(uid)
+            return {"answer": cls._render_task_prompt(uid), "source": "dashboard"}
 
         parsed = sub_cmd.parse_subscription_command(q, {"user_id": uid})
         # 防御：match 层已用同参数先判过（LLM 兜底返回 None → match False → 不接），
@@ -151,6 +168,23 @@ class DashboardSkill(BaseSkill):
         if not parsed:
             return {"answer": _HELP_TEXT, "source": "dashboard"}
         intent = parsed["intent"]
+
+        # 创建草稿尚未确认时，用户说「改到八点半」是在补充同一个任务，不应
+        # 因为数据库里还没有订阅而回答“先开通”。直接更新草稿并重新完整复述。
+        pending = sub_cmd.get_pending(uid)
+        if (pending and pending.get("intent") in ("create", "doc_create")
+                and intent == "change_time"):
+            pending["push_hour"] = parsed["push_hour"]
+            pending["push_minute"] = parsed["push_minute"]
+            sub_cmd.set_pending(uid, pending)
+            return {"answer": "已更新这份待确认任务的推送时间。\n\n" +
+                    sub_cmd.render_confirmation(pending), "source": "dashboard"}
+        if (pending and pending.get("intent") in ("create", "doc_create")
+                and intent == "change_freq"):
+            pending["weekdays"] = parsed["weekdays"]
+            sub_cmd.set_pending(uid, pending)
+            return {"answer": "已更新这份待确认任务的推送频率。\n\n" +
+                    sub_cmd.render_confirmation(pending), "source": "dashboard"}
 
         if intent == "create":
             pending = cls._build_create_pending(uid)
@@ -223,6 +257,10 @@ class DashboardSkill(BaseSkill):
             # v1.12.1：编辑模板内容（整体重述覆盖 → 确认 → 覆盖保存）
             sub_cmd.touch_activity(uid)
             return cls._handle_edit_template(q, uid, parsed)
+
+        if intent == "edit_task_prompt":
+            sub_cmd.touch_activity(uid)
+            return cls._handle_edit_task_prompt(uid, parsed)
 
         if intent == "resume":
             store = get_subscription_store()
@@ -303,7 +341,8 @@ class DashboardSkill(BaseSkill):
 
     @classmethod
     def _handle_doc_create(cls, user_id: str,
-                           source_candidate_ids: list[int] | None = None) -> dict:
+                           source_candidate_ids: list[int] | None = None,
+                           request_text: str = "") -> dict:
         """「按这几个文档做每日看板」：取文档候选 → 反问确认
 
         v1.11.4：`source_candidate_ids` 为本次消息识别的候选 id 时只取这些
@@ -337,16 +376,24 @@ class DashboardSkill(BaseSkill):
                     "请确认文档已分享给机器人/您本人，且应用已开通文档读取权限。",
                     "source": "dashboard"}
         staff_id = cls._staff_id_of(user_id)
+        requested_time = sub_cmd._parse_time(request_text) if request_text else None
+        needs_coordination = bool(re.search(
+            r"(?:结论|关注(?:的问题|事项)?|协调(?:的事情|事项)?).{0,30}(?:结论|关注|协调)|"
+            r"(?:结论|关注|协调).{0,30}(?:结论|关注|协调)", request_text or ""))
         pending = {
             "intent": "doc_create",
             "data_sources": [f"doc_{c.id}" for c in cands],
-            "push_hour": 9, "push_minute": 0,
+            "push_hour": requested_time[0] if requested_time else 9,
+            "push_minute": requested_time[1] if requested_time else 0,
             "weekdays": "", "alert_mode": "always",
             "title": "恩特能源每日项目看板",
             "owner_user_id": user_id,
             "owner_staff_id": staff_id,
             "recipients": [staff_id] if staff_id else [],
         }
+        if needs_coordination:
+            pending["template_id"] = "coordination"
+            pending["output_summary"] = "精炼结论、需要关注的问题、需要协调的事情"
         sub_cmd.set_pending(user_id, pending)
         return {"answer": sub_cmd.render_confirmation(pending), "source": "dashboard"}
 
@@ -520,6 +567,7 @@ class DashboardSkill(BaseSkill):
                     "source": "dashboard"}
         for s in owned:
             s.template_id = tpl.key
+            service.ensure_task_prompt(s, force=True)
             store.update(s)
         note = cls._push_sample(owned[0])
         return {"answer": f"✅ 已将看板切换为「{tpl.name}」模板。{note}",
@@ -578,7 +626,11 @@ class DashboardSkill(BaseSkill):
                 alert_mode=pending.get("alert_mode", "always"),
                 recipients=pending.get("recipients") or [],
                 title=pending.get("title", "恩特能源每日项目看板"),
+                template_id=pending.get("template_id", "daily"),
             )
+            # v1.13.1：创建时固化任务提示词和模板结构快照；后续每次执行
+            # 只读取这份快照，不让模板代码的动态变化成为隐藏行为变化。
+            service.ensure_task_prompt(sub)
             duplicate = store.find_exact_duplicate(sub)
             if duplicate:
                 if not duplicate.enabled:
@@ -591,13 +643,20 @@ class DashboardSkill(BaseSkill):
                     "answer": f"✅ 已有相同看板订阅（编号 {duplicate.id}），{state}。",
                     "source": "dashboard",
                 }
-            store.create(sub)
+            sub.id = store.create(sub)
+            service.sync_task_prompt_file(sub)
             sub_cmd.clear_pending(user_id)
             note = cls._push_sample(sub)
             # v1.12.0：创建后主动反问选模板（用户可回复 1/2/3/模板名/不用了，
             # 或不理会保持默认每日；pending 供 parse_template_choice 识别选择回复）
             # v1.12.x：提醒可自定义格式；有私有模板时列出提醒复用
             my_templates = cls._user_template_hint(user_id)
+            # 用户已经在原始请求中明确了三段式输出要求时，直接应用对应系统模板，
+            # 不再反问一次模板选择，避免“我明明说了要什么格式”却被机械追问。
+            if pending.get("template_id") == "coordination":
+                return {"answer": f"✅ 已为您开通每日看板推送（管理晨报模板）！{note}\n"
+                                   "后续将按「精炼结论 / 需要关注的问题 / 需要协调的事情」输出。",
+                        "source": "dashboard"}
             sub_cmd.set_pending(user_id, {"intent": "choose_template", "sub_id": sub.id})
             return {"answer": f"✅ 已为您开通每日看板推送！{note}\n"
                               f"🎨 当前模板：每日简报。要不要换个格式？回复：\n"
@@ -727,6 +786,7 @@ class DashboardSkill(BaseSkill):
                         "source": "dashboard"}
             for s in owned:
                 s.template_id = tpl.key
+                service.ensure_task_prompt(s, force=True)
                 store.update(s)
             sub_cmd.clear_pending(user_id)
             note = cls._push_sample(owned[0])
@@ -746,6 +806,7 @@ class DashboardSkill(BaseSkill):
             if owned:
                 for s in owned:
                     s.template_id = tpl.key
+                    service.ensure_task_prompt(s, force=True)
                     store.update(s)
                 note = cls._push_sample(owned[0])
             sub_cmd.clear_pending(user_id)
@@ -778,9 +839,33 @@ class DashboardSkill(BaseSkill):
             owned = store.list_for_owner(user_id)
             note = "（还没有看板订阅，开通后说「用这个模板」即可生效）"
             if owned:
+                for s in owned:
+                    service.ensure_task_prompt(s, force=True)
+                    store.update(s)
                 note = cls._push_sample(owned[0])
             return {"answer":
                     f"✅ 已按新格式覆盖「{updated.name}」模板，引用它的订阅将按新结构出板。{note}",
+                    "source": "dashboard"}
+
+        if intent == "edit_task_prompt":
+            sub = store.get(int(pending.get("sub_id") or 0))
+            if not sub or sub.owner_user_id != user_id:
+                sub_cmd.clear_pending(user_id)
+                return {"answer": "任务不存在、已删除，或不属于您，未修改提示词。",
+                        "source": "dashboard"}
+            try:
+                from dashboard.task_prompt import set_custom_prompt
+                set_custom_prompt(sub, pending.get("task_prompt") or "")
+            except ValueError as exc:
+                sub_cmd.clear_pending(user_id)
+                return {"answer": f"提示词未保存：{exc}", "source": "dashboard"}
+            store.update(sub)
+            service.sync_task_prompt_file(sub)
+            sub_cmd.clear_pending(user_id)
+            return {"answer":
+                    f"✅ 已更新任务编号 {sub.id} 的固定提示词（版本 {sub.task_prompt_version}，"
+                    f"哈希 {sub.task_prompt_hash}）。下一次看板推送会先原样发出这份提示词，"
+                    "再发送本次文档总结和最终来源链接。",
                     "source": "dashboard"}
 
         sub = store.get(pending.get("sub_id") or 0)
@@ -813,6 +898,11 @@ class DashboardSkill(BaseSkill):
     @classmethod
     def _push_sample(cls, sub: Subscription) -> str:
         """订阅成功后立即推一条样例（数据源 base_id 未配则提示，不影响订阅）"""
+        had_task_prompt = bool(getattr(sub, "task_prompt", "")
+                               and getattr(sub, "task_prompt_spec", None))
+        task_prompt = service.ensure_task_prompt(sub)
+        if not had_task_prompt and sub.id:
+            get_subscription_store().update(sub)
         sources = service.resolve_subscription_sources(sub)
         if not sources:
             return "（数据源未配置，配置后每日自动推送）"
@@ -827,15 +917,19 @@ class DashboardSkill(BaseSkill):
         # 复用 LLM 组装（失败规则兜底）+ 订阅模板输出格式。
         template = service.resolve_template(sub)
         try:
-            from skills.agent import call_deepseek_json
+            from skills.agent import call_dashboard_json
             msgs = service.assemble_per_source_messages(
                 parsed, title=sub.title, date_str=service.today_str(),
-                llm_func=call_deepseek_json, old_snapshot=sub.last_snapshot,
-                errors=errors, template=template)
+                llm_func=call_dashboard_json, old_snapshot=sub.last_snapshot,
+                errors=errors, template=template, task_prompt=task_prompt)
         except Exception:
             msgs = service.assemble_per_source_messages(
                 parsed, title=sub.title, date_str=service.today_str(),
-                old_snapshot=sub.last_snapshot, errors=errors, template=template)
+                old_snapshot=sub.last_snapshot, errors=errors, template=template,
+                task_prompt=task_prompt)
+        prompt_message = service.render_task_prompt_message(sub)
+        source_links = service.render_source_links(sources)
+        msgs = [prompt_message] + msgs + ([source_links] if source_links else [])
         ok, msg = service.push_messages(sub.recipients, sub.title, msgs)
         if ok:
             return "已推送示例看板给您（每个数据源一条），可先查看效果！"
@@ -860,7 +954,27 @@ class DashboardSkill(BaseSkill):
             lines.append(f"  · 数据源：{src_names or '（未配置）'}")
             lines.append(f"  · 接收人：{len(s.recipients)} 人")
             lines.append(f"  · 模板：{cls._template_label(s)}")
+            lines.append(f"  · 任务提示词：{s.task_prompt_hash or '待首次执行固化'}")
             lines.append(f"  · 上次推送：{s.last_pushed_at or '尚无'}")
+            # 调度失败不能只留在服务端日志：订阅所有者查询时要能分辨成功、
+            # 静默跳过和实际失败，也要知道失败提醒有没有送达。
+            if s.last_run_status:
+                labels = {
+                    "success": "✅ 成功",
+                    "skipped": "⏭️ 已跳过",
+                    "failed": "❌ 失败",
+                }
+                run_label = labels.get(s.last_run_status, s.last_run_status)
+                lines.append(f"  · 最近执行：{run_label}（{s.last_run_at or '时间未记录'}）")
+                if s.last_run_reason:
+                    lines.append(f"    原因：{s.last_run_reason}")
+                if s.last_alert_status in {"sent", "failed", "not_sent"}:
+                    alert_labels = {
+                        "sent": "已向管理员发送失败提醒",
+                        "failed": "失败提醒发送失败，请联系管理员查看服务日志",
+                        "not_sent": "未配置可接收失败提醒的人员",
+                    }
+                    lines.append(f"    提醒：{alert_labels[s.last_alert_status]}")
         if subs:
             lines.append("")
             lines.append("说「看板模板」查看可用模板，或「用周报模板」切换输出格式。")
@@ -915,10 +1029,76 @@ class DashboardSkill(BaseSkill):
         body = latest.content or ""
         if len(body) > 4500:
             body = body[:4500] + "\n\n…（内容较长已截断，可查看留档原文）"
-        lines = [f"📚 {title}（{latest.pushed_at}）", "", body]
+        lines = [f"📚 {title}（{latest.pushed_at}）"]
+        if latest.prompt_hash:
+            lines.append(f"任务提示词：{latest.prompt_version or 'task-prompt-v1'} / {latest.prompt_hash}")
+        lines.extend(["", body])
         lines.extend(["", f"（该任务最近 {cls._history_count(target.id)} 次推送已留档，"
                           "可追溯）"])
         return "\n".join(lines)
+
+    @classmethod
+    def _render_task_prompt(cls, user_id: str) -> str:
+        """展示任务实际采用的固定提示词，解除总结黑箱。"""
+        store = get_subscription_store()
+        subs = store.list_for_owner(user_id)
+        if not subs:
+            return "您还没有看板任务。开通后可以说「查看看板任务提示词」查看固定指令。"
+        lines = ["🧾 看板任务固定提示词（只读）"]
+        for index, sub in enumerate(subs, 1):
+            if not sub.task_prompt:
+                service.ensure_task_prompt(sub)
+                store.update(sub)
+            lines.extend([
+                "", f"任务 {index}：{sub.title}（编号 {sub.id}）",
+                f"提示词版本：{sub.task_prompt_version or 'task-prompt-v1'}",
+                f"提示词哈希：{sub.task_prompt_hash or '未生成'}",
+                "执行方式：每次运行临时读取本提示词和本次文档数据；本次完成后丢弃临时上下文。",
+                "---",
+                sub.task_prompt or "（尚未生成，下一次执行时会固化）",
+            ])
+        return "\n".join(lines)
+
+    @classmethod
+    def _handle_edit_task_prompt(cls, user_id: str, parsed: dict) -> dict:
+        """编辑单个任务的固定提示词：明确任务、展示覆盖内容、二次确认。"""
+        store = get_subscription_store()
+        subs = store.list_for_owner(user_id)
+        if not subs:
+            return {"answer": "您还没有看板任务，无法编辑提示词。", "source": "dashboard"}
+        requested_id = int(parsed.get("task_id") or 0)
+        if requested_id:
+            sub = next((item for item in subs if item.id == requested_id), None)
+            if not sub:
+                return {"answer": f"未找到编号 {requested_id} 的您的看板任务。"
+                                  "先说「查看看板任务提示词」查看可编辑任务编号。",
+                        "source": "dashboard"}
+        elif len(subs) == 1:
+            sub = subs[0]
+        else:
+            choices = "；".join(f"编号 {item.id}：{item.title}" for item in subs)
+            return {"answer": "您有多个看板任务，请指定要改哪一个：" + choices + "。\n"
+                              "例如：编辑编号 3 的看板任务提示词改成：……",
+                    "source": "dashboard"}
+        if not sub.task_prompt:
+            service.ensure_task_prompt(sub)
+            store.update(sub)
+            service.sync_task_prompt_file(sub)
+        new_prompt = (parsed.get("task_prompt") or "").strip()
+        if not new_prompt:
+            return {"answer": f"当前任务编号 {sub.id} 的固定提示词如下：\n\n{sub.task_prompt}\n\n"
+                              "请使用「编辑看板任务提示词改成：完整新提示词」提交新版本。"
+                              "若有多个任务，请加“编辑编号 N 的…”。",
+                    "source": "dashboard"}
+        if len(new_prompt) < 20:
+            return {"answer": "新的提示词太短。请至少写清楚要关注什么、如何排序或输出什么，"
+                              "不少于 20 个字符。", "source": "dashboard"}
+        if len(new_prompt) > 4000:
+            return {"answer": "新的提示词超过 4000 个字符，请精简后再提交。", "source": "dashboard"}
+        pending = {"intent": "edit_task_prompt", "sub_id": sub.id,
+                   "task_prompt": new_prompt}
+        sub_cmd.set_pending(user_id, pending)
+        return {"answer": sub_cmd.render_confirmation(pending), "source": "dashboard"}
 
     @staticmethod
     def _history_count(sub_id: int) -> int:

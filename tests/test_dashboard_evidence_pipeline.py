@@ -1,5 +1,6 @@
 """看板证据链与 LLM 整理流水线测试。"""
 
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -11,7 +12,9 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from dashboard.alerts import field_diff, make_snapshot  # noqa: E402
 from dashboard.config_model import FieldSpec, SourceConfig  # noqa: E402
-from dashboard.llm_pipeline import build_dashboard_report  # noqa: E402
+from dashboard.llm_pipeline import (  # noqa: E402
+    _fallback_claims_from_units, build_dashboard_report,
+)
 from dashboard.parser import parse_source_records  # noqa: E402
 
 
@@ -92,6 +95,76 @@ class FullSnapshotTests(unittest.TestCase):
 
 
 class LlmPipelineTests(unittest.TestCase):
+    def test_fallback_claims_round_robin_across_sources(self):
+        """规则兜底不能让首个大文件夹耗尽全部 12 条配额。"""
+        units = []
+        for source in ("folder", "plan", "issue", "project"):
+            for index in range(4):
+                units.append({
+                    "source_key": source,
+                    "ref": f"{source}:r{index}",
+                    "fields": {"事项": f"{source}-{index}", "进展": "推进中"},
+                    "change": {},
+                })
+        claims = _fallback_claims_from_units(units)
+        first_round_sources = {claim["refs"][0].split(":")[0] for claim in claims[:4]}
+        self.assertEqual({"folder", "plan", "issue", "project"}, first_round_sources)
+        self.assertEqual(12, len(claims))
+
+    def test_document_fallback_uses_content_instead_of_generic_type(self):
+        """Word 段落/表格记录不能把“类型”误当成业务标题。"""
+        claims = _fallback_claims_from_units([{
+            "source_key": "weekly", "ref": "weekly:r1", "change": {},
+            "fields": {"类型": "表格2", "内容": "150kW 对拖测试发现 PHY 芯片损坏",
+                       "来源文件": "29-30周部门周报"},
+        }])
+        self.assertIn("150kW 对拖测试", claims[0]["text"])
+        self.assertNotIn("表格2", claims[0]["text"])
+        self.assertEqual("内容", claims[0]["evidence"][0]["field"])
+
+    def test_valid_reference_without_evidence_is_repaired_from_source_field(self):
+        """模型已引用真实记录但漏填 evidence 时，应回填原值而非退化成原始块。"""
+        parsed = parse_source_records(_source(), [{"recordId": "r1", "fields": {
+            "name": "整机联调", "progress": "已完成对拖测试，待处理 PHY 芯片问题",
+        }}])
+
+        def fake_llm(prompt, max_tokens=4000):
+            if '"stage": "reduce"' in prompt:
+                return ('{"claims":[{"text":"整机联调已完成对拖测试，PHY 芯片问题待处理",'
+                        '"level":"risk","refs":["future_board:r1"]}]}')
+            return '{"selected_refs":["future_board:r1"]}'
+
+        report = build_dashboard_report([parsed], None, fake_llm,
+                                        batch_size=1, max_batch_chars=100000)
+        self.assertIn("整机联调已完成对拖测试", report.text)
+        self.assertEqual(1, report.verification["accepted_claims"])
+        self.assertEqual(1, report.verification["repaired_evidence_claims"])
+
+    def test_long_verified_summary_is_paginated_not_replaced_by_raw_fallback(self):
+        """超过单条消息限制时，保留全部 LLM 结论分页，不能退回前四条原文。"""
+        parsed = parse_source_records(_source(), [
+            {"recordId": f"r{i}", "fields": {
+                "name": f"事项{i}", "progress": "关键进展" * 120,
+            }} for i in range(8)
+        ])
+
+        def fake_llm(prompt, max_tokens=4000):
+            if '"stage": "reduce"' in prompt:
+                claims = [{
+                    "text": f"事项{i}已有可核验的精炼结论" + "，需持续跟进" * 50,
+                    "level": "risk", "refs": [f"future_board:r{i}"],
+                    "evidence": [{"ref": f"future_board:r{i}", "field": "详细进展"}],
+                } for i in range(8)]
+                return json.dumps({"claims": claims}, ensure_ascii=False)
+            return json.dumps({"selected_refs": [f"future_board:r{i}" for i in range(8)]})
+
+        report = build_dashboard_report([parsed], None, fake_llm,
+                                        batch_size=20, max_batch_chars=100000)
+        self.assertEqual(8, report.verification["accepted_claims"])
+        self.assertEqual(0, report.verification["fallback_claims"])
+        self.assertGreater(report.verification["message_pages"], 1)
+        self.assertTrue(any("事项7已有可核验的精炼结论" in page for page in report.messages))
+
     def test_changed_records_are_prioritized_over_unchanged_records(self):
         """日报的 map 输入应先分析今日变化，不能让存量记录挤掉更新。"""
         source = _source()

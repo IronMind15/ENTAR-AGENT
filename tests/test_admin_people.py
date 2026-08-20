@@ -1,4 +1,4 @@
-"""按人查看聚合测试（v1.13.0 管理层视图）
+"""按人查看聚合测试（v1.13.1 管理层视图）
 
 /people 接口 + _aggregate_files_by_user：把 sync_status 记录按 upload_user_id
 聚合为「每人上传的文件与学习进度」，Web 端砍掉用户层后的管理层视图。
@@ -11,6 +11,7 @@ import os
 import sys
 import unittest
 from unittest import mock
+from types import SimpleNamespace
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SCRIPTS_DIR = os.path.join(PROJECT_ROOT, "scripts")
@@ -114,6 +115,23 @@ class PeopleRouteTests(unittest.TestCase):
         self.assertEqual(data["total"], 1)
         self.assertEqual(data["people"][0]["upload_user_name"], "张三")
         self.assertEqual(data["people"][0]["synced"], 1)
+
+    def test_dashboard_status_returns_actual_execution_state(self):
+        sub = SimpleNamespace(
+            id=7, title="部门日报", owner_user_id="u1", enabled=True,
+            push_hour=9, push_minute=5, last_pushed_at="2026-08-14 09:05:10",
+            last_run_at="2026-08-14 09:05:10", last_run_status="failed",
+            last_run_stage="push", last_run_reason="推送失败：权限不足",
+            last_alert_status="failed",
+        )
+        with mock.patch("dashboard.subscription_store.get_subscription_store") as get_store:
+            get_store.return_value.list_all.return_value = [sub]
+            r = self.client.get("/admin/dashboard-status?password=secret")
+        self.assertEqual(r.status_code, 200)
+        item = r.json()["subscriptions"][0]
+        self.assertEqual(item["last_run_status"], "failed")
+        self.assertEqual(item["last_alert_status"], "failed")
+        self.assertIn("权限不足", item["last_run_reason"])
 
 
 if __name__ == "__main__":

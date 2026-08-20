@@ -119,6 +119,23 @@ _SYSTEM_TEMPLATES = [
             {"kind": "sources", "title": "数据来源"},
         ],
     },
+    {
+        "key": "coordination",
+        "name": "管理晨报",
+        "description": "精炼结论、重点关注与需要协调事项，适合管理层每日推送",
+        "map_instructions": ("优先识别真实进展、风险、阻塞、待决策和跨团队依赖；"
+                             "忽略无变化的重复字段；每条结论保留可追溯来源"),
+        "reduce_instructions": ("严格按【精炼结论】【需要关注的问题】【需要协调的事情】"
+                                "组织；结论不超过 5 条，关注项说明影响，需要协调项写明"
+                                "事项、建议协同对象和当前阻塞；不得编造。"),
+        "section_spec": [
+            {"kind": "headline", "title": "精炼结论"},
+            {"kind": "claims", "title": "需要关注的问题", "levels": ["risk", "decision"]},
+            {"kind": "claims", "title": "需要协调的事情", "levels": ["decision", "risk"]},
+            {"kind": "errors", "title": "数据完整性提醒"},
+            {"kind": "sources", "title": "数据来源"},
+        ],
+    },
 ]
 
 _SYSTEM_KEYS = {tpl["key"] for tpl in _SYSTEM_TEMPLATES}

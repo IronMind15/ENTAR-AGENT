@@ -164,6 +164,9 @@ class ExecuteSubscriptionTests(unittest.TestCase):
         got = self._store.get(sub_id)
         self.assertEqual(got.last_pushed_at, "2026-08-10 09:00:00")
         self.assertIsNotNone(got.last_snapshot)
+        self.assertEqual(got.last_run_status, "success")
+        self.assertEqual(got.last_run_stage, "push")
+        self.assertIn("已成功推送", got.last_run_reason)
 
     def test_push_writes_history_archive(self):
         """v1.12.7：推送成功后写留档（每任务保留 30 次）"""
@@ -216,6 +219,26 @@ class ExecuteSubscriptionTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["reason"], "no_changes")
         m_push.assert_not_called()
+        got = self._store.get(sub_id)
+        self.assertEqual(got.last_run_status, "skipped")
+        self.assertEqual(got.last_run_stage, "change_check")
+
+    def test_failure_and_failed_alert_are_persisted(self):
+        """用户不能只靠服务端日志得知：推送失败、告警失败都必须留档。"""
+        sub_id = self._store.create(_sub(alert_mode="always"))
+        sub = self._store.get(sub_id)
+        with mock.patch("dashboard.service.resolve_subscription_sources",
+                        return_value=[]), \
+             mock.patch("dashboard_scheduler._notify_failure",
+                        return_value=("failed", "钉钉权限不足")):
+            result = _execute_subscription(sub)
+        self.assertFalse(result["ok"])
+        got = self._store.get(sub_id)
+        self.assertEqual(got.last_run_status, "failed")
+        self.assertEqual(got.last_run_stage, "resolve_sources")
+        self.assertEqual(got.last_alert_status, "failed")
+        self.assertIn("数据源不可用", got.last_run_reason)
+        self.assertIn("失败提醒未送达", got.last_run_reason)
 
     def test_changes_only_with_change_pushes(self):
         sub_id = self._store.create(_sub(alert_mode="changes_only"))
@@ -252,8 +275,11 @@ class ExecuteSubscriptionTests(unittest.TestCase):
                         return_value=(True, "")) as m_push:
             result = _execute_subscription(sub)
         self.assertTrue(result["ok"])
-        sent_text = m_push.call_args[0][2]  # push(recipients, title, text)
+        texts = [c.args[2] for c in m_push.call_args_list]
+        self.assertTrue(texts[0].startswith("📜 本次看板任务固定提示词"))
+        sent_text = texts[1]  # 第一条业务总结（首条固定为任务提示词）
         self.assertTrue(sent_text.startswith("📌 今日无变化"))
+        self.assertTrue(texts[-1].startswith("🔗 本次看板数据来源"))
 
     def test_key_sources_expanded_into_messages(self):
         """v1.12.5：汇总报告之外，变化最多 Top N 关键源单独展开一条；空变化不展开"""
@@ -289,10 +315,11 @@ class ExecuteSubscriptionTests(unittest.TestCase):
             result = _execute_subscription(sub)
         self.assertTrue(result["ok"])
         texts = [c.args[2] for c in m_push.call_args_list]
-        self.assertGreaterEqual(len(texts), 2)   # 汇总报告 + 关键源展开条
-        self.assertIn("汇总报告", texts[0])
+        self.assertEqual(len(texts), 4)         # 提示词 + 汇总 + 关键源 + 来源链接
+        self.assertTrue(texts[0].startswith("📜 本次看板任务固定提示词"))
+        self.assertIn("汇总报告", texts[1])
         self.assertTrue(any("🔍 研发项目现况表 详情" in t for t in texts))
-        self.assertEqual(len(texts), 2)          # 空变化源不展开，共 2 条
+        self.assertTrue(texts[-1].startswith("🔗 本次看板数据来源"))
 
     def test_per_source_uses_per_source_messages(self):
         """v1.12.5：per_source 订阅走逐源组装（不合并报告、不做关键源展开），
@@ -320,10 +347,12 @@ class ExecuteSubscriptionTests(unittest.TestCase):
         m_ps.assert_called_once()            # 逐源组装被调用
         m_report.assert_not_called()         # 不合并成一份报告
         texts = [c.args[2] for c in m_push.call_args_list]
-        self.assertEqual(len(texts), 2)      # 两个源 → 两条独立消息
-        self.assertTrue(texts[0].startswith("📌 今日变化："))
-        self.assertIn(per_source_msgs[0], texts[0])   # banner 注入第一条
-        self.assertEqual(texts[1], per_source_msgs[1])
+        self.assertEqual(len(texts), 4)      # 提示词 + 两个源 + 来源链接
+        self.assertTrue(texts[0].startswith("📜 本次看板任务固定提示词"))
+        self.assertTrue(texts[1].startswith("📌 今日变化："))
+        self.assertIn(per_source_msgs[0], texts[1])   # banner 注入第一条业务总结
+        self.assertEqual(texts[2], per_source_msgs[1])
+        self.assertTrue(texts[-1].startswith("🔗 本次看板数据来源"))
 
     def test_non_per_source_does_not_call_per_source(self):
         """v1.12.6：默认合并订阅不误走逐源组装"""
@@ -349,8 +378,11 @@ class ExecuteSubscriptionTests(unittest.TestCase):
             result = _execute_subscription(sub)
         self.assertTrue(result["ok"])
         m_ps.assert_not_called()
-        # always 模式第一页带「📌 今日变化」banner，汇总报告在其后
-        self.assertTrue(m_push.call_args_list[0][0][2].endswith("汇总报告"))
+        texts = [c.args[2] for c in m_push.call_args_list]
+        # 首条为固定提示词；always 模式首条业务总结带「📌 今日变化」banner。
+        self.assertTrue(texts[0].startswith("📜 本次看板任务固定提示词"))
+        self.assertTrue(texts[1].endswith("汇总报告"))
+        self.assertTrue(texts[-1].startswith("🔗 本次看板数据来源"))
 
     def test_always_change_injects_change_banner(self):
         """always：有变化顶部注入「📌 今日变化」+ 板块名（v1.11.4）"""
@@ -369,10 +401,13 @@ class ExecuteSubscriptionTests(unittest.TestCase):
                         return_value=(True, "")) as m_push:
             result = _execute_subscription(sub)
         self.assertTrue(result["ok"])
-        sent_text = m_push.call_args[0][2]
+        texts = [c.args[2] for c in m_push.call_args_list]
+        self.assertTrue(texts[0].startswith("📜 本次看板任务固定提示词"))
+        sent_text = texts[1]
         self.assertTrue(sent_text.startswith("📌 今日变化："))
         self.assertIn("研发项目现况表", sent_text)
         self.assertIn("总数 9→1", sent_text)
+        self.assertTrue(texts[-1].startswith("🔗 本次看板数据来源"))
 
     def test_off_mode_skips(self):
         sub_id = self._store.create(_sub(alert_mode="off"))

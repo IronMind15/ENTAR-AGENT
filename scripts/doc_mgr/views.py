@@ -432,6 +432,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
       <button class="nav-item" onclick="switchTab('search', this)"><span class="nav-icon">🔍</span>搜索测试</button>
       <button class="nav-item" onclick="switchTab('sync', this)"><span class="nav-icon">🔄</span>同步管理</button>
       <button class="nav-item" onclick="switchTab('people', this)"><span class="nav-icon">🗂</span>按人查看</button>
+      <button class="nav-item" onclick="switchTab('dashboard', this)"><span class="nav-icon">📈</span>看板状态</button>
       <button class="nav-item" onclick="switchTab('users', this)"><span class="nav-icon">👥</span>用户管理</button>
     </nav>
     <div class="side-footer">
@@ -597,6 +598,17 @@ ADMIN_HTML = r"""<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- Tab: Dashboard Status（真实执行状态，不把订阅配置当推送成功） -->
+  <div id="tab-dashboard" class="tab-content">
+    <div class="card">
+      <h3>📈 看板状态 <small style="font-size:13px;color:var(--text-secondary)">最近一次实际运行与失败提醒送达情况</small></h3>
+      <p style="font-size:13px;color:var(--text-secondary);margin-bottom:16px">
+        这里展示任务是否真的推送成功；“未运行/跳过/失败”都会明确说明原因。失败提醒未送达时，请优先检查钉钉权限、网络与管理员 staff_id 配置。
+      </p>
+      <div id="dashboardStatusContent"><div class="loading-spinner">加载中...</div></div>
+    </div>
+  </div>
+
   <!-- Tab: User Management -->
   <div id="tab-users" class="tab-content">
     <div class="card">
@@ -646,7 +658,7 @@ function showToast(msg, type) {
 }
 
 // ===== Tabs（侧边栏导航） =====
-var TAB_TITLES = { docs: '📚 文档列表', upload: '📤 上传文件', search: '🔍 搜索测试', sync: '🔄 同步管理', people: '🗂 按人查看', users: '👥 用户管理' };
+var TAB_TITLES = { docs: '📚 文档列表', upload: '📤 上传文件', search: '🔍 搜索测试', sync: '🔄 同步管理', people: '🗂 按人查看', dashboard: '📈 看板状态', users: '👥 用户管理' };
 function switchTab(name, el) {
   document.querySelectorAll('.side-nav .nav-item').forEach(function(b) {
     b.classList.remove('active');
@@ -662,6 +674,7 @@ function switchTab(name, el) {
   if (name === 'search') loadSearchCollections();
   if (name === 'sync') { loadSyncFiles(); loadSyncHistory(); loadSyncStats(); loadSyncProgress(); }
   if (name === 'people') { loadPeople(); }
+  if (name === 'dashboard') { loadDashboardStatus(); }
   if (name === 'users') { loadUsers(); }
   // 移动端切换后收起侧边栏
   if (window.innerWidth <= 768) {
@@ -1036,10 +1049,10 @@ function renderSingleResult(item, idx) {
 }
 
 // ===== Tab 4: Sync Dashboard =====
-// 获取 URL 中的 password 参数
+// 管理端认证由 HttpOnly Cookie 承担；绝不把实际密码放进 URL、浏览器历史、
+// 代理日志或前端 JavaScript 可读取的存储。保留空参数仅兼容既有接口形态。
 function getPw() {
-  var m = location.search.match(/[?&]password=([^&]*)/);
-  return m ? m[1] : '';
+  return '';
 }
 
 function loadSyncStats() {
@@ -1109,6 +1122,48 @@ function loadPeople() {
     })
     .catch(function(err) {
       area.innerHTML = '<div class="empty-state" style="color:var(--danger)">加载失败: ' + esc(err.message) + '</div>';
+    });
+}
+
+// ===== Tab: 看板状态（v1.13.1） =====
+function loadDashboardStatus() {
+  var area = document.getElementById('dashboardStatusContent');
+  area.innerHTML = '<div class="loading-spinner">加载中...</div>';
+  fetch('/admin/dashboard-status?password=' + encodeURIComponent(getPw()))
+    .then(function(r) {
+      if (!r.ok) throw new Error('请求失败 ' + r.status);
+      return r.json();
+    })
+    .then(function(data) {
+      var items = data.subscriptions || [];
+      if (!items.length) {
+        area.innerHTML = '<div class="empty-state">暂无看板任务。可在钉钉发送文档后说“做每日看板”创建。</div>';
+        return;
+      }
+      var statusLabel = {success: '✅ 已成功推送', skipped: '⏸ 已跳过', failed: '❌ 执行失败'};
+      var stageLabel = {resolve_sources: '数据源解析', collect: '数据采集', change_check: '变化检查', policy: '推送策略', push: '钉钉推送', execution: '执行异常'};
+      var alertLabel = {not_needed: '无需失败提醒', sent: '失败提醒已送达', failed: '⚠️ 失败提醒未送达', not_sent: '⚠️ 未配置提醒接收人'};
+      var html = '';
+      for (var i = 0; i < items.length; i++) {
+        var it = items[i];
+        var state = it.last_run_status || '未运行';
+        var stateText = statusLabel[state] || '⏳ ' + state;
+        html += '<details class="collection-group" open>';
+        html += '<summary class="collection-header" style="cursor:pointer"><h3>' + esc(it.title || '每日项目看板') + '</h3>';
+        html += '<span class="badge">' + esc(stateText) + '</span></summary>';
+        html += '<div class="file-meta" style="padding:10px 0">';
+        html += '任务 #' + esc(it.id) + ' · 计划 ' + esc(it.schedule) + ' · ' + (it.enabled ? '启用中' : '已停用');
+        html += '<br>最近运行：' + esc(it.last_run_at || '尚未运行');
+        if (it.last_run_stage) html += ' · 阶段：' + esc(stageLabel[it.last_run_stage] || it.last_run_stage);
+        if (it.last_pushed_at) html += '<br>最近成功推送：' + esc(it.last_pushed_at);
+        if (it.last_run_reason) html += '<br>说明：' + esc(it.last_run_reason);
+        if (it.last_alert_status) html += '<br>失败提醒：' + esc(alertLabel[it.last_alert_status] || it.last_alert_status);
+        html += '</div></details>';
+      }
+      area.innerHTML = html;
+    })
+    .catch(function(err) {
+      area.innerHTML = '<div class="empty-state" style="color:var(--danger)">加载失败：' + esc(err.message) + '</div>';
     });
 }
 

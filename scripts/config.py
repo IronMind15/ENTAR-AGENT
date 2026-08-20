@@ -7,8 +7,27 @@
 
 import os
 import logging
+import sys
 
 logger = logging.getLogger("config")
+
+# 测试进程必须与本机真实凭据隔离。tests/__init__.py 会设置
+# ENTAR_TESTING=1；此时只允许显式注入的环境变量，不再回读
+# local_config.py，避免单测意外访问 DeepSeek、钉钉或 MinerU。
+_TESTING = (os.environ.get("ENTAR_TESTING", "").strip().lower() in {
+    "1", "true", "yes", "on",
+} or "unittest" in sys.modules)
+
+# 测试既不能读取开发机上的 local_config.py，也不能因为密钥为空而绕开
+# 已显式 mock 的请求体、重试和意图处理测试。以下仅是无效占位值；真实
+# 外部请求仍由调用模块在测试模式下拦截。
+TESTING: bool = _TESTING
+_TEST_DEFAULTS = {
+    "DEEPSEEK_API_KEY": "test-deepseek-key",
+    "DASHSCOPE_API_KEY": "test-dashscope-key",
+    "DINGTALK_CLIENT_ID": "test-dingtalk-client-id",
+    "DINGTALK_CLIENT_SECRET": "test-dingtalk-client-secret",
+}
 
 # local_config.py 所在路径
 _CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "local_config.py")
@@ -16,6 +35,8 @@ _CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "local_c
 
 def _read_from_file(key: str) -> str:
     """从 local_config.py 中读取指定 key 的值"""
+    if _TESTING:
+        return ""
     try:
         with open(_CONFIG_PATH, encoding="utf-8") as f:
             for line in f:
@@ -37,7 +58,15 @@ def _get_config(key: str) -> str:
     val = os.environ.get(key, "")
     if val:
         return val
+    if _TESTING:
+        return _TEST_DEFAULTS.get(key, "")
     return _read_from_file(key)
+
+
+# 运行环境：development（默认）| production。
+# 生产环境管理端必须配置 ADMIN_PASSWORD；校验在 main.py 启动前完成。
+APP_ENV: str = (_get_config("ENTAR_ENV") or "development").strip().lower()
+IS_PRODUCTION: bool = APP_ENV in {"production", "prod"}
 
 
 # ==================== 导出配置项 ====================
@@ -47,6 +76,9 @@ DEEPSEEK_API_KEY: str = _get_config("DEEPSEEK_API_KEY")
 
 # DeepSeek 并发请求上限（多人同时问 LLM 时限制并发，防费用失控 / 429）
 MAX_CONCURRENT_LLM: int = 20
+
+# 看板执行模型与主对话 Agent 解耦；默认保持现有模型，部署时可单独替换。
+DASHBOARD_LLM_MODEL: str = _get_config("DASHBOARD_LLM_MODEL") or "deepseek-v4-flash"
 
 # 钉钉 Stream 模式机器人凭证
 DINGTALK_CLIENT_ID: str = _get_config("DINGTALK_CLIENT_ID")
