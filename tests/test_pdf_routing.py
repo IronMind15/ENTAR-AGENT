@@ -18,12 +18,10 @@ from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from doc_mgr import engine
-from doc_mgr.extractors.pdf_mupdf import classify_pdf_type, validate_local_text
-from doc_mgr.models import Document
+from scripts.doc_mgr import engine
+from scripts.doc_mgr.extractors.pdf_mupdf import classify_pdf_type, validate_local_text
+from scripts.doc_mgr.models import Document
 
 
 # 长文本：单页 >50 字符，足够判定为「文字页」

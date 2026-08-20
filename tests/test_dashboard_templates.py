@@ -14,16 +14,14 @@ from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from dashboard.template_store import (  # noqa: E402
+from scripts.dashboard.template_store import (  # noqa: E402
     DashboardTemplate,
     TemplateStore,
     _DEFAULT_SECTION_SPEC,
     _SYSTEM_TEMPLATES,
 )
-from dashboard.subscription_store import (  # noqa: E402
+from scripts.dashboard.subscription_store import (  # noqa: E402
     Subscription,
     SubscriptionStore,
 )
@@ -58,7 +56,7 @@ class TemplateStoreTests(unittest.TestCase):
     def test_sync_user_template_file_writes_json(self):
         """v1.12.x：用户模板同步为本地用户文件夹下的 JSON 文件"""
         import json
-        import dashboard.template_store as ts
+        import scripts.dashboard.template_store as ts
         res = self.store.create_user_template(
             key="my_tpl", name="我的模板", user_id="union001",
             description="先结论后分块", map_instructions="只看变化",
@@ -82,7 +80,7 @@ class TemplateStoreTests(unittest.TestCase):
 
     def test_sync_skips_system_template(self):
         """系统模板不落文件（只记录用户自定义要求）"""
-        import dashboard.template_store as ts
+        import scripts.dashboard.template_store as ts
         daily = self.store.get("daily")
         with mock.patch.object(ts, "_TEMPLATE_DIR", tempfile.mkdtemp()):
             path = TemplateStore.sync_user_template_file(daily, staff_id="staff001")
@@ -90,7 +88,7 @@ class TemplateStoreTests(unittest.TestCase):
 
     def test_remove_user_template_file(self):
         """删除模板同步文件（尽力而为）"""
-        import dashboard.template_store as ts
+        import scripts.dashboard.template_store as ts
         res = self.store.create_user_template(
             key="gone", name="要删的", user_id="union001")
         self.assertTrue(res["ok"])
@@ -241,7 +239,7 @@ class RenderTemplateTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        from dashboard.llm_pipeline import _render
+        from scripts.dashboard.llm_pipeline import _render
         cls._render = _render
         cls.results = [{
             "source_key": "s1", "name": "项目A", "total": 5,
@@ -333,7 +331,7 @@ class RenderTemplateTests(unittest.TestCase):
 
     def test_truncate_sentence_on_boundary(self):
         """v1.12.x：证据原值超长时按句边界截断，不砍半句话"""
-        from dashboard.llm_pipeline import _truncate_sentence
+        from scripts.dashboard.llm_pipeline import _truncate_sentence
         long = ("7.5：1000V125KW运行20min无异常，通讯风扇正常，上位机参数已更改。"
                 "7.4：与32号对拖老化完成，过程中风扇未异响。"
                 "7.3：1000V 125KW运行15min风扇异响，待维修复测，通讯正常。"
@@ -394,8 +392,8 @@ class BuildDashboardTemplateTests(unittest.TestCase):
     """build_dashboard_report 的模板指令/结构透传"""
 
     def _parsed(self):
-        from dashboard.config_model import FieldSpec, SourceConfig
-        from dashboard.parser import parse_source_records
+        from scripts.dashboard.config_model import FieldSpec, SourceConfig
+        from scripts.dashboard.parser import parse_source_records
         source = SourceConfig(
             key="future_board", name="未来新增看板", kind="notable",
             base_id="node-1",
@@ -409,8 +407,8 @@ class BuildDashboardTemplateTests(unittest.TestCase):
         ])
 
     def _daily_template(self):
-        from dashboard.template_store import _DEFAULT_MAP_INSTRUCTION
-        from dashboard.template_store import _DEFAULT_REDUCE_INSTRUCTION
+        from scripts.dashboard.template_store import _DEFAULT_MAP_INSTRUCTION
+        from scripts.dashboard.template_store import _DEFAULT_REDUCE_INSTRUCTION
         return DashboardTemplate(
             key="daily", name="每日简报", scope="system",
             map_instructions=_DEFAULT_MAP_INSTRUCTION,
@@ -428,7 +426,7 @@ class BuildDashboardTemplateTests(unittest.TestCase):
         return fake_llm
 
     def test_custom_instructions_are_passed_to_llm(self):
-        from dashboard.llm_pipeline import build_dashboard_report
+        from scripts.dashboard.llm_pipeline import build_dashboard_report
         prompts = []
         tpl = DashboardTemplate(
             key="weekly", name="周报", scope="system",
@@ -445,7 +443,7 @@ class BuildDashboardTemplateTests(unittest.TestCase):
         self.assertIn("按进展与风险分列", reduce_prompt)
 
     def test_daily_template_equals_default_output(self):
-        from dashboard.llm_pipeline import build_dashboard_report
+        from scripts.dashboard.llm_pipeline import build_dashboard_report
         prompts = []
         fake = self._make_fake_llm(prompts)
         base = build_dashboard_report([self._parsed()], None, fake,
@@ -457,7 +455,7 @@ class BuildDashboardTemplateTests(unittest.TestCase):
         self.assertEqual(base.text, with_tpl.text)
 
     def test_template_title_override(self):
-        from dashboard.llm_pipeline import build_dashboard_report
+        from scripts.dashboard.llm_pipeline import build_dashboard_report
         tpl = self._daily_template()
         tpl.title = "老板看板"
         report = build_dashboard_report([self._parsed()], None, None,
@@ -465,7 +463,7 @@ class BuildDashboardTemplateTests(unittest.TestCase):
         self.assertIn("# 老板看板", report.text)
 
     def test_weekly_template_renders_two_sections(self):
-        from dashboard.llm_pipeline import build_dashboard_report
+        from scripts.dashboard.llm_pipeline import build_dashboard_report
         spec = [
             {"kind": "headline", "title": "本周要点"},
             {"kind": "claims", "title": "本周进展", "levels": ["update", "info"]},
@@ -481,7 +479,7 @@ class BuildDashboardTemplateTests(unittest.TestCase):
 
 class TemplateBuilderTests(unittest.TestCase):
     def test_parse_markdown_headings_to_spec(self):
-        from dashboard.template_builder import parse_template_file
+        from scripts.dashboard.template_builder import parse_template_file
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "周报模板.md"
             path.write_text(
@@ -502,7 +500,7 @@ class TemplateBuilderTests(unittest.TestCase):
 
     def test_parse_excel_header_row(self):
         import openpyxl
-        from dashboard.template_builder import parse_template_file
+        from scripts.dashboard.template_builder import parse_template_file
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "表模板.xlsx"
             wb = openpyxl.Workbook()
@@ -520,7 +518,7 @@ class TemplateBuilderTests(unittest.TestCase):
         self.assertIn("风险与阻塞", titles)
 
     def test_parse_missing_file_and_unsupported_ext(self):
-        from dashboard.template_builder import parse_template_file
+        from scripts.dashboard.template_builder import parse_template_file
         res = parse_template_file("/不存在/文件.md", "文件.md")
         self.assertFalse(res["ok"])
         res = parse_template_file(__file__, "测试.py")
@@ -528,7 +526,7 @@ class TemplateBuilderTests(unittest.TestCase):
         self.assertIn("只支持", res["message"])
 
     def test_describe_to_spec_mock_llm(self):
-        from dashboard.template_builder import describe_to_spec
+        from scripts.dashboard.template_builder import describe_to_spec
 
         def fake_llm(prompt, max_tokens=4000):
             return ('{"name": "晨会看板", '
@@ -552,7 +550,7 @@ class TemplateBuilderTests(unittest.TestCase):
         self.assertIn("sources", kinds)
 
     def test_describe_to_spec_llm_error_fallback(self):
-        from dashboard.template_builder import describe_to_spec
+        from scripts.dashboard.template_builder import describe_to_spec
 
         def broken_llm(prompt, max_tokens=4000):
             raise RuntimeError("API 挂了")
@@ -561,14 +559,14 @@ class TemplateBuilderTests(unittest.TestCase):
         self.assertFalse(res["ok"])
 
     def test_describe_to_spec_empty_description(self):
-        from dashboard.template_builder import describe_to_spec
+        from scripts.dashboard.template_builder import describe_to_spec
         res = describe_to_spec("   ")
         self.assertFalse(res["ok"])
 
 
 class SubscriptionCommandTemplateTests(unittest.TestCase):
     def test_template_intents(self):
-        from dashboard import subscription_commands as sc
+        from scripts.dashboard import subscription_commands as sc
         cases = [
             ("看板模板", "template"),
             ("有什么看板模板", "template"),
@@ -584,14 +582,14 @@ class SubscriptionCommandTemplateTests(unittest.TestCase):
             self.assertEqual(parsed["intent"], expected, text)
 
     def test_describe_extracts_description(self):
-        from dashboard import subscription_commands as sc
+        from scripts.dashboard import subscription_commands as sc
         parsed = sc.parse_subscription_command(
             "按这个格式做看板：负责人/今日进展/明日计划")
         self.assertEqual(parsed["description"], "负责人/今日进展/明日计划")
 
     def test_edit_template_intents(self):
         """v1.12.1 冲突矩阵：编辑 vs 切换 vs 描述/提交/列表"""
-        from dashboard import subscription_commands as sc
+        from scripts.dashboard import subscription_commands as sc
         cases = [
             # (文本, 期望意图, 期望 description)
             ("编辑看板模板周报", "edit_template", ""),
@@ -619,7 +617,7 @@ class SubscriptionCommandTemplateTests(unittest.TestCase):
 
     def test_extract_edit_description_only_with_colon(self):
         """desc 只认带冒号的「改成/改为/换成：」，防无冒号切换被当格式"""
-        from dashboard import subscription_commands as sc
+        from scripts.dashboard import subscription_commands as sc
         # 有冒号 → 提取格式描述
         self.assertEqual(sc._extract_edit_template("编辑周报模板改成：先写总体结论"),
                          "先写总体结论")
@@ -633,12 +631,12 @@ class SubscriptionCommandTemplateTests(unittest.TestCase):
         self.assertIsNone(sc._extract_edit_template("有哪些看板模板"))
 
     def test_template_query_is_direct_not_write(self):
-        from dashboard import subscription_commands as sc
+        from scripts.dashboard import subscription_commands as sc
         parsed = sc.parse_subscription_command("看板模板")
         self.assertNotIn("template_key", parsed)
 
     def test_render_confirmation_for_set_and_describe(self):
-        from dashboard import subscription_commands as sc
+        from scripts.dashboard import subscription_commands as sc
         set_pending = {"intent": "set_template", "template_key": "weekly",
                        "template_name": "周报总结"}
         text = sc.render_confirmation(set_pending)
@@ -656,7 +654,7 @@ class SubscriptionCommandTemplateTests(unittest.TestCase):
 
     def test_render_confirmation_edit_template(self):
         """v1.12.1：编辑模板确认文案（覆盖保存，非新建）"""
-        from dashboard import subscription_commands as sc
+        from scripts.dashboard import subscription_commands as sc
         pending = {
             "intent": "edit_template", "template_key": "myreport",
             "template_name": "自定义周报",
@@ -674,11 +672,11 @@ class DashboardSkillTemplateTests(unittest.TestCase):
     """技能层：模板列表/切换/描述/提交（mock 存储，不打真实库/API）"""
 
     def setUp(self):
-        from dashboard.template_store import TemplateStore
+        from scripts.dashboard.template_store import TemplateStore
         self._tpl_path = _tmp_db()
         self._tpl_store = TemplateStore(db_path=self._tpl_path)
         self.patch_tpl = mock.patch(
-            "dashboard.template_store.get_template_store",
+            "scripts.dashboard.template_store.get_template_store",
             return_value=self._tpl_store)
         self.patch_tpl.start()
         self.addCleanup(self.patch_tpl.stop)
@@ -687,14 +685,14 @@ class DashboardSkillTemplateTests(unittest.TestCase):
         self._sub_path = _tmp_db()
         self._sub_store = SubscriptionStore(db_path=self._sub_path)
         self.patch_sub = mock.patch(
-            "skills.dashboard.get_subscription_store",
+            "scripts.skills.dashboard.get_subscription_store",
             return_value=self._sub_store)
         self.patch_sub.start()
         self.addCleanup(self.patch_sub.stop)
         self.addCleanup(lambda: _cleanup_db(self._sub_path, self._sub_store))
 
         self.patch_pending = mock.patch(
-            "pending_context._pending", {})
+            "scripts.pending_context._pending", {})
         self.patch_pending.start()
         self.addCleanup(self.patch_pending.stop)
 
@@ -710,23 +708,23 @@ class DashboardSkillTemplateTests(unittest.TestCase):
         return self._sub_store.create(sub)
 
     def _confirm(self, uid="union001"):
-        from dashboard import subscription_commands as sc
+        from scripts.dashboard import subscription_commands as sc
         pending = sc.get_pending(uid)
         self.assertIsNotNone(pending, "应有待确认操作")
         return pending
 
     def test_template_list_answer(self):
-        from skills.dashboard import DashboardSkill
+        from scripts.skills.dashboard import DashboardSkill
         r = DashboardSkill.handle("看板模板", user_id="union001")
         self.assertEqual(r["source"], "dashboard")
         self.assertIn("每日简报", r["answer"])
         self.assertIn("周报总结", r["answer"])
         self.assertIn("项目看板", r["answer"])
 
-    @mock.patch("skills.dashboard.DashboardSkill._push_sample",
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._push_sample",
                 return_value="已推送示例看板")
     def test_set_template_confirm_flow(self, m_push):
-        from skills.dashboard import DashboardSkill
+        from scripts.skills.dashboard import DashboardSkill
         r = DashboardSkill.handle("用周报模板做看板", user_id="union001")
         self.assertIn("周报总结", r["answer"])
         self.assertEqual(self._confirm()["intent"], "set_template")
@@ -737,9 +735,9 @@ class DashboardSkillTemplateTests(unittest.TestCase):
         sub = self._sub_store.list_for_owner("union001")[0]
         self.assertEqual(sub.template_id, "weekly")
 
-    @mock.patch("skills.dashboard.DashboardSkill._push_sample",
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._push_sample",
                 return_value="已推送示例看板")
-    @mock.patch("dashboard.template_builder.describe_to_spec")
+    @mock.patch("scripts.dashboard.template_builder.describe_to_spec")
     def test_describe_template_confirm_flow(self, m_describe, m_push):
         m_describe.return_value = {
             "ok": True, "name": "晨会看板",
@@ -755,7 +753,7 @@ class DashboardSkillTemplateTests(unittest.TestCase):
                 {"kind": "sources", "title": "数据来源"},
             ],
         }
-        from skills.dashboard import DashboardSkill
+        from scripts.skills.dashboard import DashboardSkill
         r = DashboardSkill.handle(
             "按这个格式做看板：负责人/今日进展/明日计划", user_id="union001")
         self.assertIn("晨会看板", r["answer"])
@@ -767,10 +765,10 @@ class DashboardSkillTemplateTests(unittest.TestCase):
         self.assertEqual(sub.template_id, "晨会看板")
         self.assertIsNotNone(self._tpl_store.get("晨会看板", "union001"))
 
-    @mock.patch("skills.dashboard.DashboardSkill._push_sample",
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._push_sample",
                 return_value="已推送示例看板")
-    @mock.patch("dashboard.template_builder.parse_template_file")
-    @mock.patch("knowledge_review.get_pending_learn")
+    @mock.patch("scripts.dashboard.template_builder.parse_template_file")
+    @mock.patch("scripts.knowledge_review.get_pending_learn")
     def test_submit_template_confirm_flow(self, m_learn, m_parse, m_push):
         m_learn.return_value = {"file_path": "/tmp/周报模板.md",
                                 "file_name": "周报模板.md"}
@@ -786,7 +784,7 @@ class DashboardSkillTemplateTests(unittest.TestCase):
                 {"kind": "sources", "title": "数据来源"},
             ],
         }
-        from skills.dashboard import DashboardSkill
+        from scripts.skills.dashboard import DashboardSkill
         r = DashboardSkill.handle("把这个当看板模板", user_id="union001")
         self.assertIn("周报模板", r["answer"])
         pending = self._confirm()
@@ -797,8 +795,8 @@ class DashboardSkillTemplateTests(unittest.TestCase):
         self.assertEqual(sub.template_id, "周报模板")
 
     def test_submit_without_uploaded_file_hints(self):
-        from skills.dashboard import DashboardSkill
-        with mock.patch("knowledge_review.get_pending_learn",
+        from scripts.skills.dashboard import DashboardSkill
+        with mock.patch("scripts.knowledge_review.get_pending_learn",
                         return_value=None):
             r = DashboardSkill.handle("把这个当看板模板", user_id="union001")
         self.assertIn("先上传", r["answer"])
@@ -813,9 +811,9 @@ class DashboardSkillTemplateTests(unittest.TestCase):
         self.assertTrue(res["ok"])
         return res["template"]
 
-    @mock.patch("skills.dashboard.DashboardSkill._push_sample",
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._push_sample",
                 return_value="已推送示例看板")
-    @mock.patch("dashboard.template_builder.describe_to_spec")
+    @mock.patch("scripts.dashboard.template_builder.describe_to_spec")
     def test_edit_template_confirm_flow(self, m_describe, m_push):
         """v1.12.1：编辑私有模板 → 确认 → 覆盖字段、key 不变、无副本"""
         self._create_user_template()
@@ -830,7 +828,7 @@ class DashboardSkillTemplateTests(unittest.TestCase):
                 {"kind": "sources", "title": "数据来源"},
             ],
         }
-        from skills.dashboard import DashboardSkill
+        from scripts.skills.dashboard import DashboardSkill
         r = DashboardSkill.handle(
             "编辑自定义周报改成：先写总体结论", user_id="union001")
         self.assertIn("自定义周报", r["answer"])
@@ -851,12 +849,12 @@ class DashboardSkillTemplateTests(unittest.TestCase):
                 if t.scope == "user"]
         self.assertEqual(len(mine), 1)
 
-    @mock.patch("dashboard.template_builder.describe_to_spec")
+    @mock.patch("scripts.dashboard.template_builder.describe_to_spec")
     def test_edit_no_description_shows_current(self, m_describe):
         """v1.12.1：无格式描述 → 展示当前内容引导，不 set pending"""
         self._create_user_template()
-        from skills.dashboard import DashboardSkill
-        from dashboard import subscription_commands as sc
+        from scripts.skills.dashboard import DashboardSkill
+        from scripts.dashboard import subscription_commands as sc
         m_describe.assert_not_called()
         r = DashboardSkill.handle("编辑自定义周报模板", user_id="union001")
         self.assertIn("当前结构", r["answer"])
@@ -866,20 +864,20 @@ class DashboardSkillTemplateTests(unittest.TestCase):
 
     def test_edit_system_template_rejected(self):
         """v1.12.1：系统模板不可编辑 → 引导另建"""
-        from skills.dashboard import DashboardSkill
+        from scripts.skills.dashboard import DashboardSkill
         r = DashboardSkill.handle("编辑周报模板改成：先写结论", user_id="union001")
         self.assertIn("系统自带模板", r["answer"])
         self.assertIn("周报总结", r["answer"])
 
     def test_edit_unknown_template_guides(self):
         """v1.12.1：找不到模板 → 引导说「看板模板」查看"""
-        from skills.dashboard import DashboardSkill
+        from scripts.skills.dashboard import DashboardSkill
         r = DashboardSkill.handle("编辑不存在的模板改成：先写结论", user_id="union001")
         self.assertIn("没找到", r["answer"])
         self.assertIn("看板模板", r["answer"])
 
     def test_subscription_status_shows_template(self):
-        from skills.dashboard import DashboardSkill
+        from scripts.skills.dashboard import DashboardSkill
         r = DashboardSkill.handle("我的看板", user_id="union001")
         self.assertIn("每日简报", r["answer"])
         self.assertIn("模板", r["answer"])
@@ -890,7 +888,7 @@ class DashboardSkillTemplateTests(unittest.TestCase):
         self._sub_store.set_execution_status(
             sub_id, status="failed", stage="push",
             reason="推送失败：权限不足", alert_status="failed")
-        from skills.dashboard import DashboardSkill
+        from scripts.skills.dashboard import DashboardSkill
         answer = DashboardSkill.handle("我的看板", user_id="union001")["answer"]
         self.assertIn("❌ 失败", answer)
         self.assertIn("推送失败：权限不足", answer)
@@ -901,11 +899,11 @@ class TemplateChoiceFlowTests(unittest.TestCase):
     """创建订阅后主动反问选模板（v1.12.0）"""
 
     def setUp(self):
-        from dashboard.template_store import TemplateStore
+        from scripts.dashboard.template_store import TemplateStore
         self._tpl_path = _tmp_db()
         self._tpl_store = TemplateStore(db_path=self._tpl_path)
         self.patch_tpl = mock.patch(
-            "dashboard.template_store.get_template_store",
+            "scripts.dashboard.template_store.get_template_store",
             return_value=self._tpl_store)
         self.patch_tpl.start()
         self.addCleanup(self.patch_tpl.stop)
@@ -914,34 +912,34 @@ class TemplateChoiceFlowTests(unittest.TestCase):
         self._sub_path = _tmp_db()
         self._sub_store = SubscriptionStore(db_path=self._sub_path)
         self.patch_sub = mock.patch(
-            "skills.dashboard.get_subscription_store",
+            "scripts.skills.dashboard.get_subscription_store",
             return_value=self._sub_store)
         self.patch_sub.start()
         self.addCleanup(self.patch_sub.stop)
         self.addCleanup(lambda: _cleanup_db(self._sub_path, self._sub_store))
 
         self.patch_pending = mock.patch(
-            "pending_context._pending", {})
+            "scripts.pending_context._pending", {})
         self.patch_pending.start()
         self.addCleanup(self.patch_pending.stop)
 
     def _create_and_ask(self, uid="union001"):
         """完整创建流程：帮推看板 → 确认 → 返回反问文案 + 已设 choose_template pending"""
-        from skills.dashboard import DashboardSkill
-        with mock.patch("skills.dashboard.DashboardSkill._staff_id_of",
+        from scripts.skills.dashboard import DashboardSkill
+        with mock.patch("scripts.skills.dashboard.DashboardSkill._staff_id_of",
                         return_value="staff001"):
             DashboardSkill.handle("帮我推个看板", user_id=uid)
-        with mock.patch("skills.dashboard.DashboardSkill._push_sample",
+        with mock.patch("scripts.skills.dashboard.DashboardSkill._push_sample",
                         return_value="已推送示例看板"):
             return DashboardSkill.handle("确认", user_id=uid)
 
     def test_parse_choice_without_pending_returns_none(self):
-        from dashboard import subscription_commands as sc
+        from scripts.dashboard import subscription_commands as sc
         for t in ("1", "2", "3", "周报", "不用了", "项目"):
             self.assertIsNone(sc.parse_template_choice(t, "union001"), t)
 
     def test_parse_choice_number_name_none(self):
-        from dashboard import subscription_commands as sc
+        from scripts.dashboard import subscription_commands as sc
         sc.set_pending("union001", {"intent": "choose_template", "sub_id": 1})
         cases = [
             ("1", "daily"), ("2", "weekly"), ("3", "project"),
@@ -955,23 +953,23 @@ class TemplateChoiceFlowTests(unittest.TestCase):
             self.assertEqual(p["choice"], expect, t)
 
     def test_parse_choice_requires_recent_window(self):
-        from dashboard import subscription_commands as sc
+        from scripts.dashboard import subscription_commands as sc
         sc.set_pending("union001", {"intent": "choose_template", "sub_id": 1})
         sc._activity_by_user["union001"] = 0.0  # 反问窗口过期
         self.assertIsNone(sc.parse_template_choice("2", "union001"))
 
     def test_parse_choice_does_not_steal_queries(self):
-        from dashboard import subscription_commands as sc
+        from scripts.dashboard import subscription_commands as sc
         sc.set_pending("union001", {"intent": "choose_template", "sub_id": 1})
         for t in ("项目进展怎么样", "帮我查下周报数据", "看板今天数据如何"):
             self.assertIsNone(sc.parse_template_choice(t, "union001"), t)
 
-    @mock.patch("skills.dashboard.DashboardSkill._push_sample",
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._push_sample",
                 return_value="已推送示例看板")
     def test_create_asks_template_choice(self, m_push):
-        from dashboard import subscription_commands as sc
-        from skills.dashboard import DashboardSkill
-        with mock.patch("skills.dashboard.DashboardSkill._staff_id_of",
+        from scripts.dashboard import subscription_commands as sc
+        from scripts.skills.dashboard import DashboardSkill
+        with mock.patch("scripts.skills.dashboard.DashboardSkill._staff_id_of",
                         return_value="staff001"):
             DashboardSkill.handle("帮我推个看板", user_id="union001")
         r = DashboardSkill.handle("确认", user_id="union001")
@@ -980,31 +978,31 @@ class TemplateChoiceFlowTests(unittest.TestCase):
         self.assertIn("3 项目看板", r["answer"])
         self.assertEqual(sc.get_pending("union001")["intent"], "choose_template")
 
-    @mock.patch("skills.dashboard.DashboardSkill._push_sample",
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._push_sample",
                 return_value="已推送示例看板")
     def test_choose_weekly_applies_to_subscription(self, m_push):
-        from skills.dashboard import DashboardSkill
+        from scripts.skills.dashboard import DashboardSkill
         self._create_and_ask("union001")
         r = DashboardSkill.handle("2", user_id="union001")
         self.assertIn("周报总结", r["answer"])
         self.assertEqual(self._sub_store.list_for_owner("union001")[0].template_id,
                          "weekly")
 
-    @mock.patch("skills.dashboard.DashboardSkill._push_sample",
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._push_sample",
                 return_value="已推送示例看板")
     def test_choose_daily_by_name(self, m_push):
-        from skills.dashboard import DashboardSkill
+        from scripts.skills.dashboard import DashboardSkill
         self._create_and_ask("union001")
         r = DashboardSkill.handle("每日简报", user_id="union001")
         self.assertIn("每日简报", r["answer"])
         self.assertEqual(self._sub_store.list_for_owner("union001")[0].template_id,
                          "daily")
 
-    @mock.patch("skills.dashboard.DashboardSkill._push_sample",
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._push_sample",
                 return_value="已推送示例看板")
     def test_choose_none_keeps_daily_and_clears(self, m_push):
-        from dashboard import subscription_commands as sc
-        from skills.dashboard import DashboardSkill
+        from scripts.dashboard import subscription_commands as sc
+        from scripts.skills.dashboard import DashboardSkill
         self._create_and_ask("union001")
         r = DashboardSkill.handle("不用了", user_id="union001")
         self.assertIn("保持当前模板", r["answer"])
@@ -1012,11 +1010,11 @@ class TemplateChoiceFlowTests(unittest.TestCase):
                          "daily")
         self.assertIsNone(sc.get_pending("union001"))
 
-    @mock.patch("skills.dashboard.DashboardSkill._push_sample",
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._push_sample",
                 return_value="已推送示例看板")
     def test_confirm_during_choice_keeps_default(self, m_push):
-        from dashboard import subscription_commands as sc
-        from skills.dashboard import DashboardSkill
+        from scripts.dashboard import subscription_commands as sc
+        from scripts.skills.dashboard import DashboardSkill
         self._create_and_ask("union001")
         r = DashboardSkill.handle("好的", user_id="union001")
         self.assertIn("保持当前模板", r["answer"])
@@ -1024,10 +1022,10 @@ class TemplateChoiceFlowTests(unittest.TestCase):
                          "daily")
         self.assertIsNone(sc.get_pending("union001"))
 
-    @mock.patch("skills.dashboard.DashboardSkill._push_sample",
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._push_sample",
                 return_value="已推送示例看板")
     def test_choose_template_pushes_sample_again(self, m_push):
-        from skills.dashboard import DashboardSkill
+        from scripts.skills.dashboard import DashboardSkill
         self._create_and_ask("union001")
         DashboardSkill.handle("2", user_id="union001")
         self.assertGreaterEqual(m_push.call_count, 1)

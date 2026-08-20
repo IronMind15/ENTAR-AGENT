@@ -6,14 +6,12 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from dashboard.assembler import (  # noqa: E402
+from scripts.dashboard.assembler import (  # noqa: E402
     assemble_markdown, llm_assemble, validate_markdown,
 )
-from dashboard.config_model import FieldSpec, SourceConfig  # noqa: E402
-from dashboard.parser import parse_source_records  # noqa: E402
+from scripts.dashboard.config_model import FieldSpec, SourceConfig  # noqa: E402
+from scripts.dashboard.parser import parse_source_records  # noqa: E402
 
 
 def _fixture_sources():
@@ -96,7 +94,7 @@ class AssembleMarkdownTests(unittest.TestCase):
 
     def test_today_points_no_attention_normal(self):
         """无关注项 → 整体正常兜底"""
-        from dashboard.parser import parse_source_records
+        from scripts.dashboard.parser import parse_source_records
         sources = {s.key: s for s in _fixture_sources()}
         proj = parse_source_records(
             sources["project_status"],

@@ -13,7 +13,7 @@ public 不拦截）；学习侧入库时 department 从目标库继承。
 WAL 模式读写不互斥）。
 
 用法：
-    from kb_registry import create_knowledge_base, list_knowledge_bases, resolve_kb
+    from scripts.kb_registry import create_knowledge_base, list_knowledge_bases, resolve_kb
     kb = create_knowledge_base("产品手册", "产品说明书、规格书", department="rd")
     visible = list_knowledge_bases()      # 启用中的全部
     hits = resolve_kb("产品手册")          # 按 key / name 模糊解析
@@ -26,7 +26,7 @@ import threading
 from datetime import datetime
 from typing import Optional
 
-from paths import DB_PATH as _DEFAULT_DB_PATH
+from scripts.paths import DB_PATH as _DEFAULT_DB_PATH
 
 logger = logging.getLogger("kb_registry")
 
@@ -190,7 +190,7 @@ class KBRegistry:
         Returns:
             {"ok": True, "kb": {...}} 或 {"ok": False, "message": "..."}
         """
-        from center_config import is_valid_center
+        from scripts.center_config import is_valid_center
 
         name = (name or "").strip()
         if not name:

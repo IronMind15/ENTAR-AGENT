@@ -10,12 +10,11 @@ from types import SimpleNamespace
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
 
-from dashboard.subscription_store import Subscription, SubscriptionStore  # noqa: E402
-from dashboard.task_prompt import (build_prompt, prompt_file_path,  # noqa: E402
+from scripts.dashboard.subscription_store import Subscription, SubscriptionStore  # noqa: E402
+from scripts.dashboard.task_prompt import (build_prompt, prompt_file_path,  # noqa: E402
                                    set_custom_prompt, sync_prompt_file)
-from dashboard.subscription_commands import (parse_edit_task_prompt,  # noqa: E402
+from scripts.dashboard.subscription_commands import (parse_edit_task_prompt,  # noqa: E402
                                              parse_subscription_command)
 
 
@@ -59,7 +58,7 @@ class DashboardTaskPromptTests(unittest.TestCase):
                     pass
 
     def test_task_prompt_is_saved_under_its_owner_folder(self):
-        import dashboard.task_prompt as tp
+        import scripts.dashboard.task_prompt as tp
         with tempfile.TemporaryDirectory() as tmp:
             sub = Subscription(
                 id=7, owner_user_id="u_测试/../../x", title="晨报",
@@ -87,7 +86,7 @@ class DashboardTaskPromptTests(unittest.TestCase):
         self.assertIn("最重要的风险", sub.task_prompt)
 
     def test_task_prompt_file_retries_transient_windows_file_lock(self):
-        import dashboard.task_prompt as tp
+        import scripts.dashboard.task_prompt as tp
         sub = Subscription(id=8, owner_user_id="u1", task_prompt="固定提示词")
         real_replace = tp.os.replace
         with tempfile.TemporaryDirectory() as tmp:
@@ -103,9 +102,9 @@ class DashboardTaskPromptTests(unittest.TestCase):
                         raise PermissionError("locked")
                     return real_replace(src, dst)
 
-                with mock.patch("dashboard.task_prompt.os.replace",
+                with mock.patch("scripts.dashboard.task_prompt.os.replace",
                                 side_effect=flaky_replace), \
-                     mock.patch("dashboard.task_prompt.time.sleep") as m_sleep:
+                     mock.patch("scripts.dashboard.task_prompt.time.sleep") as m_sleep:
                     path = sync_prompt_file(sub)
                 self.assertTrue(os.path.exists(path))
                 m_sleep.assert_called_once_with(0.05)
@@ -130,7 +129,7 @@ class DashboardTaskPromptTests(unittest.TestCase):
         self.assertEqual("edit_task_prompt", parsed["intent"])
         self.assertIn("需要协调的事情", parsed["task_prompt"])
         # 不能被误判成查看提示词，也不能丢失前半段需求。
-        from dashboard.subscription_commands import parse_prompt_intent
+        from scripts.dashboard.subscription_commands import parse_prompt_intent
         self.assertIsNone(parse_prompt_intent(text))
 
     def test_request_only_prompt_edit_opens_dashboard_editor_instead_of_agent(self):

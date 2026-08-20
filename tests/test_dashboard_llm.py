@@ -7,18 +7,16 @@ from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from dashboard import service  # noqa: E402
-from dashboard.assembler import assemble_markdown  # noqa: E402
+from scripts.dashboard import service  # noqa: E402
+from scripts.dashboard.assembler import assemble_markdown  # noqa: E402
 
 
 def _parsed_results():
     """构造一个项目源 fixture（不依赖真实 JSON 配置——v1.12.6 配置源已清空，
     数据源全部来自动态候选，测试自行构造 SourceConfig）"""
-    from dashboard.config_model import SourceConfig, FieldSpec
-    from dashboard.parser import parse_source_records
+    from scripts.dashboard.config_model import SourceConfig, FieldSpec
+    from scripts.dashboard.parser import parse_source_records
     src = SourceConfig(
         key="project_status", name="研发项目现况表", kind="notable",
         base_id="b1",
@@ -69,7 +67,7 @@ class ServiceAssembleTests(unittest.TestCase):
         def slow_func(prompt):
             release.wait(5)   # 阻塞直到测试放行（模拟慢 LLM）
             return "# 太慢了"
-        with mock.patch("dashboard.assembler.LLM_ASSEMBLE_TIMEOUT", 0.2):
+        with mock.patch("scripts.dashboard.assembler.LLM_ASSEMBLE_TIMEOUT", 0.2):
             text = service.assemble(_parsed_results(), llm_func=slow_func)
         self.assertEqual(text, assemble_markdown(_parsed_results()))
         release.set()  # 放行后台线程，避免悬挂
@@ -78,39 +76,39 @@ class ServiceAssembleTests(unittest.TestCase):
 class CallDeepseekWrapperTests(unittest.TestCase):
     """agent.call_deepseek 公开包装：成功取 content / 失败返回空串"""
 
-    @mock.patch("skills.agent._call_deepseek")
+    @mock.patch("scripts.skills.agent._call_deepseek")
     def test_success_returns_content(self, mock_call):
         mock_call.return_value = {"role": "assistant", "content": "看板正文"}
-        from skills.agent import call_deepseek
+        from scripts.skills.agent import call_deepseek
         result = call_deepseek("组装看板")
         self.assertEqual(result, "看板正文")
         # 透传单个 user 消息
         args = mock_call.call_args[0][0]
         self.assertEqual(args[0]["role"], "user")
 
-    @mock.patch("skills.agent._call_deepseek")
+    @mock.patch("scripts.skills.agent._call_deepseek")
     def test_none_response_returns_empty(self, mock_call):
         mock_call.return_value = None
-        from skills.agent import call_deepseek
+        from scripts.skills.agent import call_deepseek
         self.assertEqual(call_deepseek("x"), "")
 
-    @mock.patch("skills.agent._call_deepseek")
+    @mock.patch("scripts.skills.agent._call_deepseek")
     def test_exception_returns_empty(self, mock_call):
         mock_call.side_effect = RuntimeError("boom")
-        from skills.agent import call_deepseek
+        from scripts.skills.agent import call_deepseek
         self.assertEqual(call_deepseek("x"), "")
 
     def test_empty_content_falls_back_to_rules(self):
         # 端到端：scheduler 阶段将 call_deepseek 作 llm_func，空串 → 规则兜底
-        with mock.patch("skills.agent.call_deepseek", return_value=""):
-            from skills.agent import call_deepseek
+        with mock.patch("scripts.skills.agent.call_deepseek", return_value=""):
+            from scripts.skills.agent import call_deepseek
             text = service.assemble(_parsed_results(), llm_func=call_deepseek)
         self.assertIn("## 一、研发项目现况表", text)
 
-    @mock.patch("skills.agent._call_deepseek")
+    @mock.patch("scripts.skills.agent._call_deepseek")
     def test_json_wrapper_disables_thinking(self, mock_call):
         mock_call.return_value = {"role": "assistant", "content": "{\"ok\":true}"}
-        from skills.agent import call_deepseek_json
+        from scripts.skills.agent import call_deepseek_json
         self.assertEqual(call_deepseek_json("x"), '{"ok":true}')
         self.assertFalse(mock_call.call_args.kwargs["thinking"])
         self.assertTrue(mock_call.call_args.kwargs["json_output"])

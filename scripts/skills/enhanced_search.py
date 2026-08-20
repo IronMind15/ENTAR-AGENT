@@ -59,7 +59,7 @@ _reranker_lock = threading.Lock()
 
 
 def _get_store():
-    from doc_mgr.storage import get_store
+    from scripts.doc_mgr.storage import get_store
     return get_store()
 
 

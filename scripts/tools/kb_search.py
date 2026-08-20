@@ -18,7 +18,7 @@ LLM 无需预知库列表。
 import json
 import logging
 
-from tools import register
+from scripts.tools import register
 
 logger = logging.getLogger("tool.kb")
 
@@ -74,11 +74,11 @@ def execute(args: dict) -> str:
 
     logger.info(f"  工具调用: kb_search(query={query}, kb={kb_arg or '全部'})")
 
-    from kb_registry import get_visible_knowledge_bases, resolve_kb
+    from scripts.kb_registry import get_visible_knowledge_bases, resolve_kb
 
     user_centers = None
     try:
-        from tools import get_user_centers
+        from scripts.tools import get_user_centers
         user_centers = get_user_centers()
     except Exception:
         pass
@@ -158,28 +158,28 @@ def _search_one(query: str, kb: dict, centers: list[str] | None) -> list[dict]:
     name = kb.get("name") or kb.get("key")
 
     if coll == "error_codes":
-        from skills.error_query import search_kb as f
+        from scripts.skills.error_query import search_kb as f
         results = f(query)
         for it in results:
             it["source_label"] = _error_label(it)
         return results
 
     if coll == "standards":
-        from skills.standards_query import search_kb as f
+        from scripts.skills.standards_query import search_kb as f
         results = f(query, centers=centers)
         for it in results:
             it["source_label"] = _standard_label(it)
         return results
 
     if coll == "experience_kb":
-        from skills.experience_query import search_kb as f
+        from scripts.skills.experience_query import search_kb as f
         results = f(query)
         for it in results:
             it["source_label"] = _experience_label(it)
         return results
 
     # 自定义库：通用增强检索（部门权限预留：非 public 库按库的部门过滤）
-    from skills.enhanced_search import enhanced_query
+    from scripts.skills.enhanced_search import enhanced_query
     where = None
     dept = kb.get("department") or "public"
     if dept != "public":

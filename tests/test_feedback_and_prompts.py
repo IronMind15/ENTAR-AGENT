@@ -18,11 +18,9 @@ from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-import user_store as _user_store_mod  # noqa: E402
-from user_store import SQLiteUserStore  # noqa: E402
+import scripts.user_store as _user_store_mod  # noqa: E402
+from scripts.user_store import SQLiteUserStore  # noqa: E402
 
 
 class _StoreTestBase(unittest.TestCase):
@@ -144,25 +142,25 @@ class TestPrompts(_StoreTestBase):
 
 class TestConvenienceFunctions(_StoreTestBase):
     def test_add_feedback_module_level(self):
-        from user_store import add_feedback
+        from scripts.user_store import add_feedback
         ok = add_feedback("u1", "q", "a", "s", "up")
         self.assertTrue(ok)
 
     def test_get_feedback_stats_module_level(self):
-        from user_store import get_feedback_stats
+        from scripts.user_store import get_feedback_stats
         self.store.add_feedback("u1", "q", "a", "s", "up")
         stats = get_feedback_stats()
         self.assertEqual(stats["total"], 1)
 
     def test_get_last_conversation_module_level(self):
-        from user_store import get_last_conversation
+        from scripts.user_store import get_last_conversation
         self.store.add_memory("u1", "user", "问")
         self.store.add_memory("u1", "assistant", "答")
         result = get_last_conversation("u1")
         self.assertEqual(result["answer"], "答")
 
     def test_prompt_module_level(self):
-        from user_store import get_prompt, set_prompt, list_prompts
+        from scripts.user_store import get_prompt, set_prompt, list_prompts
         set_prompt("test", "content")
         self.assertEqual(get_prompt("test"), "content")
         self.assertIn("test", list_prompts())
@@ -225,7 +223,7 @@ class TestAgentPromptLoading(_StoreTestBase):
         """DB 有 prompt 时优先从 DB 加载为基础段，并追加注册中心生成的工具段"""
         self.store.set_prompt("system", "来自 DB 的提示词")
         # 清除 agent.py 的缓存
-        from skills import agent as _agent_mod
+        from scripts.skills import agent as _agent_mod
         _agent_mod._prompt_cache.pop("system", None)
         content = _agent_mod._load_system_prompt()
         self.assertTrue(content.startswith("来自 DB 的提示词"))
@@ -240,7 +238,7 @@ class TestAgentPromptLoading(_StoreTestBase):
                  + "===== 工具能力（由注册中心自动生成，勿手动编辑）=====\n"
                  + "1. search_knowledge_base（旧工具段）\n"
                  + "2. find_employee（旧工具段）\n")
-        from skills import agent as _agent_mod
+        from scripts.skills import agent as _agent_mod
         _agent_mod._prompt_cache.pop("system", None)
         with mock.patch.object(_agent_mod, "_PROMPT_FILE",
                                str(Path(__file__).parent / "not_exists.txt")):
@@ -255,7 +253,7 @@ class TestAgentPromptLoading(_StoreTestBase):
 
     def test_fallback_to_file(self):
         """DB 无 prompt 时回退到文件"""
-        from skills import agent as _agent_mod
+        from scripts.skills import agent as _agent_mod
         _agent_mod._prompt_cache.pop("system", None)
         content = _agent_mod._load_system_prompt()
         # 文件存在时应能加载到非空内容
@@ -264,7 +262,7 @@ class TestAgentPromptLoading(_StoreTestBase):
 
     def test_reload_clears_cache(self):
         """reload_system_prompt 清除缓存并重新加载"""
-        from skills import agent as _agent_mod
+        from scripts.skills import agent as _agent_mod
         _agent_mod._prompt_cache["system"] = "缓存内容"
         reloaded = _agent_mod.reload_system_prompt()
         # reload 后应该不是缓存的旧值

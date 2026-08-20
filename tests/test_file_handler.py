@@ -10,10 +10,8 @@ from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from file_handler import (
+from scripts.file_handler import (
     _safe_path_component, _get_user_main_department,
     format_file_received_message, get_upload_dir,
 )
@@ -23,7 +21,7 @@ class UploadDirTests(unittest.TestCase):
     """目录结构：data/uploads/{主部门}/{员工名字}/{YYYY-MM-DD}/"""
 
     def test_dir_structure_department_employee_date(self):
-        with patch("file_handler._get_user_main_department",
+        with patch("scripts.file_handler._get_user_main_department",
                    return_value="研发中心"):
             user_dir = get_upload_dir("union-1", "张三")
         self.assertTrue(user_dir.name.startswith("2026-"), user_dir.name)
@@ -32,13 +30,13 @@ class UploadDirTests(unittest.TestCase):
         self.assertTrue(user_dir.is_dir())
 
     def test_no_department_defaults_ungrouped(self):
-        with patch("file_handler._get_user_main_department",
+        with patch("scripts.file_handler._get_user_main_department",
                    return_value="未分组"):
             user_dir = get_upload_dir("union-1", "张三")
         self.assertEqual("未分组", user_dir.parts[-3])
 
     def test_get_upload_dir_creates_today_folder(self):
-        with patch("file_handler._get_user_main_department",
+        with patch("scripts.file_handler._get_user_main_department",
                    return_value="研发中心"):
             user_dir = get_upload_dir("union-1", "张三")
         today = datetime.now().strftime("%Y-%m-%d")
@@ -46,7 +44,7 @@ class UploadDirTests(unittest.TestCase):
 
     def test_employee_name_sanitized(self):
         """员工名含路径片段/非法字符时被净化，不逃逸目录"""
-        with patch("file_handler._get_user_main_department",
+        with patch("scripts.file_handler._get_user_main_department",
                    return_value="研发中心"):
             user_dir = get_upload_dir("union-1", "../../admin")
         self.assertNotIn("..", user_dir.parts)

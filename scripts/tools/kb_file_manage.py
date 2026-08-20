@@ -2,7 +2,7 @@
 
 import json
 
-from tools import get_current_user_id, register
+from scripts.tools import get_current_user_id, register
 
 DEFINITION = {
     "name": "kb_file_manage",
@@ -33,7 +33,7 @@ DEFINITION = {
     ),
 )
 def execute(args: dict) -> str:
-    from knowledge_review import delete_file_for_user, relearn_file_for_user
+    from scripts.knowledge_review import delete_file_for_user, relearn_file_for_user
 
     user_id = get_current_user_id()
     target = str(args.get("target") or "").strip()
@@ -41,7 +41,7 @@ def execute(args: dict) -> str:
     if not user_id or not target:
         return json.dumps({"error": "无法识别用户或目标文件"}, ensure_ascii=False)
     try:
-        from skills.dingtalk_bot import _is_admin
+        from scripts.skills.dingtalk_bot import _is_admin
         is_admin = _is_admin(user_id)
     except Exception:
         is_admin = False

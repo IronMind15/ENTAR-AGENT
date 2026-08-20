@@ -16,8 +16,6 @@ from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -28,7 +26,7 @@ class UploadSecurityTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        import doc_mgr.router as router
+        import scripts.doc_mgr.router as router
         cls.router = router
         cls.tmp = tempfile.mkdtemp(prefix="admin_sec_")
 
@@ -125,7 +123,7 @@ class XSSTests(unittest.TestCase):
     """stats 看板对用户可控字段的转义（防存储型 XSS）"""
 
     def test_stats_html_escapes_user_fields(self):
-        from doc_mgr.router import _build_stats_html
+        from scripts.doc_mgr.router import _build_stats_html
         malicious = "<script>alert(1)</script>"
         stats = {
             "total_users": 1, "active_today": 0, "total_messages": 0,
@@ -151,15 +149,15 @@ class ProductionAdminGuardTests(unittest.TestCase):
     """生产环境不能因漏配变量把 /admin 直接暴露。"""
 
     def test_empty_password_fails_closed_in_production(self):
-        from doc_mgr import router
-        import config
+        from scripts.doc_mgr import router
+        import scripts.config as config
         with mock.patch.object(router, "_get_admin_password", return_value=""), \
              mock.patch.object(config, "IS_PRODUCTION", True):
             self.assertFalse(router._verify_admin_access(""))
 
     def test_empty_password_keeps_local_development_compatibility(self):
-        from doc_mgr import router
-        import config
+        from scripts.doc_mgr import router
+        import scripts.config as config
         with mock.patch.object(router, "_get_admin_password", return_value=""), \
              mock.patch.object(config, "IS_PRODUCTION", False):
             self.assertTrue(router._verify_admin_access(""))
@@ -169,7 +167,7 @@ class AdminSessionTests(unittest.TestCase):
     """管理页面不应把密码留在 URL；登录后接口由 HttpOnly Cookie 鉴权。"""
 
     def setUp(self):
-        from doc_mgr import router
+        from scripts.doc_mgr import router
         self.router = router
         self.password = mock.patch.object(router, "_get_admin_password", return_value="secret")
         self.password.start()

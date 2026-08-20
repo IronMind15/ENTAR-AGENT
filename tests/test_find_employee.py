@@ -18,11 +18,9 @@ import requests
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from contact_api import DingTalkContactClient, ContactPermissionError  # noqa: E402
-from tools.contact_find import execute  # noqa: E402
+from scripts.contact_api import DingTalkContactClient, ContactPermissionError  # noqa: E402
+from scripts.tools.contact_find import execute  # noqa: E402
 
 
 # ── 测试数据（旧版 oapi 字段名）──────────────────────────
@@ -294,7 +292,7 @@ class FindEmployeeToolTests(unittest.TestCase):
         )
 
     def test_tool_registered(self):
-        from tools import get_tool_names, get_tool_definitions
+        from scripts.tools import get_tool_names, get_tool_definitions
         self.assertIn("contact_find", get_tool_names())
         defs = get_tool_definitions()
         self.assertTrue(any(d["function"]["name"] == "contact_find" for d in defs))
@@ -305,10 +303,10 @@ class FindEmployeeToolTests(unittest.TestCase):
 
     def test_execute_contextvar_staff_id_sensitive(self):
         # 审核人（CONTACT_ADMIN_STAFF_IDS 含 A01）→ 返回手机号
-        from tools import set_current_staff_id
+        from scripts.tools import set_current_staff_id
         client = self._normal_client()
-        with mock.patch("contact_api.get_contact_client", return_value=client), \
-                mock.patch("contact_api.CONTACT_ADMIN_STAFF_IDS", "A01"):
+        with mock.patch("scripts.contact_api.get_contact_client", return_value=client), \
+                mock.patch("scripts.contact_api.CONTACT_ADMIN_STAFF_IDS", "A01"):
             set_current_staff_id("A01")
             out = json.loads(execute({"keyword": "张伟"}))
             self.assertTrue(out["found"])
@@ -320,14 +318,14 @@ class FindEmployeeToolTests(unittest.TestCase):
             self.assertTrue(out2["sensitive_hidden"])
 
     def test_execute_permission_error_friendly(self):
-        from tools import set_current_staff_id
+        from scripts.tools import set_current_staff_id
         session = _FakeSession(DEPT_NAMES, SUB_MAP, DEPT_USERS, forbidden_dept=1)
         client = DingTalkContactClient(
             client_id="cid", client_secret="secret",
             oapi_base="https://oapi.dingtalk.test", session=session, cache_ttl=3600,
         )
         set_current_staff_id("")
-        with mock.patch("contact_api.get_contact_client", return_value=client):
+        with mock.patch("scripts.contact_api.get_contact_client", return_value=client):
             out = json.loads(execute({"keyword": "王"}))
         self.assertIn("error", out)
         self.assertIn("权限", out["error"])  # 明确提示是权限问题而非查不到人

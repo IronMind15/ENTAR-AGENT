@@ -7,11 +7,10 @@ from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from dashboard import subscription_commands as sc  # noqa: E402
-from dashboard.config_model import SourceConfig  # noqa: E402
+from scripts.dashboard import subscription_commands as sc  # noqa: E402
+from scripts.dashboard.config_model import SourceConfig  # noqa: E402
+from scripts import pending_context  # noqa: E402
 
 # A1（v1.12.6）后静态配置已清空，渲染名需 mock config_model.load_sources
 _FIXTURE_SOURCES = [
@@ -220,7 +219,7 @@ class FormatWeekdaysTests(unittest.TestCase):
 
 
 class ResolveRecipientTests(unittest.TestCase):
-    @mock.patch("contact_api.get_contact_client")
+    @mock.patch("scripts.contact_api.get_contact_client")
     def test_resolve_by_name(self, mock_get):
         client = mock_get.return_value
         client.search.return_value = {
@@ -228,13 +227,13 @@ class ResolveRecipientTests(unittest.TestCase):
         }
         self.assertEqual(sc.resolve_recipient("张工"), "staff_zhanggong")
 
-    @mock.patch("contact_api.get_contact_client")
+    @mock.patch("scripts.contact_api.get_contact_client")
     def test_not_found_returns_empty(self, mock_get):
         client = mock_get.return_value
         client.search.return_value = {"found": False, "results": []}
         self.assertEqual(sc.resolve_recipient("不存在的人"), "")
 
-    @mock.patch("contact_api.get_contact_client")
+    @mock.patch("scripts.contact_api.get_contact_client")
     def test_api_error_returns_empty(self, mock_get):
         mock_get.side_effect = RuntimeError("网络错误")
         self.assertEqual(sc.resolve_recipient("张工"), "")
@@ -243,7 +242,7 @@ class ResolveRecipientTests(unittest.TestCase):
 class PendingTests(unittest.TestCase):
     def setUp(self):
         # v1.12.1（M3）：pending 统一收口到 pending_context，patch 目标迁移
-        import pending_context
+        import scripts.pending_context as pending_context
         self._patched = mock.patch.object(pending_context, "_pending", {})
         self._patched.start()
         self.addCleanup(self._patched.stop)
@@ -260,7 +259,7 @@ class PendingTests(unittest.TestCase):
 
 
 class RenderConfirmationTests(unittest.TestCase):
-    @mock.patch("dashboard.config_model.load_sources",
+    @mock.patch("scripts.dashboard.config_model.load_sources",
                 return_value=_FIXTURE_SOURCES)
     def test_create_confirmation(self, mock_load):
         pending = {

@@ -235,7 +235,7 @@ def execute_tool(name: str, args: dict) -> str:
             return json.dumps({"error": "该操作需要用户身份和二次确认，当前无法执行"},
                               ensure_ascii=False)
         # v1.12.1（M3）：pending 统一收口到 pending_context（type=tool）
-        from pending_context import PT_TOOL, set as pc_set
+        from scripts.pending_context import PT_TOOL, set as pc_set
         payload = {
             "tool": name, "args": dict(args or {}),
             "summary": policy.get("summary") or definition.get("description", name),
@@ -259,7 +259,7 @@ def execute_tool(name: str, args: dict) -> str:
 
 def get_pending_operation(user_id: str) -> dict | None:
     """取未过期工具 pending（type=tool 才返回 payload）"""
-    from pending_context import PT_TOOL, get as pc_get
+    from scripts.pending_context import PT_TOOL, get as pc_get
     entry = pc_get(user_id)
     if entry and entry["type"] == PT_TOOL:
         return dict(entry["payload"])
@@ -268,7 +268,7 @@ def get_pending_operation(user_id: str) -> dict | None:
 
 def cancel_pending_operation(user_id: str) -> bool:
     """取消工具 pending（仅当当前还是 tool 类型才清）"""
-    from pending_context import PT_TOOL, clear_type
+    from scripts.pending_context import PT_TOOL, clear_type
     return clear_type(user_id, PT_TOOL)
 
 

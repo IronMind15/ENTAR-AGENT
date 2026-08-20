@@ -8,7 +8,7 @@
 import json
 import logging
 
-from tools import register
+from scripts.tools import register
 
 logger = logging.getLogger("tools.doc_summarize")
 
@@ -54,10 +54,10 @@ DEFINITION = {
 )
 def execute(args: dict) -> str:
     try:
-        from tools import get_current_staff_id, get_current_user_id
-        from dashboard import doc_learn
-        from dashboard.doc_candidates import get_candidate_store
-        from dingtalk_doc_client import get_doc_client
+        from scripts.tools import get_current_staff_id, get_current_user_id
+        from scripts.dashboard import doc_learn
+        from scripts.dashboard.doc_candidates import get_candidate_store
+        from scripts.dingtalk_doc_client import get_doc_client
 
         user_id = get_current_user_id()
         if not user_id:
@@ -103,7 +103,7 @@ def execute(args: dict) -> str:
         doc_name = cand.name or result.get("name") or f"文档{cand.node_id[:8]}"
 
         # 3. 总结（截断 8000 防撑爆 LLM；失败兜底给前 500 字原文）
-        from skills.agent import call_deepseek
+        from scripts.skills.agent import call_deepseek
         summary = call_deepseek(
             f"以下是钉钉文档《{doc_name}》的内容：\n\n{md[:8000]}\n\n"
             "请用中文总结这份文档的要点，150 字以内，分条列出。",
@@ -116,7 +116,7 @@ def execute(args: dict) -> str:
         if args.get("push_to_self"):
             if staff_id:
                 try:
-                    from dingtalk_notifier import DingTalkNotifier
+                    from scripts.dingtalk_notifier import DingTalkNotifier
                     DingTalkNotifier().send_markdown_to_users(
                         [staff_id], f"《{doc_name}》总结", summary)
                     pushed = True

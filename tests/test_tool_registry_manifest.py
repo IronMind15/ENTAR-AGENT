@@ -18,10 +18,8 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from tools import (get_tool_definitions, get_tool_display_map,  # noqa: E402
+from scripts.tools import (get_tool_definitions, get_tool_display_map,  # noqa: E402
                    get_tool_metadata, get_tool_names,
                    register, render_tool_prompt)
 
@@ -107,7 +105,7 @@ class ToolRegistryTests(unittest.TestCase):
 class CapabilityManifestTests(unittest.TestCase):
     def test_manifest_integrity(self):
         """能力清单完整性：10 工具 / 5 技能 / 20 意图 / enabled 命令 + regex 可编译"""
-        import capability_manifest as cm
+        import scripts.capability_manifest as cm
 
         tools = cm.collect_tools()
         self.assertEqual(len(tools), 10)
@@ -138,7 +136,7 @@ class CapabilityManifestTests(unittest.TestCase):
 
     def test_manifest_md_has_all_sections(self):
         """能力清单 Markdown 含全部 5 个 section 且无旧工具名"""
-        import capability_manifest as cm
+        import scripts.capability_manifest as cm
         md = cm.render_capability_snapshot_md()
         for section in ("LLM 工具", "技能层", "Bot 命令", "看板订阅意图", "已停用"):
             self.assertIn(section, md)
@@ -151,7 +149,7 @@ class CapabilityManifestTests(unittest.TestCase):
 
     def test_render_regexes_compilable(self):
         """登记表 regex 对象都能编译出可用 pattern"""
-        import capability_manifest as cm
+        import scripts.capability_manifest as cm
         for c in cm.collect_bot_commands():
             rx = c.get("regex")
             if rx is not None:

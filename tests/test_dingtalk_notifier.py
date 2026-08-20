@@ -15,10 +15,8 @@ import requests
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SCRIPTS_DIR = os.path.join(PROJECT_ROOT, "scripts")
-if SCRIPTS_DIR not in sys.path:
-    sys.path.insert(0, SCRIPTS_DIR)
 
-from dingtalk_notifier import DingTalkNotifier, _RETRY_ATTEMPTS  # noqa: E402
+from scripts.dingtalk_notifier import DingTalkNotifier, _RETRY_ATTEMPTS  # noqa: E402
 
 
 def _resp(status=200, payload=None):
@@ -39,7 +37,7 @@ class RetryTests(unittest.TestCase):
     def test_retries_on_connection_error_then_succeeds(self):
         n = self._notifier()
         n._session.post.side_effect = [requests.ConnectionError("boom"), _resp()]
-        with mock.patch("dingtalk_notifier.time.sleep"):
+        with mock.patch("scripts.dingtalk_notifier.time.sleep"):
             resp = n._post_with_retry("http://api.test/x")
         self.assertEqual(n._session.post.call_count, 2)
         self.assertEqual(resp.status_code, 200)
@@ -47,14 +45,14 @@ class RetryTests(unittest.TestCase):
     def test_retries_on_5xx_then_succeeds(self):
         n = self._notifier()
         n._session.post.side_effect = [_resp(500), _resp()]
-        with mock.patch("dingtalk_notifier.time.sleep"):
+        with mock.patch("scripts.dingtalk_notifier.time.sleep"):
             resp = n._post_with_retry("http://api.test/x")
         self.assertEqual(n._session.post.call_count, 2)
 
     def test_no_retry_on_4xx(self):
         n = self._notifier()
         n._session.post.return_value = _resp(400)
-        with mock.patch("dingtalk_notifier.time.sleep"):
+        with mock.patch("scripts.dingtalk_notifier.time.sleep"):
             with self.assertRaises(requests.HTTPError):
                 n._post_with_retry("http://api.test/x")
         self.assertEqual(n._session.post.call_count, 1)
@@ -62,7 +60,7 @@ class RetryTests(unittest.TestCase):
     def test_gives_up_after_all_attempts(self):
         n = self._notifier()
         n._session.post.side_effect = requests.ConnectionError("boom")
-        with mock.patch("dingtalk_notifier.time.sleep"):
+        with mock.patch("scripts.dingtalk_notifier.time.sleep"):
             with self.assertRaises(requests.ConnectionError):
                 n._post_with_retry("http://api.test/x")
         self.assertEqual(n._session.post.call_count, _RETRY_ATTEMPTS)
@@ -74,7 +72,7 @@ class RetryTests(unittest.TestCase):
             _resp(200, {"accessToken": "tok", "expireIn": 7200}),
             _resp(200, {}),
         ]
-        with mock.patch("dingtalk_notifier.time.sleep"):
+        with mock.patch("scripts.dingtalk_notifier.time.sleep"):
             n.send_markdown_to_users(["u1"], "标题", "正文")
         self.assertEqual(n._session.post.call_count, 2)
 

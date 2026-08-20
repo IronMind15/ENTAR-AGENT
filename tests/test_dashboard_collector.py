@@ -6,11 +6,9 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from dashboard.collector import Collector  # noqa: E402
-from dashboard.config_model import SourceConfig  # noqa: E402
+from scripts.dashboard.collector import Collector  # noqa: E402
+from scripts.dashboard.config_model import SourceConfig  # noqa: E402
 
 
 def _source(key="s1", table_mode="latest_week", table_id="", base_id="b1",

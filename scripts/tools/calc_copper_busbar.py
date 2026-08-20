@@ -9,7 +9,7 @@
 import json
 import logging
 
-from tools import register
+from scripts.tools import register
 
 logger = logging.getLogger("tool.pcb")
 
@@ -89,7 +89,7 @@ def execute(args: dict) -> str:
     q = " ".join(parts)
 
     try:
-        from skills.pcb_calc import _handle_impl
+        from scripts.skills.pcb_calc import _handle_impl
         r = _handle_impl(q)
         answer = r.get("answer", "")
         if not answer:

@@ -74,7 +74,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from skills import BaseSkill, register
+from scripts.skills import BaseSkill, register
 
 logger = logging.getLogger("pcb_calc")
 

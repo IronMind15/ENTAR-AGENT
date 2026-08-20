@@ -23,8 +23,8 @@ if sys.platform == "win32":
     sys.stdin.reconfigure(encoding="utf-8")
     sys.stdout.reconfigure(encoding="utf-8")
 
-from doc_mgr.engine import process_file
-from paths import EXPERIENCE_DIR as EXPERIENCE_SOURCE_DIR
+from scripts.doc_mgr.engine import process_file
+from scripts.paths import EXPERIENCE_DIR as EXPERIENCE_SOURCE_DIR
 
 EXPERIENCE_DIR = str(EXPERIENCE_SOURCE_DIR)
 

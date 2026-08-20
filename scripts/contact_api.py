@@ -28,7 +28,7 @@ from typing import Any
 
 import requests
 
-from config import (
+from scripts.config import (
     CONTACT_ADMIN_STAFF_IDS,
     CONTACT_CACHE_TTL_SECONDS,
     DINGTALK_CLIENT_ID,

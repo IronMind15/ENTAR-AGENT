@@ -66,7 +66,7 @@ def describe_to_spec(description: str, llm_func=None) -> dict:
         return {"ok": False, "message": "请描述想要的看板格式，例如：负责人/今日进展/明日计划"}
     if llm_func is None:
         try:
-            from skills.agent import call_deepseek as llm_func
+            from scripts.skills.agent import call_deepseek as llm_func
         except Exception:
             llm_func = None
     if llm_func is None:

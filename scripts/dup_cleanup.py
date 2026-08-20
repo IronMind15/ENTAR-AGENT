@@ -9,8 +9,10 @@
 """
 import sys, os, json
 sys.stdout.reconfigure(encoding='utf-8')
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
-from doc_mgr.storage import ChromaStore
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+from scripts.doc_mgr.storage import ChromaStore
 
 store = ChromaStore()
 raw = store.get_raw('standards')

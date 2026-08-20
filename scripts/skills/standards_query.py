@@ -16,10 +16,10 @@ if sys.platform == "win32":
     sys.stdin.reconfigure(encoding="utf-8")
     sys.stdout.reconfigure(encoding="utf-8")
 
-from center_config import get_center_name
-from doc_mgr.storage import get_store
-from skills import BaseSkill, register
-from skills.enhanced_search import enhanced_query, parse_query_results
+from scripts.center_config import get_center_name
+from scripts.doc_mgr.storage import get_store
+from scripts.skills import BaseSkill, register
+from scripts.skills.enhanced_search import enhanced_query, parse_query_results
 
 logger = logging.getLogger("standards_query")
 

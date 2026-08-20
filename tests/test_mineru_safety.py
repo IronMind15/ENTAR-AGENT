@@ -10,10 +10,8 @@ from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from doc_mgr import engine
+from scripts.doc_mgr import engine
 
 
 class MinerUZipTests(unittest.TestCase):
@@ -83,7 +81,7 @@ class MinerUSegmentTests(unittest.TestCase):
             module, calls = self._fake_module(["# 第一段", "# 第二段", "# 第三段"])
             output_dir = Path(temp_dir) / "mineru"
 
-            with patch.dict(sys.modules, {"mineru_extract": module}), \
+            with patch.dict(sys.modules, {"scripts.mineru_extract": module}), \
                     patch.object(engine, "_get_mineru_output_dir", return_value=str(output_dir)), \
                     patch.object(engine, "_split_pdf", return_value=parts), \
                     patch.object(engine, "_get_pdf_page_count", return_value=401):
@@ -105,7 +103,7 @@ class MinerUSegmentTests(unittest.TestCase):
                 Path(part).write_bytes(b"part")
             module, _ = self._fake_module(["one", "two", "three"], fail_at=1)
 
-            with patch.dict(sys.modules, {"mineru_extract": module}), \
+            with patch.dict(sys.modules, {"scripts.mineru_extract": module}), \
                     patch.object(engine, "_get_mineru_output_dir", return_value=str(Path(temp_dir) / "out")), \
                     patch.object(engine, "_split_pdf", return_value=parts), \
                     patch.object(engine, "_get_pdf_page_count", return_value=401):
@@ -127,7 +125,7 @@ class MinerUSegmentTests(unittest.TestCase):
             )
             module, calls = self._fake_module(["new"])
 
-            with patch.dict(sys.modules, {"mineru_extract": module}), \
+            with patch.dict(sys.modules, {"scripts.mineru_extract": module}), \
                     patch.object(engine, "_get_mineru_output_dir", return_value=str(output_dir)), \
                     patch.object(engine, "_split_pdf", return_value=[str(source)]):
                 result = engine._try_mineru(

@@ -21,7 +21,7 @@ import sqlite3
 import threading
 from dataclasses import dataclass, field
 
-from paths import DASHBOARD_TEMPLATES_DIR
+from scripts.paths import DASHBOARD_TEMPLATES_DIR
 from datetime import datetime
 from typing import Optional
 
@@ -32,7 +32,7 @@ logger = logging.getLogger("dashboard.template_store")
 _TEMPLATE_DIR = str(DASHBOARD_TEMPLATES_DIR)
 
 # 复用 user_store.db（同一 data 目录）
-from user_store import DB_PATH as _DEFAULT_DB_PATH  # noqa: E402
+from scripts.user_store import DB_PATH as _DEFAULT_DB_PATH  # noqa: E402
 
 
 def _now() -> str:

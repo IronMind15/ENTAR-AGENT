@@ -15,9 +15,9 @@ import os
 import re
 import sys
 
-_PARENT = os.path.dirname(os.path.abspath(__file__))  # scripts/
-if _PARENT not in sys.path:
-    sys.path.insert(0, _PARENT)
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 from apscheduler.schedulers.background import BackgroundScheduler  # noqa: E402
 
@@ -60,7 +60,7 @@ def _key_source_expansions(report, parsed, n: int = KEY_SOURCE_EXPAND_N):
 def _admin_staff_ids() -> list[str]:
     """失败告警管理员名单（CONTACT_ADMIN_STAFF_IDS，逗号/空格/分号分隔）"""
     try:
-        from config import CONTACT_ADMIN_STAFF_IDS
+        from scripts.config import CONTACT_ADMIN_STAFF_IDS
         ids = re.split(r"[,;，；\s]+", (CONTACT_ADMIN_STAFF_IDS or "").strip())
         return [i for i in ids if i]
     except Exception:
@@ -82,7 +82,7 @@ def _notify_failure(sub, reason: str) -> tuple[str, str]:
         recipients = list(dict.fromkeys(r for r in recipients if r))
         if not recipients:
             return "not_sent", "未配置订阅人或管理员的钉钉 staff_id"
-        from dingtalk_notifier import DingTalkNotifier
+        from scripts.dingtalk_notifier import DingTalkNotifier
         text = (
             f"⚠️ **每日看板推送失败**\n\n"
             f"订阅：{sub.title or '恩特能源每日项目看板'}\n"
@@ -136,10 +136,10 @@ def _execute_subscription(sub) -> dict:
     v1.11.4：alert_mode 默认 always（每天必推）；顶部注入「📌 今日变化/今日无变化」。
     changes_only 保留：无变化静默。
     """
-    from dashboard import service
-    from dashboard.alerts import change_banner, has_changes, make_snapshot
-    from dashboard.monitoring import evaluate, render_banner
-    from dashboard.subscription_store import get_subscription_store
+    from scripts.dashboard import service
+    from scripts.dashboard.alerts import change_banner, has_changes, make_snapshot
+    from scripts.dashboard.monitoring import evaluate, render_banner
+    from scripts.dashboard.subscription_store import get_subscription_store
 
     store = get_subscription_store()
 
@@ -205,7 +205,7 @@ def _execute_subscription(sub) -> dict:
     template = service.resolve_template(sub)
     per_source = bool(getattr(sub, "per_source", False))
     try:
-        from skills.agent import call_dashboard_json
+        from scripts.skills.agent import call_dashboard_json
         if per_source:
             report = None
             messages = list(service.assemble_per_source_messages(
@@ -278,7 +278,7 @@ def _execute_subscription(sub) -> dict:
     # v1.12.7：推送成功写留档（每任务保留最近 30 次，可追溯历史看板）。
     # 留档失败不影响主流程（日志警告即可，不重复告警）。
     try:
-        from dashboard.push_history import get_push_history_store
+        from scripts.dashboard.push_history import get_push_history_store
         get_push_history_store().record(
             sub.id, sub.owner_user_id, sub.title, messages,
             prompt_version=getattr(sub, "task_prompt_version", ""),
@@ -302,7 +302,7 @@ def _deduplicate_due_subscriptions(subs: list) -> tuple[list, list[tuple[int, in
     绑定自己的数据源，实时算以任务为边界）——同 owner 同时刻同接收人且
     解析来源被另一任务完整覆盖的订阅，只推覆盖最全的一条，防重复推送。
     """
-    from dashboard import service
+    from scripts.dashboard import service
 
     def _keys(sub):
         return service.effective_source_keys(sub)
@@ -326,7 +326,7 @@ def _deduplicate_due_subscriptions(subs: list) -> tuple[list, list[tuple[int, in
 
 def _tick():
     """1 分钟 tick：扫描到点的启用订阅"""
-    from dashboard.subscription_store import get_subscription_store
+    from scripts.dashboard.subscription_store import get_subscription_store
 
     now = datetime.datetime.now()
     executed = 0

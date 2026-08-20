@@ -23,7 +23,7 @@ _NET_SESSION = requests.Session()
 _NET_SESSION.trust_env = False
 
 from pathlib import Path
-from paths import STANDARDS_DIR
+from scripts.paths import STANDARDS_DIR
 
 # 修复 Windows 控制台编码
 if sys.platform == "win32":
@@ -45,7 +45,7 @@ DEFAULT_OUTPUT_DIR = STANDARDS_DIR / "mineru_output"
 
 # 进度上报（导入 task_manager，兼容无任务上下文的情况）
 try:
-    from doc_mgr.task_manager import report_progress as _report_progress
+    from scripts.doc_mgr.task_manager import report_progress as _report_progress
 except ImportError:
     _report_progress = lambda step, progress, msg: None
 

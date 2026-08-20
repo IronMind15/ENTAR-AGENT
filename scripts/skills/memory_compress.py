@@ -47,14 +47,14 @@ _DEFAULT_PROMPT = (
 
 
 def _get_store():
-    from user_store import get_store
+    from scripts.user_store import get_store
     return get_store()
 
 
 def _get_cfg(name, default):
     try:
         import importlib
-        cfg = importlib.import_module("config")
+        cfg = importlib.import_module("scripts.config")
         return getattr(cfg, name, default)
     except Exception:
         return default
@@ -72,7 +72,7 @@ def _call_llm(messages: list[dict], max_tokens: int = 1000) -> str | None:
     try:
         import httpx
         import importlib
-        cfg = importlib.import_module("config")
+        cfg = importlib.import_module("scripts.config")
         if getattr(cfg, "TESTING", False):
             logger.info("测试模式跳过长期记忆压缩的 DeepSeek 调用")
             return None

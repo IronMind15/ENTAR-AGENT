@@ -10,10 +10,8 @@ from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from kb_registry import KBRegistry  # noqa: E402
+from scripts.kb_registry import KBRegistry  # noqa: E402
 
 
 class _ToolBase(unittest.TestCase):
@@ -24,7 +22,7 @@ class _ToolBase(unittest.TestCase):
         os.close(fd)
         self._db_path = path
         self.reg = KBRegistry(db_path=path)
-        self.patch_reg = mock.patch("kb_registry.get_registry", return_value=self.reg)
+        self.patch_reg = mock.patch("scripts.kb_registry.get_registry", return_value=self.reg)
         self.patch_reg.start()
         self.addCleanup(self.patch_reg.stop)
         self.addCleanup(self._cleanup)
@@ -47,22 +45,22 @@ class SearchToolTests(_ToolBase):
     """通用工具 execute：分发 + 合并 + 可见性 + 错误"""
 
     def test_empty_query_error(self):
-        from tools.kb_search import execute
+        from scripts.tools.kb_search import execute
         r = json.loads(execute({"query": "   "}))
         self.assertIn("error", r)
 
     def test_tool_registered(self):
-        from tools import get_tool_names
+        from scripts.tools import get_tool_names
         self.assertIn("kb_search", get_tool_names())
 
     def test_specific_kb_dispatch_to_experience(self):
         """指定「经验知识库」→ 分发到 experience_query.search_kb"""
-        from tools.kb_search import execute
+        from scripts.tools.kb_search import execute
         fake = [{
             "std_title": "经验条目：过温", "_content": "清理风扇",
             "chapter_title": "解决方案", "_score": 0.3, "_match_type": "semantic",
         }]
-        with mock.patch("skills.experience_query.search_kb", return_value=fake) as m:
+        with mock.patch("scripts.skills.experience_query.search_kb", return_value=fake) as m:
             r = json.loads(execute({"query": "过温", "knowledge_base": "经验知识库"}))
         m.assert_called_once_with("过温")
         self.assertTrue(r["found"])
@@ -76,12 +74,12 @@ class SearchToolTests(_ToolBase):
 
     def test_specific_kb_dispatch_to_error_codes(self):
         """指定「故障知识库」→ error_query.search_kb（故障码精确通道）"""
-        from tools.kb_search import execute
+        from scripts.tools.kb_search import execute
         fake = [{
             "name": "急停告警", "fault_code": "d4-1", "fault_reason": "外部急停",
             "_score": 0.0, "_match_type": "exact",
         }]
-        with mock.patch("skills.error_query.search_kb", return_value=fake) as m:
+        with mock.patch("scripts.skills.error_query.search_kb", return_value=fake) as m:
             r = json.loads(execute({"query": "d4-1", "knowledge_base": "故障知识库"}))
         m.assert_called_once_with("d4-1")
         self.assertTrue(r["found"])
@@ -89,28 +87,28 @@ class SearchToolTests(_ToolBase):
         self.assertIn("d4-1", r["results"][0]["source_label"])
 
     def test_unknown_kb_message(self):
-        from tools.kb_search import execute
+        from scripts.tools.kb_search import execute
         r = json.loads(execute({"query": "x", "knowledge_base": "不存在的库"}))
         self.assertFalse(r["found"])
         self.assertIn("未找到知识库", r["message"])
 
     def test_invisible_department(self):
         """部门权限预留：rd 库对 bz 用户不可见，给出明确提示"""
-        from tools.kb_search import execute
+        from scripts.tools.kb_search import execute
         self.reg.create_knowledge_base("研发库", department="rd")
-        with mock.patch("tools.get_user_centers", return_value=["bz"]):
+        with mock.patch("scripts.tools.get_user_centers", return_value=["bz"]):
             r = json.loads(execute({"query": "x", "knowledge_base": "研发库"}))
         self.assertFalse(r["found"])
         self.assertIn("不可见", r["message"])
 
     def test_visible_department(self):
         """rd 用户能看到 rd 库并搜索"""
-        from tools.kb_search import execute
+        from scripts.tools.kb_search import execute
         self.reg.create_knowledge_base("研发库", department="rd")
         fake = [{"title": "电路设计", "_content": "xx", "_score": 0.5,
                  "_match_type": "semantic"}]
-        with mock.patch("tools.get_user_centers", return_value=["rd"]), \
-             mock.patch("skills.enhanced_search.enhanced_query", return_value={
+        with mock.patch("scripts.tools.get_user_centers", return_value=["rd"]), \
+             mock.patch("scripts.skills.enhanced_search.enhanced_query", return_value={
                  "documents": [["内容"]], "metadatas": [[{"title": "电路设计"}]],
                  "distances": [[0.5]]}):
             r = json.loads(execute({"query": "电路", "knowledge_base": "研发库"}))
@@ -118,7 +116,7 @@ class SearchToolTests(_ToolBase):
 
     def test_all_visible_merge_sorted(self):
         """留空 knowledge_base → 全可见库搜，合并去重按 _score 升序"""
-        from tools.kb_search import execute
+        from scripts.tools.kb_search import execute
         err_fake = [{"name": "急停告警", "fault_code": "d4-1",
                      "fault_reason": "外部急停", "_score": 0.1,
                      "_match_type": "exact"}]
@@ -127,9 +125,9 @@ class SearchToolTests(_ToolBase):
                      "_content": "并网电压范围..."}]
         exp_fake = [{"std_title": "经验条目：过温", "_score": 0.5,
                      "_match_type": "semantic", "_content": "清理风扇"}]
-        with mock.patch("skills.error_query.search_kb", return_value=err_fake), \
-             mock.patch("skills.standards_query.search_kb", return_value=std_fake), \
-             mock.patch("skills.experience_query.search_kb", return_value=exp_fake):
+        with mock.patch("scripts.skills.error_query.search_kb", return_value=err_fake), \
+             mock.patch("scripts.skills.standards_query.search_kb", return_value=std_fake), \
+             mock.patch("scripts.skills.experience_query.search_kb", return_value=exp_fake):
             r = json.loads(execute({"query": "急停 并网"}))
         self.assertTrue(r["found"])
         results = r["results"]
@@ -141,17 +139,17 @@ class SearchToolTests(_ToolBase):
         self.assertEqual(results[0]["source_label"].count("d4-1"), 1)
 
     def test_no_results_message(self):
-        from tools.kb_search import execute
-        with mock.patch("skills.error_query.search_kb", return_value=[]), \
-             mock.patch("skills.standards_query.search_kb", return_value=[]), \
-             mock.patch("skills.experience_query.search_kb", return_value=[]):
+        from scripts.tools.kb_search import execute
+        with mock.patch("scripts.skills.error_query.search_kb", return_value=[]), \
+             mock.patch("scripts.skills.standards_query.search_kb", return_value=[]), \
+             mock.patch("scripts.skills.experience_query.search_kb", return_value=[]):
             r = json.loads(execute({"query": "xyz"}))
         self.assertFalse(r["found"])
         self.assertIn("未找到", r["message"])
 
     def test_disabled_kb_not_visible(self):
         """已停用库：指定查询时提示已停用"""
-        from tools.kb_search import execute
+        from scripts.tools.kb_search import execute
         self.reg.create_knowledge_base("停用库")
         kb = self.reg.get_knowledge_base("停用库")
         self.reg.update_knowledge_base(kb["key"], enabled=0)

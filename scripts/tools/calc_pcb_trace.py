@@ -11,7 +11,7 @@
 import json
 import logging
 
-from tools import register
+from scripts.tools import register
 
 logger = logging.getLogger("tool.pcb")
 
@@ -102,7 +102,7 @@ def execute(args: dict) -> str:
             "hint": "请核对参数后重试。铜排/紫铜/母线/汇流条是铜排载流计算，不要用走线工具。",
         }, ensure_ascii=False)
 
-    from skills.pcb_calc import (
+    from scripts.skills.pcb_calc import (
         calc_min_width, calc_max_current, calc_resistance_drop,
         MIL_TO_MM,
     )

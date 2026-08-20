@@ -8,10 +8,13 @@
 
 import json
 import sys
+from pathlib import Path
 
-sys.path.insert(0, __file__.rsplit("\\", 1)[0].rsplit("/", 1)[0])
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
-from dingtalk_doc_client import DingTalkDocClient  # noqa: E402
+from scripts.dingtalk_doc_client import DingTalkDocClient  # noqa: E402
 
 
 def main() -> int:

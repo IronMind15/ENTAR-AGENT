@@ -24,7 +24,7 @@ from datetime import datetime as dt
 from fastapi import APIRouter, Depends, UploadFile, File, Form, Query, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from paths import (DATA_ROOT, EXPERIENCE_DIR, FAULT_CODES_DIR, RUNTIME_DIR,
+from scripts.paths import (DATA_ROOT, EXPERIENCE_DIR, FAULT_CODES_DIR, RUNTIME_DIR,
                    STANDARDS_DIR, UPLOADS_DIR)
 
 from .engine import process_file
@@ -100,7 +100,7 @@ def _get_admin_password() -> str:
     """读取配置的管理员密码（空表示不开启）"""
     try:
         import importlib
-        cfg = importlib.import_module("config")
+        cfg = importlib.import_module("scripts.config")
         return getattr(cfg, "ADMIN_PASSWORD", "") or ""
     except Exception:
         return ""
@@ -134,7 +134,7 @@ def _verify_admin_access(password: str = "") -> bool:
         # 本地开发兼容：production/prod 必须由 main.py 在启动时拒绝。
         # 这里同样 fail-closed，避免测试外的 ASGI 宿主绕过 main.py 直接挂载 router。
         try:
-            from config import IS_PRODUCTION
+            from scripts.config import IS_PRODUCTION
             return not IS_PRODUCTION
         except Exception:
             return False
@@ -155,7 +155,7 @@ def _check_user_permission(user_id: str = "", action: str = "upload") -> bool:
     if not user_id:
         return False
     try:
-        from user_store import get_store
+        from scripts.user_store import get_store
         return get_store().check_permission(user_id, action)
     except Exception:
         return False
@@ -186,7 +186,7 @@ def admin_login(password: str = Form("")):
                             status_code=401)
     response = RedirectResponse(url="/admin", status_code=303)
     try:
-        from config import IS_PRODUCTION
+        from scripts.config import IS_PRODUCTION
         secure = IS_PRODUCTION
     except Exception:
         secure = False
@@ -404,7 +404,7 @@ def delete_docs(
         data = store.get(collection, where={"file_name": file_name})
         if data and data.get("ids"):
             deleted = store.delete(collection, ids=data["ids"])
-            from skills.enhanced_search import invalidate_bm25_cache
+            from scripts.skills.enhanced_search import invalidate_bm25_cache
             invalidate_bm25_cache(collection)
             return JSONResponse({
                 "deleted": deleted,
@@ -422,7 +422,7 @@ def delete_docs(
     data = store.get(collection)
     if data and data.get("ids"):
         deleted = store.delete(collection, ids=data["ids"])
-        from skills.enhanced_search import invalidate_bm25_cache
+        from scripts.skills.enhanced_search import invalidate_bm25_cache
         invalidate_bm25_cache(collection)
         return JSONResponse({"deleted": deleted, "collection": collection})
     return JSONResponse({"deleted": 0, "collection": collection})
@@ -476,7 +476,7 @@ def stats_page(request: Request):
 
     # 获取统计数据
     try:
-        from user_store import get_store
+        from scripts.user_store import get_store
         store = get_store()
         stats = store.get_stats()
         users = store.list_users()
@@ -975,7 +975,7 @@ def list_admin_users(password: str = Query("", description="管理员密码")):
     if not _verify_admin_access(password):
         raise HTTPException(401, "密码错误")
     try:
-        from user_store import get_store as get_user_store
+        from scripts.user_store import get_store as get_user_store
         store = get_user_store()
         users = store.list_users()
         # 脱敏处理
@@ -1007,7 +1007,7 @@ def update_user_centers(
     if not _verify_admin_access(password):
         raise HTTPException(403, "密码错误")
     try:
-        from user_store import get_store as get_user_store
+        from scripts.user_store import get_store as get_user_store
         centers_list = json.loads(centers)
         if not isinstance(centers_list, list):
             raise HTTPException(400, "centers 必须是 JSON 数组")
@@ -1126,7 +1126,7 @@ def dashboard_status(password: str = Query("", description="管理员密码")):
     """
     if not _verify_admin_access(password):
         raise HTTPException(401, "密码错误")
-    from dashboard.subscription_store import get_subscription_store
+    from scripts.dashboard.subscription_store import get_subscription_store
     items = []
     for sub in get_subscription_store().list_all():
         items.append({
@@ -1153,7 +1153,7 @@ def feedback_stats(password: str = Query("", description="管理员密码")):
     if not _verify_admin_access(password):
         raise HTTPException(401, "密码错误")
 
-    from user_store import get_feedback_stats
+    from scripts.user_store import get_feedback_stats
     stats = get_feedback_stats()
     return JSONResponse(stats)
 
@@ -1166,7 +1166,7 @@ def prompts_page(password: str = Query("", description="管理员密码")):
     if not _verify_admin_access(password):
         raise HTTPException(401, "密码错误")
 
-    from user_store import get_prompt, list_prompts
+    from scripts.user_store import get_prompt, list_prompts
     import sys
     prompt_file = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -1249,12 +1249,12 @@ async def save_system_prompt(
     if not _verify_admin_access(password):
         raise HTTPException(401, "密码错误")
 
-    from user_store import set_prompt
+    from scripts.user_store import set_prompt
     set_prompt("system", content)
 
     # 清除 agent.py 的 prompt 缓存
     try:
-        from skills.agent import reload_system_prompt
+        from scripts.skills.agent import reload_system_prompt
         reload_system_prompt()
     except Exception as e:
         logger.warning(f"清除 prompt 缓存失败: {e}")
@@ -1279,11 +1279,11 @@ async def reset_system_prompt(password: str = Form("", description="管理员密
     except FileNotFoundError:
         return JSONResponse({"error": "默认 prompt 文件不存在"}, status_code=404)
 
-    from user_store import set_prompt
+    from scripts.user_store import set_prompt
     set_prompt("system", content)
 
     try:
-        from skills.agent import reload_system_prompt
+        from scripts.skills.agent import reload_system_prompt
         reload_system_prompt()
     except Exception as e:
         logger.warning(f"清除 prompt 缓存失败: {e}")

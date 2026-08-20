@@ -23,10 +23,10 @@ _NET_SESSION.trust_env = False
 from datetime import datetime
 from pathlib import Path
 
-from paths import UPLOADS_DIR
+from scripts.paths import UPLOADS_DIR
 from typing import Optional
 
-from doc_mgr.identity import file_sha256
+from scripts.doc_mgr.identity import file_sha256
 
 logger = logging.getLogger("file_handler")
 
@@ -94,7 +94,7 @@ def _get_user_main_department(user_id: str) -> str:
     v1.10.2：上传目录按主部门分组。未来恢复部门划分时此处即部门归属来源。
     """
     try:
-        from user_store import get_store
+        from scripts.user_store import get_store
         user = get_store().get_user(user_id) or {}
         names_raw = user.get("department_names", "") or ""
         if isinstance(names_raw, str) and names_raw.strip():
@@ -214,7 +214,7 @@ def download_and_save_file(
 
         # 记录到同步追踪器（标记为待处理，管理员可在后台分配库）
         try:
-            from doc_mgr.sync_tracker import SyncTracker
+            from scripts.doc_mgr.sync_tracker import SyncTracker
             tracker = SyncTracker()
             tracker.upsert_file(
                 file_path=str(file_path),

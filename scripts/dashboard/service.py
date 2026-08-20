@@ -345,7 +345,7 @@ def push(recipients: list, title: str, text: str):
     if not recipients:
         return False, "无接收人"
     try:
-        from dingtalk_notifier import DingTalkNotifier
+        from scripts.dingtalk_notifier import DingTalkNotifier
         DingTalkNotifier().send_markdown_to_users(list(recipients), title, text)
         return True, ""
     except Exception as e:

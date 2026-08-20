@@ -6,11 +6,9 @@ import unittest
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
-if str(SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS))
 
-from pending_context import PT_TOOL, is_confirm_text  # noqa: E402
-from tools import (confirm_pending_operation, execute_tool, register,
+from scripts.pending_context import PT_TOOL, is_confirm_text  # noqa: E402
+from scripts.tools import (confirm_pending_operation, execute_tool, register,
                    set_current_user_id, _tool_registry)  # noqa: E402
 
 

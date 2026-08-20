@@ -37,7 +37,7 @@ from .extractors import extract_csv_rows, format_csv_row
 from .sync_tracker import SyncTracker
 from .task_manager import report_progress as _report_progress
 from .identity import file_sha256, stable_document_id
-from paths import DATA_ROOT, RUNTIME_DIR, STANDARDS_DIR
+from scripts.paths import DATA_ROOT, RUNTIME_DIR, STANDARDS_DIR
 
 logger = logging.getLogger("doc_mgr.engine")
 
@@ -49,7 +49,7 @@ def _get_pdf_routing() -> str:
     """
     try:
         import importlib
-        cfg = importlib.import_module("config")
+        cfg = importlib.import_module("scripts.config")
         return getattr(cfg, "PDF_ROUTING", "auto") or "auto"
     except Exception:
         return "auto"
@@ -249,13 +249,7 @@ def _try_mineru(file_path: str, file_name: str,
     run_context = None
     try:
         # 动态导入（MinerU 依赖可能未安装）
-        import sys as _sys
-        _script_dir = os.path.dirname(os.path.abspath(__file__))
-        _parent = os.path.normpath(os.path.join(_script_dir, ".."))
-        if _parent not in _sys.path:
-            _sys.path.insert(0, _parent)
-
-        from mineru_extract import load_token, extract_pdf as mineru_extract
+        from scripts.mineru_extract import load_token, extract_pdf as mineru_extract
 
         token = load_token()
         if not token:

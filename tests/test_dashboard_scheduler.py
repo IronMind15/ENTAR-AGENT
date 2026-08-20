@@ -9,11 +9,9 @@ from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from dashboard.subscription_store import Subscription  # noqa: E402
-from dashboard_scheduler import (_deduplicate_due_subscriptions,
+from scripts.dashboard.subscription_store import Subscription  # noqa: E402
+from scripts.dashboard_scheduler import (_deduplicate_due_subscriptions,
                                  _execute_subscription, is_due)  # noqa: E402
 
 
@@ -104,7 +102,7 @@ class IsDueTests(unittest.TestCase):
         subset_b = _sub(id=6, data_sources=["doc_3"])
         # v1.12.7（D1）：去重按任务绑定解析的有效来源集合——mock effective_source_keys
         # 以绑定快照为解析结果，覆盖集合语义与旧实现一致。
-        with mock.patch("dashboard.service.effective_source_keys",
+        with mock.patch("scripts.dashboard.service.effective_source_keys",
                         side_effect=lambda sub: set(sub.data_sources or [])):
             selected, suppressed = _deduplicate_due_subscriptions(
                 [subset_a, full, subset_b])
@@ -117,13 +115,13 @@ class ExecuteSubscriptionTests(unittest.TestCase):
 
     def setUp(self):
         import tempfile, os
-        from dashboard.subscription_store import SubscriptionStore
+        from scripts.dashboard.subscription_store import SubscriptionStore
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         self._db_path = path
         self._store = SubscriptionStore(db_path=path)
         self.patch_store = mock.patch(
-            "dashboard.subscription_store.get_subscription_store",
+            "scripts.dashboard.subscription_store.get_subscription_store",
             return_value=self._store)
         self.patch_store.start()
         self.addCleanup(self.patch_store.stop)
@@ -142,22 +140,22 @@ class ExecuteSubscriptionTests(unittest.TestCase):
     def _fake_sources(self):
         """v1.11.5：静态配置 project_status base_id 为空会被 source_usable 过滤，
         执行链测试直接 mock 数据源解析，聚焦变化检测→组装→推送→快照。"""
-        from dashboard.config_model import SourceConfig
+        from scripts.dashboard.config_model import SourceConfig
         return [SourceConfig(key="project_status", name="研发项目现况表",
                              kind="notable", base_id="b1", table_id="s1")]
 
     def test_pushes_and_updates_snapshot(self):
         sub_id = self._store.create(_sub(alert_mode="always"))
         sub = self._store.get(sub_id)
-        with mock.patch("dashboard.service.resolve_subscription_sources",
+        with mock.patch("scripts.dashboard.service.resolve_subscription_sources",
                         return_value=self._fake_sources()), \
-             mock.patch("dashboard.service.collect_and_parse",
+             mock.patch("scripts.dashboard.service.collect_and_parse",
                         return_value=(_parsed(), [])), \
-             mock.patch("dashboard.service.assemble",
+             mock.patch("scripts.dashboard.service.assemble",
                         return_value="# 看板"), \
-             mock.patch("dashboard.service.push",
+             mock.patch("scripts.dashboard.service.push",
                         return_value=(True, "")), \
-             mock.patch("dashboard.service.now_str",
+             mock.patch("scripts.dashboard.service.now_str",
                         return_value="2026-08-10 09:00:00"):
             result = _execute_subscription(sub)
         self.assertTrue(result["ok"])
@@ -171,12 +169,12 @@ class ExecuteSubscriptionTests(unittest.TestCase):
     def test_push_writes_history_archive(self):
         """v1.12.7：推送成功后写留档（每任务保留 30 次）"""
         import tempfile
-        from dashboard.push_history import PushHistoryStore
+        from scripts.dashboard.push_history import PushHistoryStore
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         hist = PushHistoryStore(db_path=path)
         self.patch_hist = mock.patch(
-            "dashboard.push_history.get_push_history_store", return_value=hist)
+            "scripts.dashboard.push_history.get_push_history_store", return_value=hist)
         self.patch_hist.start()
         self.addCleanup(self.patch_hist.stop)
         self.addCleanup(lambda: (hist.close(),
@@ -184,15 +182,15 @@ class ExecuteSubscriptionTests(unittest.TestCase):
                                    for s in ("", "-wal", "-shm")]))
         sub_id = self._store.create(_sub(alert_mode="always"))
         sub = self._store.get(sub_id)
-        with mock.patch("dashboard.service.resolve_subscription_sources",
+        with mock.patch("scripts.dashboard.service.resolve_subscription_sources",
                         return_value=self._fake_sources()), \
-             mock.patch("dashboard.service.collect_and_parse",
+             mock.patch("scripts.dashboard.service.collect_and_parse",
                         return_value=(_parsed(), [])), \
-             mock.patch("dashboard.service.assemble",
+             mock.patch("scripts.dashboard.service.assemble",
                         return_value="# 看板"), \
-             mock.patch("dashboard.service.push",
+             mock.patch("scripts.dashboard.service.push",
                         return_value=(True, "")), \
-             mock.patch("dashboard.service.now_str",
+             mock.patch("scripts.dashboard.service.now_str",
                         return_value="2026-08-10 09:00:00"):
             result = _execute_subscription(sub)
         self.assertTrue(result["ok"])
@@ -210,11 +208,11 @@ class ExecuteSubscriptionTests(unittest.TestCase):
             "attention": [{"status": "滞后", "title": "项目A"}],
             "normal": [],
         }]
-        with mock.patch("dashboard.service.resolve_subscription_sources",
+        with mock.patch("scripts.dashboard.service.resolve_subscription_sources",
                         return_value=self._fake_sources()), \
-             mock.patch("dashboard.service.collect_and_parse",
+             mock.patch("scripts.dashboard.service.collect_and_parse",
                         return_value=(_parsed(), [])), \
-             mock.patch("dashboard.service.push") as m_push:
+             mock.patch("scripts.dashboard.service.push") as m_push:
             result = _execute_subscription(sub)
         self.assertFalse(result["ok"])
         self.assertEqual(result["reason"], "no_changes")
@@ -227,9 +225,9 @@ class ExecuteSubscriptionTests(unittest.TestCase):
         """用户不能只靠服务端日志得知：推送失败、告警失败都必须留档。"""
         sub_id = self._store.create(_sub(alert_mode="always"))
         sub = self._store.get(sub_id)
-        with mock.patch("dashboard.service.resolve_subscription_sources",
+        with mock.patch("scripts.dashboard.service.resolve_subscription_sources",
                         return_value=[]), \
-             mock.patch("dashboard_scheduler._notify_failure",
+             mock.patch("scripts.dashboard_scheduler._notify_failure",
                         return_value=("failed", "钉钉权限不足")):
             result = _execute_subscription(sub)
         self.assertFalse(result["ok"])
@@ -247,12 +245,12 @@ class ExecuteSubscriptionTests(unittest.TestCase):
             "source_key": "project_status", "table_name": "33周", "total": 9,
             "status_counts": {}, "attention": [], "normal": [],
         }]
-        with mock.patch("dashboard.service.resolve_subscription_sources",
+        with mock.patch("scripts.dashboard.service.resolve_subscription_sources",
                         return_value=self._fake_sources()), \
-             mock.patch("dashboard.service.collect_and_parse",
+             mock.patch("scripts.dashboard.service.collect_and_parse",
                         return_value=(_parsed(), [])), \
-             mock.patch("dashboard.service.assemble", return_value="# 看板"), \
-             mock.patch("dashboard.service.push", return_value=(True, "")):
+             mock.patch("scripts.dashboard.service.assemble", return_value="# 看板"), \
+             mock.patch("scripts.dashboard.service.push", return_value=(True, "")):
             result = _execute_subscription(sub)
         self.assertTrue(result["ok"])
 
@@ -266,12 +264,12 @@ class ExecuteSubscriptionTests(unittest.TestCase):
             "attention": [{"status": "滞后", "title": "项目A"}],
             "normal": [],
         }]
-        with mock.patch("dashboard.service.resolve_subscription_sources",
+        with mock.patch("scripts.dashboard.service.resolve_subscription_sources",
                         return_value=self._fake_sources()), \
-             mock.patch("dashboard.service.collect_and_parse",
+             mock.patch("scripts.dashboard.service.collect_and_parse",
                         return_value=(_parsed(), [])), \
-             mock.patch("dashboard.service.assemble", return_value="# 看板"), \
-             mock.patch("dashboard.service.push",
+             mock.patch("scripts.dashboard.service.assemble", return_value="# 看板"), \
+             mock.patch("scripts.dashboard.service.push",
                         return_value=(True, "")) as m_push:
             result = _execute_subscription(sub)
         self.assertTrue(result["ok"])
@@ -302,15 +300,15 @@ class ExecuteSubscriptionTests(unittest.TestCase):
             ], verification={})
         key_expand = SimpleNamespace(
             messages=["🔍 研发项目现况表 详情"], changes=[], verification={})
-        with mock.patch("dashboard.service.resolve_subscription_sources",
+        with mock.patch("scripts.dashboard.service.resolve_subscription_sources",
                         return_value=self._fake_sources()), \
-             mock.patch("dashboard.service.collect_and_parse",
+             mock.patch("scripts.dashboard.service.collect_and_parse",
                         return_value=(_parsed(), [])), \
-             mock.patch("dashboard.service.assemble_report",
+             mock.patch("scripts.dashboard.service.assemble_report",
                         side_effect=[fake_report, key_expand]), \
-             mock.patch("dashboard.service.push",
+             mock.patch("scripts.dashboard.service.push",
                         return_value=(True, "")) as m_push, \
-             mock.patch("dashboard.service.now_str",
+             mock.patch("scripts.dashboard.service.now_str",
                         return_value="2026-08-10 09:00:00"):
             result = _execute_subscription(sub)
         self.assertTrue(result["ok"])
@@ -331,16 +329,16 @@ class ExecuteSubscriptionTests(unittest.TestCase):
             "status_counts": {}, "attention": [], "normal": [],
         }]
         per_source_msgs = ["【研发项目现况表】本周总结", "【整机下线】问题清单"]
-        with mock.patch("dashboard.service.resolve_subscription_sources",
+        with mock.patch("scripts.dashboard.service.resolve_subscription_sources",
                         return_value=self._fake_sources()), \
-             mock.patch("dashboard.service.collect_and_parse",
+             mock.patch("scripts.dashboard.service.collect_and_parse",
                         return_value=(_parsed(), [])), \
-             mock.patch("dashboard.service.assemble_per_source_messages",
+             mock.patch("scripts.dashboard.service.assemble_per_source_messages",
                         return_value=per_source_msgs) as m_ps, \
-             mock.patch("dashboard.service.assemble_report") as m_report, \
-             mock.patch("dashboard.service.push",
+             mock.patch("scripts.dashboard.service.assemble_report") as m_report, \
+             mock.patch("scripts.dashboard.service.push",
                         return_value=(True, "")) as m_push, \
-             mock.patch("dashboard.service.now_str",
+             mock.patch("scripts.dashboard.service.now_str",
                         return_value="2026-08-10 09:00:00"):
             result = _execute_subscription(sub)
         self.assertTrue(result["ok"])
@@ -363,17 +361,17 @@ class ExecuteSubscriptionTests(unittest.TestCase):
             "source_key": "project_status", "table_name": "33周", "total": 1,
             "status_counts": {"滞后": 1}, "attention": [], "normal": [],
         }]
-        with mock.patch("dashboard.service.resolve_subscription_sources",
+        with mock.patch("scripts.dashboard.service.resolve_subscription_sources",
                         return_value=self._fake_sources()), \
-             mock.patch("dashboard.service.collect_and_parse",
+             mock.patch("scripts.dashboard.service.collect_and_parse",
                         return_value=(_parsed(), [])), \
-             mock.patch("dashboard.service.assemble_per_source_messages") as m_ps, \
-             mock.patch("dashboard.service.assemble_report",
+             mock.patch("scripts.dashboard.service.assemble_per_source_messages") as m_ps, \
+             mock.patch("scripts.dashboard.service.assemble_report",
                         return_value=SimpleNamespace(
                             messages=["汇总报告"], changes=[], verification={})), \
-             mock.patch("dashboard.service.push",
+             mock.patch("scripts.dashboard.service.push",
                         return_value=(True, "")) as m_push, \
-             mock.patch("dashboard.service.now_str",
+             mock.patch("scripts.dashboard.service.now_str",
                         return_value="2026-08-10 09:00:00"):
             result = _execute_subscription(sub)
         self.assertTrue(result["ok"])
@@ -392,12 +390,12 @@ class ExecuteSubscriptionTests(unittest.TestCase):
             "source_key": "project_status", "table_name": "33周", "total": 9,
             "status_counts": {}, "attention": [], "normal": [],
         }]
-        with mock.patch("dashboard.service.resolve_subscription_sources",
+        with mock.patch("scripts.dashboard.service.resolve_subscription_sources",
                         return_value=self._fake_sources()), \
-             mock.patch("dashboard.service.collect_and_parse",
+             mock.patch("scripts.dashboard.service.collect_and_parse",
                         return_value=(_parsed(), [])), \
-             mock.patch("dashboard.service.assemble", return_value="# 看板"), \
-             mock.patch("dashboard.service.push",
+             mock.patch("scripts.dashboard.service.assemble", return_value="# 看板"), \
+             mock.patch("scripts.dashboard.service.push",
                         return_value=(True, "")) as m_push:
             result = _execute_subscription(sub)
         self.assertTrue(result["ok"])
@@ -412,11 +410,11 @@ class ExecuteSubscriptionTests(unittest.TestCase):
     def test_off_mode_skips(self):
         sub_id = self._store.create(_sub(alert_mode="off"))
         sub = self._store.get(sub_id)
-        with mock.patch("dashboard.service.resolve_subscription_sources",
+        with mock.patch("scripts.dashboard.service.resolve_subscription_sources",
                         return_value=self._fake_sources()), \
-             mock.patch("dashboard.service.collect_and_parse",
+             mock.patch("scripts.dashboard.service.collect_and_parse",
                         return_value=(_parsed(), [])), \
-             mock.patch("dashboard.service.push") as m_push:
+             mock.patch("scripts.dashboard.service.push") as m_push:
             result = _execute_subscription(sub)
         self.assertFalse(result["ok"])
         self.assertEqual(result["reason"], "off")
@@ -425,8 +423,8 @@ class ExecuteSubscriptionTests(unittest.TestCase):
     def test_no_sources_skips(self):
         sub_id = self._store.create(_sub(data_sources=["missing"]))
         sub = self._store.get(sub_id)
-        with mock.patch("dashboard.service.collect_and_parse") as m_coll, \
-             mock.patch("dingtalk_notifier.DingTalkNotifier"):  # v1.11.6 失败告警
+        with mock.patch("scripts.dashboard.service.collect_and_parse") as m_coll, \
+             mock.patch("scripts.dingtalk_notifier.DingTalkNotifier"):  # v1.11.6 失败告警
             result = _execute_subscription(sub)
         self.assertFalse(result["ok"])
         self.assertEqual(result["reason"], "no_sources")
@@ -435,13 +433,13 @@ class ExecuteSubscriptionTests(unittest.TestCase):
     def test_push_failure_keeps_snapshot_unchanged(self):
         sub_id = self._store.create(_sub(alert_mode="always"))
         sub = self._store.get(sub_id)
-        with mock.patch("dashboard.service.resolve_subscription_sources",
+        with mock.patch("scripts.dashboard.service.resolve_subscription_sources",
                         return_value=self._fake_sources()), \
-             mock.patch("dashboard.service.collect_and_parse",
+             mock.patch("scripts.dashboard.service.collect_and_parse",
                         return_value=(_parsed(), [])), \
-             mock.patch("dashboard.service.assemble", return_value="# 看板"), \
-             mock.patch("dashboard.service.push", return_value=(False, "权限不足")), \
-             mock.patch("dingtalk_notifier.DingTalkNotifier"):  # v1.11.6 失败告警
+             mock.patch("scripts.dashboard.service.assemble", return_value="# 看板"), \
+             mock.patch("scripts.dashboard.service.push", return_value=(False, "权限不足")), \
+             mock.patch("scripts.dingtalk_notifier.DingTalkNotifier"):  # v1.11.6 失败告警
             result = _execute_subscription(sub)
         self.assertFalse(result["ok"])
         self.assertIn("权限不足", result["reason"])
@@ -455,13 +453,13 @@ class FailureAlertTests(unittest.TestCase):
 
     def setUp(self):
         import tempfile
-        from dashboard.subscription_store import SubscriptionStore
+        from scripts.dashboard.subscription_store import SubscriptionStore
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         self._db_path = path
         self._store = SubscriptionStore(db_path=path)
         self.patch_store = mock.patch(
-            "dashboard.subscription_store.get_subscription_store",
+            "scripts.dashboard.subscription_store.get_subscription_store",
             return_value=self._store)
         self.patch_store.start()
         self.addCleanup(self.patch_store.stop)
@@ -478,20 +476,20 @@ class FailureAlertTests(unittest.TestCase):
                     pass
 
     def _fake_sources(self):
-        from dashboard.config_model import SourceConfig
+        from scripts.dashboard.config_model import SourceConfig
         return [SourceConfig(key="project_status", name="研发项目现况表",
                              kind="notable", base_id="b1", table_id="s1")]
 
     def test_push_failure_notifies_owner(self):
         sub_id = self._store.create(_sub(alert_mode="always"))
         sub = self._store.get(sub_id)
-        with mock.patch("dashboard.service.resolve_subscription_sources",
+        with mock.patch("scripts.dashboard.service.resolve_subscription_sources",
                         return_value=self._fake_sources()), \
-             mock.patch("dashboard.service.collect_and_parse",
+             mock.patch("scripts.dashboard.service.collect_and_parse",
                         return_value=(_parsed(), [])), \
-             mock.patch("dashboard.service.assemble", return_value="# 看板"), \
-             mock.patch("dashboard.service.push", return_value=(False, "权限不足")), \
-             mock.patch("dingtalk_notifier.DingTalkNotifier") as m_ntf:
+             mock.patch("scripts.dashboard.service.assemble", return_value="# 看板"), \
+             mock.patch("scripts.dashboard.service.push", return_value=(False, "权限不足")), \
+             mock.patch("scripts.dingtalk_notifier.DingTalkNotifier") as m_ntf:
             result = _execute_subscription(sub)
         self.assertFalse(result["ok"])
         m_ntf.return_value.send_markdown_to_users.assert_called_once()
@@ -501,8 +499,8 @@ class FailureAlertTests(unittest.TestCase):
     def test_no_sources_notifies_owner(self):
         sub_id = self._store.create(_sub(data_sources=["missing"]))
         sub = self._store.get(sub_id)
-        with mock.patch("dashboard.service.collect_and_parse") as m_coll, \
-             mock.patch("dingtalk_notifier.DingTalkNotifier") as m_ntf:
+        with mock.patch("scripts.dashboard.service.collect_and_parse") as m_coll, \
+             mock.patch("scripts.dingtalk_notifier.DingTalkNotifier") as m_ntf:
             result = _execute_subscription(sub)
         self.assertFalse(result["ok"])
         self.assertEqual(result["reason"], "no_sources")
@@ -518,12 +516,12 @@ class FailureAlertTests(unittest.TestCase):
             "attention": [{"status": "滞后", "title": "项目A"}],
             "normal": [],
         }]
-        with mock.patch("dashboard.service.resolve_subscription_sources",
+        with mock.patch("scripts.dashboard.service.resolve_subscription_sources",
                         return_value=self._fake_sources()), \
-             mock.patch("dashboard.service.collect_and_parse",
+             mock.patch("scripts.dashboard.service.collect_and_parse",
                         return_value=(_parsed(), [])), \
-             mock.patch("dashboard.service.push"), \
-             mock.patch("dingtalk_notifier.DingTalkNotifier") as m_ntf:
+             mock.patch("scripts.dashboard.service.push"), \
+             mock.patch("scripts.dingtalk_notifier.DingTalkNotifier") as m_ntf:
             result = _execute_subscription(sub)
         self.assertFalse(result["ok"])
         self.assertEqual(result["reason"], "no_changes")
@@ -532,12 +530,12 @@ class FailureAlertTests(unittest.TestCase):
     def test_off_does_not_alert(self):
         sub_id = self._store.create(_sub(alert_mode="off"))
         sub = self._store.get(sub_id)
-        with mock.patch("dashboard.service.resolve_subscription_sources",
+        with mock.patch("scripts.dashboard.service.resolve_subscription_sources",
                         return_value=self._fake_sources()), \
-             mock.patch("dashboard.service.collect_and_parse",
+             mock.patch("scripts.dashboard.service.collect_and_parse",
                         return_value=(_parsed(), [])), \
-             mock.patch("dashboard.service.push"), \
-             mock.patch("dingtalk_notifier.DingTalkNotifier") as m_ntf:
+             mock.patch("scripts.dashboard.service.push"), \
+             mock.patch("scripts.dingtalk_notifier.DingTalkNotifier") as m_ntf:
             result = _execute_subscription(sub)
         self.assertFalse(result["ok"])
         m_ntf.return_value.send_markdown_to_users.assert_not_called()
@@ -548,13 +546,13 @@ class DocSubscriptionExecuteTests(unittest.TestCase):
 
     def setUp(self):
         import tempfile
-        from dashboard.subscription_store import SubscriptionStore
+        from scripts.dashboard.subscription_store import SubscriptionStore
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         self._db_path = path
         self._store = SubscriptionStore(db_path=path)
         self.patch_store = mock.patch(
-            "dashboard.subscription_store.get_subscription_store",
+            "scripts.dashboard.subscription_store.get_subscription_store",
             return_value=self._store)
         self.patch_store.start()
         self.addCleanup(self.patch_store.stop)
@@ -571,18 +569,18 @@ class DocSubscriptionExecuteTests(unittest.TestCase):
                     pass
 
     def test_doc_key_resolved_and_executed(self):
-        from dashboard.config_model import SourceConfig
+        from scripts.dashboard.config_model import SourceConfig
         sub_id = self._store.create(
             _sub(data_sources=["doc_1"], alert_mode="always"))
         sub = self._store.get(sub_id)
         dyn = SourceConfig(key="doc_1", name="研发项目现况表", kind="notable",
                            base_id="n1", table_id="s1", operator_id="union1")
-        with mock.patch("dashboard.service.resolve_subscription_sources",
+        with mock.patch("scripts.dashboard.service.resolve_subscription_sources",
                         return_value=[dyn]), \
-             mock.patch("dashboard.service.collect_and_parse",
+             mock.patch("scripts.dashboard.service.collect_and_parse",
                         return_value=(_parsed(), [])), \
-             mock.patch("dashboard.service.assemble", return_value="# 看板"), \
-             mock.patch("dashboard.service.push", return_value=(True, "")):
+             mock.patch("scripts.dashboard.service.assemble", return_value="# 看板"), \
+             mock.patch("scripts.dashboard.service.push", return_value=(True, "")):
             result = _execute_subscription(sub)
         self.assertTrue(result["ok"])
         got = self._store.get(sub_id)

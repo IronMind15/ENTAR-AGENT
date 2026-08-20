@@ -22,12 +22,14 @@ if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
-# 添加 scripts 目录到 path
-sys.path.insert(0, str(Path(__file__).parent))
+# 兼容 python scripts/sync_mineru.py，同时保持 scripts.* 唯一命名空间
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
-from doc_mgr.engine import process_file
-from doc_mgr.storage import get_store
-from paths import STANDARDS_DIR
+from scripts.doc_mgr.engine import process_file
+from scripts.doc_mgr.storage import get_store
+from scripts.paths import STANDARDS_DIR
 
 # 配置日志
 logging.basicConfig(

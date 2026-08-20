@@ -16,7 +16,7 @@
 import json
 import logging
 
-from tools import register
+from scripts.tools import register
 
 logger = logging.getLogger("tool.create_kb")
 
@@ -24,7 +24,7 @@ logger = logging.getLogger("tool.create_kb")
 def _list_kb_summary() -> str:
     """动态列出现有知识库（供 LLM 感知当前有哪些库）"""
     try:
-        from kb_registry import list_knowledge_bases
+        from scripts.kb_registry import list_knowledge_bases
         kbs = list_knowledge_bases(enabled_only=True)
         if not kbs:
             return ""
@@ -98,7 +98,7 @@ def execute(args: dict) -> str:
 
     logger.info(f"  工具调用: kb_create(name={name}, dept={department})")
 
-    from kb_registry import create_knowledge_base as do_create
+    from scripts.kb_registry import create_knowledge_base as do_create
 
     result = do_create(name, description, department)
     if not result.get("ok"):

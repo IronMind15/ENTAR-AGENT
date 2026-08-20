@@ -20,12 +20,10 @@ from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from skills.dashboard import DashboardSkill  # noqa: E402
-from dashboard import subscription_commands as sub_cmd  # noqa: E402
-from dashboard.subscription_store import Subscription  # noqa: E402
+from scripts.skills.dashboard import DashboardSkill  # noqa: E402
+from scripts.dashboard import subscription_commands as sub_cmd  # noqa: E402
+from scripts.dashboard.subscription_store import Subscription  # noqa: E402
 
 
 class _KanbanStoreFixture:
@@ -36,7 +34,7 @@ class _KanbanStoreFixture:
         self._fd, self._path = tempfile.mkstemp(suffix=".db")
         os.close(self._fd)
         self._db_path = self._path
-        from dashboard.subscription_store import SubscriptionStore
+        from scripts.dashboard.subscription_store import SubscriptionStore
         self.store = SubscriptionStore(db_path=self._path)
         sub = Subscription(
             owner_user_id=owner, owner_staff_id="staff001",
@@ -49,10 +47,10 @@ class _KanbanStoreFixture:
     def __enter__(self):
         self._stack = contextlib.ExitStack()
         self._stack.enter_context(
-            mock.patch("skills.dashboard.get_subscription_store",
+            mock.patch("scripts.skills.dashboard.get_subscription_store",
                        return_value=self.store))
         self._stack.enter_context(
-            mock.patch("pending_context._pending", {}))
+            mock.patch("scripts.pending_context._pending", {}))
         return self
 
     def __exit__(self, *exc):
@@ -227,7 +225,7 @@ class DeleteAllSourcesGateTests(unittest.TestCase):
         _clear_classify_cache()
 
     def test_gate_defers_in_kanban_context(self):
-        from skills.dingtalk_bot import _file_command_gate
+        from scripts.skills.dingtalk_bot import _file_command_gate
         uid = "u-gate-defer"
         sub_cmd.touch_activity(uid)
         g, _ = _file_command_gate("删除全部数据源", uid, "delete", "全部数据源")
@@ -235,7 +233,7 @@ class DeleteAllSourcesGateTests(unittest.TestCase):
 
     def test_gate_proceeds_for_file_with_extension(self):
         """带扩展名的明确文件删除照旧 proceed（「删除学习 参数表.xlsx」不误让位）"""
-        from skills.dingtalk_bot import _file_command_gate
+        from scripts.skills.dingtalk_bot import _file_command_gate
         uid = "u-gate-ext"
         sub_cmd.touch_activity(uid)
         g, _ = _file_command_gate("删除学习 参数表.xlsx", uid, "delete", "参数表.xlsx")
@@ -243,21 +241,21 @@ class DeleteAllSourcesGateTests(unittest.TestCase):
 
     def test_gate_proceeds_for_no_kanban_context(self):
         """非看板语境照旧 proceed（文件删除原路径不受影响）"""
-        from skills.dingtalk_bot import _file_command_gate
+        from scripts.skills.dingtalk_bot import _file_command_gate
         g, _ = _file_command_gate("删除全部数据源", "u-gate-fresh", "delete", "全部数据源")
         self.assertEqual(g, "proceed")
 
     def test_process_text_delete_all_sources_handled_by_dashboard(self):
         """端到端：bot 收到「删除全部数据源」→ gate defer → 技能层 remove_all 确认，
         不落 knowledge_delete（kb_file_manage 不被调用）"""
-        from skills.dingtalk_bot import ErrorQueryHandler
+        from scripts.skills.dingtalk_bot import ErrorQueryHandler
         uid = "u-bot-rmall"
         sub_cmd.touch_activity(uid)
         handler = ErrorQueryHandler()
         with _KanbanStoreFixture(owner=uid) as fx:
             with mock.patch.object(sub_cmd, "_llm_verify_subscription",
                                    return_value="change_sources"):
-                with mock.patch("knowledge_review.delete_file_for_user") as mdel:
+                with mock.patch("scripts.knowledge_review.delete_file_for_user") as mdel:
                     r = handler._process_text("删除全部数据源", uid, "s1")
         self.assertEqual(r["source"], "dashboard")
         self.assertIn("确认", r["answer"])
@@ -288,7 +286,7 @@ class KanbanContextReleaseTests(unittest.TestCase):
 
     def test_non_kanban_context_not_intercepted(self):
         """从未聊过看板的用户说「删除」→ match False（不误接）"""
-        with mock.patch("dashboard.subscription_commands.has_recent_kanban_activity",
+        with mock.patch("scripts.dashboard.subscription_commands.has_recent_kanban_activity",
                         return_value=False):
             self.assertFalse(DashboardSkill.match("删除", user_id="u-nobody"))
 

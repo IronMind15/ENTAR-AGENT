@@ -19,7 +19,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from .engine import process_file, check_chroma_has_file
 from .sync_tracker import SyncTracker
 from .identity import file_sha256
-from paths import STANDARDS_DIR, UPLOADS_DIR
+from scripts.paths import STANDARDS_DIR, UPLOADS_DIR
 
 logger = logging.getLogger("doc_mgr.scheduler")
 

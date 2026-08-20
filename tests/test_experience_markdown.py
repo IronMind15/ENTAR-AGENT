@@ -14,8 +14,6 @@ from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
 TEMPLATE = """# 经验条目：测试设备故障排查
 
@@ -44,7 +42,7 @@ class MarkdownChunkerTests(unittest.TestCase):
     """五段式模板切块"""
 
     def test_five_stage_template_chunks(self):
-        from doc_mgr.chunkers import MarkdownChunker
+        from scripts.doc_mgr.chunkers import MarkdownChunker
         chunker = MarkdownChunker()
         chunks = chunker.chunk(TEMPLATE, {"file_name": "test.md"}, filepath="test.md")
         titles = [c.metadata.get("chapter_title", "") for c in chunks]
@@ -56,7 +54,7 @@ class ProcessFileCollectionTests(unittest.TestCase):
     """process_file 对 .md 显式指定 experience_kb collection"""
 
     def test_markdown_to_experience_kb(self):
-        from doc_mgr import engine
+        from scripts.doc_mgr import engine
 
         tmp = tempfile.mkdtemp()
         md_path = os.path.join(tmp, "经验测试.md")
@@ -83,7 +81,7 @@ class ProcessFileCollectionTests(unittest.TestCase):
 
     def test_reedit_experience_replaces_version(self):
         """纠错链路：编辑经验 .md 重新同步 → 同一 doc_id 触发版本替换（旧版本下线）"""
-        from doc_mgr import engine
+        from scripts.doc_mgr import engine
 
         tmp = tempfile.mkdtemp()
         md_path = os.path.join(tmp, "经验.md")
@@ -123,7 +121,7 @@ class ProcessFileCollectionTests(unittest.TestCase):
 
     def test_default_collection_for_md_is_standards(self):
         """无显式 target_collection 时 .md 默认落 standards（保持原行为）"""
-        from doc_mgr import engine
+        from scripts.doc_mgr import engine
 
         tmp = tempfile.mkdtemp()
         md_path = os.path.join(tmp, "普通.md")

@@ -19,7 +19,7 @@ from typing import Optional
 
 logger = logging.getLogger("dashboard.doc_candidates")
 
-from user_store import DB_PATH as _DEFAULT_DB_PATH  # noqa: E402
+from scripts.user_store import DB_PATH as _DEFAULT_DB_PATH  # noqa: E402
 
 
 def _now() -> str:

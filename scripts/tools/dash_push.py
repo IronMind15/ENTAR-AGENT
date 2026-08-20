@@ -3,7 +3,7 @@
 import json
 import logging
 
-from tools import register
+from scripts.tools import register
 
 
 logger = logging.getLogger("tools.dash_push")
@@ -35,9 +35,9 @@ DEFINITION = {
     ),
 )
 def execute(args: dict) -> str:
-    from dashboard import service
-    from dashboard.subscription_store import get_subscription_store
-    from tools import get_current_user_id
+    from scripts.dashboard import service
+    from scripts.dashboard.subscription_store import get_subscription_store
+    from scripts.tools import get_current_user_id
 
     # v1.11.10：用户级隔离——只采集当前用户的动态数据源（配置源为系统级共享），
     # 只推当前用户自己的订阅；此前全量采集所有用户候选并推给所有订阅接收人，违反隔离。
@@ -71,7 +71,7 @@ def execute(args: dict) -> str:
     logger.info("[即时看板] 任务=%s 提示词=%s/%s，数据源=%s；开始调用看板执行模型",
                 sub0.id, sub0.task_prompt_version, sub0.task_prompt_hash, len(sources))
     try:
-        from skills.agent import call_dashboard_json
+        from scripts.skills.agent import call_dashboard_json
         if sub0.per_source:
             body_messages = service.assemble_per_source_messages(
                 parsed, title=sub0.title, date_str=service.today_str(),
@@ -107,7 +107,7 @@ def execute(args: dict) -> str:
         return json.dumps({"error": f"推送失败：{msg}"}, ensure_ascii=False)
     # 手动演示和定时推送同样保留可回放证据，防用户只能从临时钉钉消息猜测
     # 本次到底采用了哪份任务提示词。
-    from dashboard.push_history import get_push_history_store
+    from scripts.dashboard.push_history import get_push_history_store
     get_push_history_store().record(
         sub0.id, sub0.owner_user_id, sub0.title, messages,
         prompt_version=sub0.task_prompt_version,

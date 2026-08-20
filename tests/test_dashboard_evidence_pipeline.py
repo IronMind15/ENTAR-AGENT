@@ -7,15 +7,13 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from dashboard.alerts import field_diff, make_snapshot  # noqa: E402
-from dashboard.config_model import FieldSpec, SourceConfig  # noqa: E402
-from dashboard.llm_pipeline import (  # noqa: E402
+from scripts.dashboard.alerts import field_diff, make_snapshot  # noqa: E402
+from scripts.dashboard.config_model import FieldSpec, SourceConfig  # noqa: E402
+from scripts.dashboard.llm_pipeline import (  # noqa: E402
     _fallback_claims_from_units, build_dashboard_report,
 )
-from dashboard.parser import parse_source_records  # noqa: E402
+from scripts.dashboard.parser import parse_source_records  # noqa: E402
 
 
 def _source(**overrides):

@@ -15,8 +15,16 @@ import os
 import sys
 import threading
 from logging.handlers import TimedRotatingFileHandler
-from paths import LOG_DIR, ensure_runtime_dirs
-sys.path.insert(0, os.path.dirname(__file__))
+
+# 兼容历史本地启动方式：python scripts/main.py
+# 直接执行时 Python 只把 scripts/ 放进 sys.path，需要补充项目根目录，
+# 使后续导入仍然使用唯一的 scripts.* 包名。
+if __package__ in {None, ""}:
+    _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, _PROJECT_ROOT)
+
+from scripts.paths import LOG_DIR, ensure_runtime_dirs
 
 # 钉钉 SDK（dingtalk_stream）内部用 requests 且默认 trust_env=True 跟随系统代理。
 # 本机 Clash 开启时会把 api.dingtalk.com 劫持到 127.0.0.1:7890 → TLS 握手被中断
@@ -56,11 +64,11 @@ from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 import uvicorn
 
-from skills import get_skill_list
-from skills.dingtalk_bot import start_bot as start_dingtalk_bot
-from doc_mgr.router import router as admin_router
-from doc_mgr.scheduler import start_scheduler, stop_scheduler
-from dashboard_scheduler import start_dashboard_scheduler, stop_dashboard_scheduler
+from scripts.skills import get_skill_list
+from scripts.skills.dingtalk_bot import start_bot as start_dingtalk_bot
+from scripts.doc_mgr.router import router as admin_router
+from scripts.doc_mgr.scheduler import start_scheduler, stop_scheduler
+from scripts.dashboard_scheduler import start_dashboard_scheduler, stop_dashboard_scheduler
 
 app = FastAPI(title="恩特小助手")
 app.include_router(admin_router)
@@ -68,7 +76,7 @@ app.include_router(admin_router)
 
 def _validate_security_config():
     """生产部署必须显式配置管理端认证，避免漏变量就暴露 /admin。"""
-    from config import APP_ENV, ADMIN_PASSWORD, IS_PRODUCTION
+    from scripts.config import APP_ENV, ADMIN_PASSWORD, IS_PRODUCTION
     if IS_PRODUCTION and not ADMIN_PASSWORD:
         raise RuntimeError(
             "ENTAR_ENV=production 时必须设置 ADMIN_PASSWORD；"
@@ -89,8 +97,8 @@ def _startup():
     """
     _validate_security_config()
     try:
-        from doc_mgr.recovery import recover_crashed_data
-        from doc_mgr.storage import get_store
+        from scripts.doc_mgr.recovery import recover_crashed_data
+        from scripts.doc_mgr.storage import get_store
         recovered = recover_crashed_data(get_store())
         changed = sum(
             1 for s in recovered.values()
@@ -108,7 +116,7 @@ def _startup():
         try:
             import time
             time.sleep(1)
-            from skills.enhanced_search import _get_reranker
+            from scripts.skills.enhanced_search import _get_reranker
             _get_reranker()
             logger.info("  已预热 bge-reranker 重排模型")
         except Exception as e:

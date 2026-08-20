@@ -22,8 +22,9 @@ import time
 import statistics
 
 _PARENT = os.path.dirname(os.path.abspath(__file__))
-if _PARENT not in sys.path:
-    sys.path.insert(0, _PARENT)
+_PROJECT_ROOT = os.path.dirname(_PARENT)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 if sys.platform == "win32":
     try:
@@ -32,12 +33,12 @@ if sys.platform == "win32":
         pass
 
 # ===== 纯正则基线：跳过看板 LLM 复核（create/change_recipients 直接用 fallback 意图）=====
-import dashboard.subscription_commands as sc  # noqa: E402
+import scripts.dashboard.subscription_commands as sc  # noqa: E402
 sc._maybe_llm_verify = lambda text, intent: intent
 
-from skills import dingtalk_bot as bot  # noqa: E402
-from skills import get_matched_skill  # noqa: E402
-from skills.agent import _call_deepseek  # noqa: E402
+from scripts.skills import dingtalk_bot as bot  # noqa: E402
+from scripts.skills import get_matched_skill  # noqa: E402
+from scripts.skills.agent import _call_deepseek  # noqa: E402
 
 # ===== 顶层意图清单（正则与 LLM 共用）=====
 TOP_LABELS = ["fault_exact", "standard_exact", "pcb_calc", "kanban",

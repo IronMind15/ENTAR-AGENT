@@ -16,10 +16,8 @@ import httpx
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from tools import image_describe, get_tool_names, get_tool_definitions  # noqa: E402
+from scripts.tools import image_describe, get_tool_names, get_tool_definitions  # noqa: E402
 
 
 class _FakeResp:

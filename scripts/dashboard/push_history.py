@@ -24,7 +24,7 @@ from typing import Optional
 logger = logging.getLogger("dashboard.push_history")
 
 # 复用 user_store.db（与订阅同库）
-from user_store import DB_PATH as _DEFAULT_DB_PATH  # noqa: E402
+from scripts.user_store import DB_PATH as _DEFAULT_DB_PATH  # noqa: E402
 
 # 每任务保留的最近推送次数（用户拍板：默认最近 30 次，按任务 30 次）
 KEEP_RECENT = 30

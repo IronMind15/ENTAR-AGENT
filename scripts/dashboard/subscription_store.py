@@ -21,7 +21,7 @@ from typing import Optional
 logger = logging.getLogger("dashboard.subscription")
 
 # 复用 user_store.db（同一 data 目录）
-from user_store import DB_PATH as _DEFAULT_DB_PATH  # noqa: E402
+from scripts.user_store import DB_PATH as _DEFAULT_DB_PATH  # noqa: E402
 
 
 def _now() -> str:

@@ -20,11 +20,6 @@ import logging
 import threading
 import time
 
-# 确保 scripts/ 在模块搜索路径中
-_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _PARENT not in sys.path:
-    sys.path.insert(0, _PARENT)
-
 from dingtalk_stream import (
     DingTalkStreamClient,
     Credential,
@@ -34,10 +29,10 @@ from dingtalk_stream import (
 )
 from dingtalk_stream.frames import CallbackMessage
 
-from config import DINGTALK_CLIENT_ID, DINGTALK_CLIENT_SECRET
+from scripts.config import DINGTALK_CLIENT_ID, DINGTALK_CLIENT_SECRET
 # v1.12.1（M3）：确认词统一收口到 pending_context（类型作用域），
 # confirm_learn 登记项引用 learn 专属补充确认词（manifest/tripwire 消费）
-from pending_context import _LEARN_EXTRA_CONFIRM_RE  # noqa: E402
+from scripts.pending_context import _LEARN_EXTRA_CONFIRM_RE  # noqa: E402
 
 logger = logging.getLogger("dingtalk_bot")
 
@@ -110,7 +105,7 @@ def _is_fast_operation(text: str, user_id: str = "") -> bool:
             or _ADMIN_EXIT_RE.match(t) or _ADMIN_LIST_ALL_RE.match(t)):
         return True
     try:
-        from skills import get_matched_skill
+        from scripts.skills import get_matched_skill
         skill = get_matched_skill(t, user_id)
         return bool(skill and getattr(skill, "priority", 0) > FAST_SKILL_PRIORITY)
     except Exception:
@@ -169,8 +164,8 @@ def _is_learn_command(text: str) -> bool:
 #   "clarify" → 命中业务领域但语义跨域歧义 → 已反问澄清，answer 为反问文案
 #   "proceed" → 无业务领域冲突 → 照旧文件命令
 def _file_command_gate(text: str, user_id: str, action: str, target: str):
-    from routing import ask_clarification, detect_domains, render_clarification
-    from dashboard.subscription_commands import is_kanban_context
+    from scripts.routing import ask_clarification, detect_domains, render_clarification
+    from scripts.dashboard.subscription_commands import is_kanban_context
     domains = detect_domains(text)
     if "kanban" in domains:
         # 含看板领域：唯一领域 → 看板操作让位技能层（「删除看板订阅」）；
@@ -248,7 +243,7 @@ def learn_dingtalk_doc_for_user(user_id: str, kb=None) -> dict:
     kb: 可选，指定知识库（v1.11.5 多库），透传给 doc_learn。
     """
     try:
-        from dashboard.doc_learn import learn_dingtalk_doc
+        from scripts.dashboard.doc_learn import learn_dingtalk_doc
         return learn_dingtalk_doc(user_id, kb=kb)
     except Exception as e:
         logger.warning(f"钉钉文档学习失败: {e}")
@@ -418,7 +413,7 @@ class ErrorQueryHandler(ChatbotHandler):
         # 引导用户回编号 1/2/3，此时「1」「2」是编号回复，不能吞成满意/不满意反馈，
         # 否则澄清/选模板永远无法用编号解除（R2：需回完整标签文字才能继续）。
         if text in ("1", "2"):
-            from pending_context import PT_CLARIFY, PT_KANBAN, get as pc_get
+            from scripts.pending_context import PT_CLARIFY, PT_KANBAN, get as pc_get
             entry = pc_get(user_id)
             consumes_number = False
             if entry:
@@ -429,7 +424,7 @@ class ErrorQueryHandler(ChatbotHandler):
                         (entry.get("payload") or {}).get("intent") == "choose_template"):
                     consumes_number = True
             if not consumes_number:
-                from user_store import get_last_conversation, add_feedback
+                from scripts.user_store import get_last_conversation, add_feedback
                 last = get_last_conversation(user_id)
                 if last:
                     rating = "up" if text == "1" else "down"
@@ -484,7 +479,7 @@ class ErrorQueryHandler(ChatbotHandler):
                 # 多条时拼接一条 assistant 记录：get_last_conversation 能取到完整
                 # 回答（反馈时 last["answer"] 完整），且不额外挤占 get_context 轮数。
                 try:
-                    from skills import memory
+                    from scripts.skills import memory
                     await asyncio.to_thread(memory.add, user_id, "user", text)
                     assistant_record = "\n\n".join(parts)
                     await asyncio.to_thread(
@@ -537,7 +532,7 @@ class ErrorQueryHandler(ChatbotHandler):
         # 注入当前发起者 staff_id + user_id 到工具上下文（contact_find 敏感字段权限、
         # doc_summarize 候选归属判断用）。asyncio.to_thread 会拷贝当前 context，
         # 本线程内工具执行能读到
-        from tools import set_current_staff_id, set_current_user_id
+        from scripts.tools import set_current_staff_id, set_current_user_id
         set_current_staff_id(staff_id)
         set_current_user_id(user_id)
 
@@ -545,7 +540,7 @@ class ErrorQueryHandler(ChatbotHandler):
         # clarify）的取消/确认/澄清解析都在这里拦截；看板 pending 完全让位技能层
         # （技能层 handle 已处理确认/取消，行为不变）。窄拦截：只有取消/确认/可解析
         # 澄清文本才拦，其余一律放行普通流程。
-        from pending_context import (PT_CLARIFY, PT_KANBAN, PT_LEARN, PT_TOOL,
+        from scripts.pending_context import (PT_CLARIFY, PT_KANBAN, PT_LEARN, PT_TOOL,
                                      clear as pc_clear, get as pc_get,
                                      is_cancel_text as pc_is_cancel,
                                      is_confirm_text)
@@ -562,7 +557,7 @@ class ErrorQueryHandler(ChatbotHandler):
                 return {"answer": answer, "source": "pending_cancel"}
             if ptype == PT_CLARIFY:
                 # 判定层澄清（v1.12.0）：上一轮反问澄清的用户回复 → 路由到对应确认流程。
-                from routing import get_clarification, resolve_clarification
+                from scripts.routing import get_clarification, resolve_clarification
                 resolved = resolve_clarification(user_id, stripped)
                 if resolved:
                     _ctx = resolved.get("_ctx") or {}
@@ -578,7 +573,7 @@ class ErrorQueryHandler(ChatbotHandler):
                         # 用户选看板侧 → 让位技能层处理（澄清已清，不拦截）
                         pass
                     elif _action == "delete":
-                        from tools import execute_tool
+                        from scripts.tools import execute_tool
                         value = json.loads(execute_tool(
                             "kb_file_manage", {"action": "delete", "target": _target}))
                         answer = (f"⚠️ 准备删除「{_target}」及对应知识库内容。"
@@ -588,7 +583,7 @@ class ErrorQueryHandler(ChatbotHandler):
                             on_chunk(answer, "done")
                         return {"answer": answer, "source": "knowledge_delete"}
                     elif _action == "relearn":
-                        from tools import execute_tool
+                        from scripts.tools import execute_tool
                         value = json.loads(execute_tool(
                             "kb_file_manage", {"action": "relearn", "target": _target}))
                         answer = (f"⚠️ 准备重新学习「{_target}」并更新知识库索引。"
@@ -601,7 +596,7 @@ class ErrorQueryHandler(ChatbotHandler):
             elif ptype == PT_TOOL and is_confirm_text(stripped, PT_TOOL):
                 # 工具写操作二次确认：直接执行已冻结的工具名和参数，不再让 LLM
                 # 重解释一次，避免目标漂移或凭空声称成功。
-                from tools import confirm_pending_operation
+                from scripts.tools import confirm_pending_operation
                 raw = confirm_pending_operation(user_id)
                 try:
                     value = json.loads(raw) if isinstance(raw, str) else (raw or {})
@@ -617,7 +612,7 @@ class ErrorQueryHandler(ChatbotHandler):
             elif ptype == PT_LEARN and is_confirm_text(stripped, PT_LEARN):
                 # 上传后「推荐入库」确认（v1.11.0）：有 learn pending 且确认词才拦截。
                 try:
-                    from knowledge_review import (clear_pending_learn,
+                    from scripts.knowledge_review import (clear_pending_learn,
                                                   learn_file_path_for_user)
                     pending = entry["payload"]
                     result = learn_file_path_for_user(
@@ -654,7 +649,7 @@ class ErrorQueryHandler(ChatbotHandler):
         # ===== v1.10.2 上传学习 / 我的文件 / 删除 / 管理员模式 =====
         # v1.12.0：删除/重学已走 kb_file_manage 工具（二次确认），bot 不再直接调
         # delete_file_for_user / relearn_file_for_user，import 只保留 learn/list。
-        from knowledge_review import (
+        from scripts.knowledge_review import (
             learn_file_for_user, list_files_for_user,
         )
         t = text.strip()
@@ -708,7 +703,7 @@ class ErrorQueryHandler(ChatbotHandler):
                     on_chunk(clarify_answer, "done")
                 return {"answer": clarify_answer, "source": "clarification"}
             if gate == "proceed":
-                from tools import execute_tool
+                from scripts.tools import execute_tool
                 value = json.loads(execute_tool(
                     "kb_file_manage", {"action": "delete", "target": m.group(1)}))
                 answer = (f"⚠️ 准备删除「{m.group(1)}」及对应知识库内容。"
@@ -728,7 +723,7 @@ class ErrorQueryHandler(ChatbotHandler):
                     on_chunk(clarify_answer, "done")
                 return {"answer": clarify_answer, "source": "clarification"}
             if gate == "proceed":
-                from tools import execute_tool
+                from scripts.tools import execute_tool
                 value = json.loads(execute_tool(
                     "kb_file_manage", {"action": "relearn", "target": m.group(1)}))
                 answer = (f"⚠️ 准备重新学习「{m.group(1)}」并更新知识库索引。"
@@ -746,7 +741,7 @@ class ErrorQueryHandler(ChatbotHandler):
         if m:
             kb_name = (m.group(1) or "").strip()
             try:
-                from kb_registry import list_knowledge_bases, resolve_kb
+                from scripts.kb_registry import list_knowledge_bases, resolve_kb
                 kb = resolve_kb(kb_name) if kb_name else None
             except Exception:
                 kb = None
@@ -791,7 +786,7 @@ class ErrorQueryHandler(ChatbotHandler):
                 on_chunk(doc_answer, "done")
             return {"answer": doc_answer, "source": "dingtalk_doc"}
 
-        from skills import get_matched_skill
+        from scripts.skills import get_matched_skill
 
         skill_cls = get_matched_skill(text, user_id)
         if skill_cls:
@@ -817,7 +812,7 @@ class ErrorQueryHandler(ChatbotHandler):
         无 URL / 导入失败返回 None。
         """
         try:
-            from dingtalk_doc_client import get_doc_client
+            from scripts.dingtalk_doc_client import get_doc_client
         except Exception as e:
             logger.warning(f"dingtalk_doc_client 导入失败: {e}")
             return None
@@ -908,7 +903,7 @@ class ErrorQueryHandler(ChatbotHandler):
             return None
         doc_answer, cand_ids = doc_result
         try:
-            from dashboard.subscription_commands import parse_doc_dashboard_intent
+            from scripts.dashboard.subscription_commands import parse_doc_dashboard_intent
             # v1.11.10：带链接路径放宽文档引用词——杨妍发完链接补一句
             # 「我想做一个每日看板」不再重复文档词，仍应识别创建意图。
             # 长消息的主意图若是“建立每日推送任务”，不能被链接识别的轻量摘要
@@ -919,7 +914,7 @@ class ErrorQueryHandler(ChatbotHandler):
                 or bool(re.search(r"(?:建立|创建|安排|设置).{0,12}(?:任务|推送)|"
                                   r"(?:每日|每天).{0,12}(?:推送|发给我)", text)))
             if wants_dashboard:
-                from skills.dashboard import DashboardSkill
+                from scripts.skills.dashboard import DashboardSkill
                 kb = DashboardSkill._handle_doc_create(
                     user_id, source_candidate_ids=cand_ids, request_text=text)
                 if kb and kb.get("answer"):
@@ -990,7 +985,7 @@ class ErrorQueryHandler(ChatbotHandler):
         v1.11.4：返回候选 id（供「做每日看板」只取本次识别的文档）。
         """
         try:
-            from dashboard.doc_candidates import DocCandidate, get_candidate_store
+            from scripts.dashboard.doc_candidates import DocCandidate, get_candidate_store
             kind = result.get("kind", "")
             field_names = result.get("field_names") or {}
             field_map = {
@@ -1038,7 +1033,7 @@ class ErrorQueryHandler(ChatbotHandler):
             # （含名字+类型+node_id），从而识别后续「总结成推送」指令。
             # 处理器在线程池运行，同步写 SQLite 不阻塞事件循环。
             try:
-                from skills import memory
+                from scripts.skills import memory
                 memory.add(user_id, "user", text)
                 memory.add(user_id, "assistant", answer)
             except Exception as mem_err:
@@ -1084,7 +1079,7 @@ class ErrorQueryHandler(ChatbotHandler):
                 logger.warning(f"  交互卡片回复失败（网络?）: {e}")
             # v1.11.3：卡片消息写入会话记忆，LLM 才能看到刚发的文档
             try:
-                from skills import memory
+                from scripts.skills import memory
                 memory.add(user_id, "user", text)
                 memory.add(user_id, "assistant", answer)
             except Exception as mem_err:
@@ -1129,7 +1124,7 @@ class ErrorQueryHandler(ChatbotHandler):
             logger.info(f"  文件: {file_name}, 大小: {file_size} bytes")
 
             # 下载并保存文件
-            from file_handler import download_and_save_file, format_file_received_message
+            from scripts.file_handler import download_and_save_file, format_file_received_message
 
             result = download_and_save_file(
                 download_code=download_code,
@@ -1154,8 +1149,8 @@ class ErrorQueryHandler(ChatbotHandler):
             # v1.11.0：保存成功后登记「推荐入库」确认（精确对应刚上传文件）
             if result["success"]:
                 try:
-                    from file_handler import _LEARN_EXTENSIONS, get_file_type
-                    from knowledge_review import set_pending_learn
+                    from scripts.file_handler import _LEARN_EXTENSIONS, get_file_type
+                    from scripts.knowledge_review import set_pending_learn
                     if get_file_type(file_name) in _LEARN_EXTENSIONS:
                         set_pending_learn(
                             user_id, result.get("file_path", ""), file_name)
@@ -1166,10 +1161,10 @@ class ErrorQueryHandler(ChatbotHandler):
             img_desc = ""
             if result["success"]:
                 try:
-                    from file_handler import _IMAGE_EXTENSIONS, get_file_type
-                    from config import DASHSCOPE_API_KEY
+                    from scripts.file_handler import _IMAGE_EXTENSIONS, get_file_type
+                    from scripts.config import DASHSCOPE_API_KEY
                     if get_file_type(file_name) in _IMAGE_EXTENSIONS and DASHSCOPE_API_KEY:
-                        from tools import execute_tool
+                        from scripts.tools import execute_tool
                         raw = execute_tool(
                             "image_describe",
                             {"image_path": result.get("file_path", ""),
@@ -1197,7 +1192,7 @@ class ErrorQueryHandler(ChatbotHandler):
 
             # 记录到会话记忆
             try:
-                from skills import memory
+                from scripts.skills import memory
                 if result["success"]:
                     memory.add(user_id, "user", f"[发送文件] {file_name}")
                     memory.add(user_id, "assistant", f"已接收文件 {file_name}")
@@ -1234,7 +1229,7 @@ class ErrorQueryHandler(ChatbotHandler):
             logger.info(f"  收到 {len(image_list)} 张图片")
 
             # 下载并保存图片
-            from file_handler import download_and_save_file
+            from scripts.file_handler import download_and_save_file
 
             saved_files = []  # [{"name", "path"}]
             for i, download_code in enumerate(image_list):
@@ -1256,7 +1251,7 @@ class ErrorQueryHandler(ChatbotHandler):
             #（如「帮我识别这个图片的内容」；image_describe 也支持按文件名查找）
             if saved_files:
                 try:
-                    from skills import memory
+                    from scripts.skills import memory
                     for item in saved_files:
                         if item["path"]:
                             memory.add(user_id, "user",
@@ -1267,10 +1262,10 @@ class ErrorQueryHandler(ChatbotHandler):
                     logger.warning(f"记录图片记忆失败: {mem_err}")
 
             # 识图：已配置 key 时逐张调 image_describe（千问视觉）
-            from config import DASHSCOPE_API_KEY
+            from scripts.config import DASHSCOPE_API_KEY
             descriptions = []  # [{"name", "desc", "ok"}]
             if saved_files and DASHSCOPE_API_KEY:
-                from tools import execute_tool
+                from scripts.tools import execute_tool
                 for item in saved_files:
                     if not item["path"]:
                         continue
@@ -1345,7 +1340,7 @@ class ErrorQueryHandler(ChatbotHandler):
             return
 
         try:
-            from user_store import get_store
+            from scripts.user_store import get_store
             store = get_store()
 
             # 检查是否需要同步（无 staff_id / 超过 24h 未更新）

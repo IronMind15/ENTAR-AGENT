@@ -32,7 +32,7 @@ def learn_dingtalk_doc(user_id: str, client=None, kb=None) -> dict:
                 "chunk_count": 0, "records": 0}
 
     if client is None:
-        from dingtalk_doc_client import get_doc_client
+        from scripts.dingtalk_doc_client import get_doc_client
         client = get_doc_client()
     try:
         result = client.read_document(
@@ -59,7 +59,7 @@ def learn_dingtalk_doc(user_id: str, client=None, kb=None) -> dict:
     node_id = cand.node_id or result.get("node_id", "")
     file_name = f"钉钉文档_{node_id[:8]}.md"
 
-    from doc_mgr.engine import process_text
+    from scripts.doc_mgr.engine import process_text
     # v1.11.5：指定知识库则入库到该库（collection/department 由 kb 提供），
     # 未指定默认标准知识库 standards / public。
     if kb:

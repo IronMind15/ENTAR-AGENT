@@ -27,7 +27,7 @@ class Collector:
     @property
     def client(self):
         if self._client is None:
-            from dingtalk_doc_client import get_doc_client
+            from scripts.dingtalk_doc_client import get_doc_client
             self._client = get_doc_client()
         return self._client
 

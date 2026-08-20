@@ -9,10 +9,8 @@ from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from dingtalk_doc_client import (  # noqa: E402
+from scripts.dingtalk_doc_client import (  # noqa: E402
     DingTalkDocClient, DingTalkDocPermissionError, _ALIDOCS_NODE_RE,
     _DOC_SUMMARY_BLOCKS, _DOC_FULL_BLOCKS, SUMMARY_RECORD_LIMIT,
 )
@@ -67,8 +65,8 @@ class DocumentMetadataTests(unittest.TestCase):
             "returncode": 0,
             "stdout": '{"success":true,"name":"31-32周部门周报","extension":"adoc"}',
         })()
-        with patch("dingtalk_doc_client.shutil.which", return_value="dws.cmd"), \
-             patch("dingtalk_doc_client.subprocess.run", return_value=completed) as run:
+        with patch("scripts.dingtalk_doc_client.shutil.which", return_value="dws.cmd"), \
+             patch("scripts.dingtalk_doc_client.subprocess.run", return_value=completed) as run:
             self.assertEqual(client.get_document_name("node-1"), "31-32周部门周报")
             self.assertEqual(client.get_document_name("node-1"), "31-32周部门周报")
         run.assert_called_once()
@@ -88,19 +86,19 @@ class ResolveOperatorIdTests(unittest.TestCase):
 
     def test_staff_id_falls_back_to_unionid(self):
         # staff_id → contact_api.get_user_detail → unionid
-        with patch("contact_api.get_contact_client") as mock_get:
+        with patch("scripts.contact_api.get_contact_client") as mock_get:
             mock_client = mock_get.return_value
             mock_client.get_user_detail.return_value = {"unionid": "union-from-api"}
             got = self.client.resolve_operator_id(operator_id="", staff_id="staff-1")
         self.assertEqual("union-from-api", got)
         # 二次调用命中缓存，不再请求
-        with patch("contact_api.get_contact_client") as mock_get2:
+        with patch("scripts.contact_api.get_contact_client") as mock_get2:
             got2 = self.client.resolve_operator_id(operator_id="", staff_id="staff-1")
         mock_get2.assert_not_called()
         self.assertEqual("union-from-api", got2)
 
     def test_staff_id_no_unionid_raises(self):
-        with patch("contact_api.get_contact_client") as mock_get:
+        with patch("scripts.contact_api.get_contact_client") as mock_get:
             mock_client = mock_get.return_value
             mock_client.get_user_detail.return_value = {}
             with self.assertRaises(RuntimeError) as ctx:
@@ -120,7 +118,7 @@ class DetectKindErrorHandlingTests(unittest.TestCase):
             client_id="cid", client_secret="csecret", api_base="https://x")
 
     def test_permission_error_propagates(self):
-        from dingtalk_doc_client import DingTalkDocPermissionError
+        from scripts.dingtalk_doc_client import DingTalkDocPermissionError
         with patch.object(self.client, "list_sheets",
                           side_effect=DingTalkDocPermissionError("无权限")):
             with self.assertRaises(DingTalkDocPermissionError):
@@ -132,12 +130,12 @@ class BotDocLinkTests(unittest.TestCase):
 
     def setUp(self):
         # 隔离文档候选存储，避免污染真实 data/user_store.db
-        from dashboard.doc_candidates import DocCandidateStore
+        from scripts.dashboard.doc_candidates import DocCandidateStore
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         self._db_path = path
         self._cand = DocCandidateStore(db_path=path)
-        self._patch_cand = patch("dashboard.doc_candidates.get_candidate_store",
+        self._patch_cand = patch("scripts.dashboard.doc_candidates.get_candidate_store",
                                  return_value=self._cand)
         self._patch_cand.start()
         self.addCleanup(self._patch_cand.stop)
@@ -154,7 +152,7 @@ class BotDocLinkTests(unittest.TestCase):
                     pass
 
     def _make_handler(self):
-        from skills import dingtalk_bot
+        from scripts.skills import dingtalk_bot
         return object.__new__(dingtalk_bot.ErrorQueryHandler)
 
     def test_plain_text_returns_none(self):
@@ -166,7 +164,7 @@ class BotDocLinkTests(unittest.TestCase):
         fake = {"ok": True, "kind": "notable", "node_id": "n1",
                 "records": [{"fields": {"名称": "A", "状态": "滞后"}}],
                 "message": "读取成功"}
-        with patch("dingtalk_doc_client.get_doc_client") as mock_get:
+        with patch("scripts.dingtalk_doc_client.get_doc_client") as mock_get:
             mock_get.return_value.resolve_operator_id.return_value = "union1"
             mock_get.return_value.read_document.return_value = fake
             answer, _ = handler._handle_dingtalk_doc_link(
@@ -184,7 +182,7 @@ class BotDocLinkTests(unittest.TestCase):
 
     def test_doc_link_read_failure(self):
         handler = self._make_handler()
-        with patch("dingtalk_doc_client.get_doc_client") as mock_get:
+        with patch("scripts.dingtalk_doc_client.get_doc_client") as mock_get:
             mock_get.return_value.resolve_operator_id.return_value = "union1"
             mock_get.return_value.read_document.side_effect = RuntimeError("无权限")
             answer, _ = handler._handle_dingtalk_doc_link(
@@ -195,7 +193,7 @@ class BotDocLinkTests(unittest.TestCase):
         handler = self._make_handler()
         fake = {"ok": False, "kind": "workbook", "node_id": "n1",
                 "message": "暂仅支持 AI表格"}
-        with patch("dingtalk_doc_client.get_doc_client") as mock_get:
+        with patch("scripts.dingtalk_doc_client.get_doc_client") as mock_get:
             mock_get.return_value.resolve_operator_id.return_value = "union1"
             mock_get.return_value.read_document.return_value = fake
             answer, _ = handler._handle_dingtalk_doc_link(
@@ -208,7 +206,7 @@ class BotDocLinkTests(unittest.TestCase):
         fakes = [{"ok": True, "kind": "notable", "node_id": f"n{i}",
                   "records": [{"fields": {"名称": f"名{i}"}}], "message": "ok"}
                  for i in range(1, 7)]  # 6 份验证已去 5 个上限
-        with patch("dingtalk_doc_client.get_doc_client") as mock_get:
+        with patch("scripts.dingtalk_doc_client.get_doc_client") as mock_get:
             mock_get.return_value.resolve_operator_id.return_value = "union1"
             mock_get.return_value.read_document.side_effect = fakes
             answer, _ = handler._handle_dingtalk_doc_link(
@@ -224,7 +222,7 @@ class BotDocLinkTests(unittest.TestCase):
         handler = self._make_handler()
         fake = {"ok": True, "kind": "notable", "node_id": "n1",
                 "records": [{"fields": {"名称": "A"}}], "message": "ok"}
-        with patch("dingtalk_doc_client.get_doc_client") as mock_get:
+        with patch("scripts.dingtalk_doc_client.get_doc_client") as mock_get:
             mock_get.return_value.resolve_operator_id.return_value = "union1"
             mock_get.return_value.read_document.return_value = fake
             handler._handle_dingtalk_doc_link(
@@ -239,7 +237,7 @@ class BotDocLinkTests(unittest.TestCase):
         """链接夹杂说明文字也能提取（不只整条消息是 URL）"""
         handler = self._make_handler()
         fake = {"ok": True, "kind": "notable", "node_id": "n1", "records": []}
-        with patch("dingtalk_doc_client.get_doc_client") as mock_get:
+        with patch("scripts.dingtalk_doc_client.get_doc_client") as mock_get:
             mock_get.return_value.resolve_operator_id.return_value = "union1"
             mock_get.return_value.read_document.return_value = fake
             answer, _ = handler._handle_dingtalk_doc_link(
@@ -253,8 +251,8 @@ class BotDocLinkTests(unittest.TestCase):
         handler = self._make_handler()
         fake = {"ok": True, "kind": "notable", "node_id": "n1",
                 "records": [{"fields": {"名称": "A"}}], "message": "ok"}
-        with patch("dingtalk_doc_client.get_doc_client") as mock_get, \
-             patch("skills.dashboard.DashboardSkill._handle_doc_create",
+        with patch("scripts.dingtalk_doc_client.get_doc_client") as mock_get, \
+             patch("scripts.skills.dashboard.DashboardSkill._handle_doc_create",
                    return_value={"answer": "好的，将按以下文档做每日看板，请确认："
                                         "📋 数据板块：…\n回复「确认」即可订阅。"}) as create:
             mock_get.return_value.resolve_operator_id.return_value = "union1"
@@ -275,8 +273,8 @@ class BotDocLinkTests(unittest.TestCase):
         request = ("把这个文件夹建立一个每日看板任务，每天早晨八点半发给我，"
                    "给出结论、需要关注的问题和需要协调的事情 "
                    "https://alidocs.dingtalk.com/i/nodes/f1")
-        with patch("dingtalk_doc_client.get_doc_client") as mock_get, \
-             patch("skills.dashboard.DashboardSkill._handle_doc_create",
+        with patch("scripts.dingtalk_doc_client.get_doc_client") as mock_get, \
+             patch("scripts.skills.dashboard.DashboardSkill._handle_doc_create",
                    return_value={"answer": "任务草稿：08:30，管理晨报模板，回复确认。"}) as create:
             mock_get.return_value.resolve_operator_id.return_value = "union1"
             mock_get.return_value.read_document.return_value = fake
@@ -290,8 +288,8 @@ class BotDocLinkTests(unittest.TestCase):
         handler = self._make_handler()
         fake = {"ok": True, "kind": "notable", "node_id": "n1",
                 "records": [{"fields": {"名称": "A"}}], "message": "ok"}
-        with patch("dingtalk_doc_client.get_doc_client") as mock_get, \
-             patch("skills.dashboard.DashboardSkill._handle_doc_create") as m_create:
+        with patch("scripts.dingtalk_doc_client.get_doc_client") as mock_get, \
+             patch("scripts.skills.dashboard.DashboardSkill._handle_doc_create") as m_create:
             mock_get.return_value.resolve_operator_id.return_value = "union1"
             mock_get.return_value.read_document.return_value = fake
             answer = handler._handle_doc_link_with_kanban(
@@ -309,8 +307,8 @@ class BotDocLinkTests(unittest.TestCase):
         content = {"text": "帮我把这几个文件做成每日看板，每天九点发日报 "
                            "https://alidocs.dingtalk.com/i/nodes/n1"}
         bot_msg = _mock.MagicMock()
-        with patch("dingtalk_doc_client.get_doc_client") as mock_get, \
-             patch("skills.dashboard.DashboardSkill._handle_doc_create",
+        with patch("scripts.dingtalk_doc_client.get_doc_client") as mock_get, \
+             patch("scripts.skills.dashboard.DashboardSkill._handle_doc_create",
                    return_value={"answer": "好的，将按以下文档做每日看板，请确认：…"}):
             mock_get.return_value.resolve_operator_id.return_value = "union1"
             mock_get.return_value.read_document.return_value = fake
@@ -659,12 +657,12 @@ class BotDocLinkKindDocTests(unittest.TestCase):
     """v1.11.1 bot 处理 kind=doc 链接：回复含「文档」+ 登记看板源"""
 
     def setUp(self):
-        from dashboard.doc_candidates import DocCandidateStore
+        from scripts.dashboard.doc_candidates import DocCandidateStore
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         self._db_path = path
         self._cand = DocCandidateStore(db_path=path)
-        self._patch_cand = patch("dashboard.doc_candidates.get_candidate_store",
+        self._patch_cand = patch("scripts.dashboard.doc_candidates.get_candidate_store",
                                  return_value=self._cand)
         self._patch_cand.start()
         self.addCleanup(self._patch_cand.stop)
@@ -681,7 +679,7 @@ class BotDocLinkKindDocTests(unittest.TestCase):
                     pass
 
     def _make_handler(self):
-        from skills import dingtalk_bot
+        from scripts.skills import dingtalk_bot
         return object.__new__(dingtalk_bot.ErrorQueryHandler)
 
     def test_doc_kind_replies_and_registers_enabled(self):
@@ -689,7 +687,7 @@ class BotDocLinkKindDocTests(unittest.TestCase):
         fake = {"ok": True, "kind": "doc", "node_id": "n1",
                 "records": [{"类型": "段落", "内容": "周会记录"}],
                 "markdown": "周会记录", "message": "ok"}
-        with patch("dingtalk_doc_client.get_doc_client") as mock_get:
+        with patch("scripts.dingtalk_doc_client.get_doc_client") as mock_get:
             mock_get.return_value.resolve_operator_id.return_value = "union1"
             mock_get.return_value.read_document.return_value = fake
             answer, _ = handler._handle_dingtalk_doc_link(
@@ -842,12 +840,12 @@ class BotSummaryModeTests(unittest.TestCase):
     """v1.11.3 bot 识别时传 summary=True + 回复含名字概要"""
 
     def setUp(self):
-        from dashboard.doc_candidates import DocCandidateStore
+        from scripts.dashboard.doc_candidates import DocCandidateStore
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         self._db_path = path
         self._cand = DocCandidateStore(db_path=path)
-        self._patch_cand = patch("dashboard.doc_candidates.get_candidate_store",
+        self._patch_cand = patch("scripts.dashboard.doc_candidates.get_candidate_store",
                                  return_value=self._cand)
         self._patch_cand.start()
         self.addCleanup(self._patch_cand.stop)
@@ -864,14 +862,14 @@ class BotSummaryModeTests(unittest.TestCase):
                     pass
 
     def _make_handler(self):
-        from skills import dingtalk_bot
+        from scripts.skills import dingtalk_bot
         return object.__new__(dingtalk_bot.ErrorQueryHandler)
 
     def test_reading_uses_summary_mode(self):
         handler = self._make_handler()
         fake = {"ok": True, "kind": "notable", "node_id": "n1",
                 "records": [{"fields": {"名称": "A"}}], "message": "ok"}
-        with patch("dingtalk_doc_client.get_doc_client") as mock_get:
+        with patch("scripts.dingtalk_doc_client.get_doc_client") as mock_get:
             mock_get.return_value.resolve_operator_id.return_value = "union1"
             mock_get.return_value.read_document.return_value = fake
             handler._handle_dingtalk_doc_link(
@@ -883,7 +881,7 @@ class BotSummaryModeTests(unittest.TestCase):
         handler = self._make_handler()
         fake = {"ok": True, "kind": "notable", "node_id": "n1", "name": "33周汇总",
                 "records": [{"fields": {"名称": "项目A"}}], "message": "ok"}
-        with patch("dingtalk_doc_client.get_doc_client") as mock_get:
+        with patch("scripts.dingtalk_doc_client.get_doc_client") as mock_get:
             mock_get.return_value.resolve_operator_id.return_value = "union1"
             mock_get.return_value.read_document.return_value = fake
             answer, _ = handler._handle_dingtalk_doc_link(
@@ -904,8 +902,8 @@ class BotSummaryModeTests(unittest.TestCase):
         fake = {"ok": True, "kind": "notable", "node_id": "n1",
                 "records": [{"fields": {"名称": "A"}}], "message": "ok"}
         bot_msg = _mock.MagicMock()
-        with patch("dingtalk_doc_client.get_doc_client") as mock_get, \
-             patch("skills.memory.add") as m_add:
+        with patch("scripts.dingtalk_doc_client.get_doc_client") as mock_get, \
+             patch("scripts.skills.memory.add") as m_add:
             mock_get.return_value.resolve_operator_id.return_value = "union1"
             mock_get.return_value.read_document.return_value = fake
             handler._handle_rich_text_message(bot_msg, "u1", "s1", "s")
@@ -924,8 +922,8 @@ class BotSummaryModeTests(unittest.TestCase):
                 "records": [{"fields": {"名称": "A"}}], "message": "ok"}
         content = {"text": "https://alidocs.dingtalk.com/i/nodes/n1"}
         bot_msg = _mock.MagicMock()
-        with patch("dingtalk_doc_client.get_doc_client") as mock_get, \
-             patch("skills.memory.add") as m_add:
+        with patch("scripts.dingtalk_doc_client.get_doc_client") as mock_get, \
+             patch("scripts.skills.memory.add") as m_add:
             mock_get.return_value.resolve_operator_id.return_value = "union1"
             mock_get.return_value.read_document.return_value = fake
             handler._handle_interactive_card_message(content, bot_msg, "u1", "s1", "s")
@@ -941,7 +939,7 @@ class ReadDocumentUnknownKindTests(unittest.TestCase):
     def test_unknown_kind_friendly_message(self):
         """同事杨妍发钉盘共享文件链接，三类接口全 400 → detect_kind unknown，
         提示不能裸内部类型名「（unknown）」，要给出钉盘/视图/子表线索与替代路径"""
-        from dingtalk_doc_client import DingTalkDocClient
+        from scripts.dingtalk_doc_client import DingTalkDocClient
         client = object.__new__(DingTalkDocClient)
         client.parse_doc_url = lambda url: {"node_id": "n1", "sheet_id": ""}
         client.get_document_name = lambda node_id: ""
@@ -957,7 +955,7 @@ class DetectKindFolderTests(unittest.TestCase):
     """v1.12.3：dws 权威元信息识别文件夹（nodeType=folder 前置探测，三类 API 不再白试）"""
 
     def _client_with_meta(self, meta: dict):
-        from dingtalk_doc_client import DingTalkDocClient
+        from scripts.dingtalk_doc_client import DingTalkDocClient
         client = object.__new__(DingTalkDocClient)
         client._kind_cache = {}
         client._metadata_cache = {}
@@ -995,7 +993,7 @@ class ListFolderChildrenTests(unittest.TestCase):
     """v1.12.3：dws drive list 枚举文件夹子节点（folder 参数用 nodeId 作 dentryUuid）"""
 
     def test_parses_children_and_filters_file(self):
-        from dingtalk_doc_client import DingTalkDocClient
+        from scripts.dingtalk_doc_client import DingTalkDocClient
         client = object.__new__(DingTalkDocClient)
         client._metadata_cache = {}
         client._allow_dws_metadata = True
@@ -1010,8 +1008,8 @@ class ListFolderChildrenTests(unittest.TestCase):
         def fake_run(cmd, **kw):
             captured["cmd"] = cmd
             return FakeCompleted()
-        with patch("dingtalk_doc_client.shutil.which", return_value="dws"), \
-             patch("dingtalk_doc_client.subprocess.run", side_effect=fake_run):
+        with patch("scripts.dingtalk_doc_client.shutil.which", return_value="dws"), \
+             patch("scripts.dingtalk_doc_client.subprocess.run", side_effect=fake_run):
             children = client.list_folder_children("QBnd5ExVEvq")
         # folder 参数须用文件夹 nodeId（dentryUuid），非 folderId
         self.assertIn("--folder", captured["cmd"])
@@ -1024,7 +1022,7 @@ class ListFolderChildrenTests(unittest.TestCase):
         self.assertNotIn("f1", [c["nodeId"] for c in children])
 
     def test_non_folder_returns_empty(self):
-        from dingtalk_doc_client import DingTalkDocClient
+        from scripts.dingtalk_doc_client import DingTalkDocClient
         client = object.__new__(DingTalkDocClient)
         client._metadata_cache = {}
         client._allow_dws_metadata = True
@@ -1032,7 +1030,7 @@ class ListFolderChildrenTests(unittest.TestCase):
         self.assertEqual(client.list_folder_children("n1"), [])
 
     def test_failure_degrades_to_empty(self):
-        from dingtalk_doc_client import DingTalkDocClient
+        from scripts.dingtalk_doc_client import DingTalkDocClient
         client = object.__new__(DingTalkDocClient)
         client._metadata_cache = {}
         client._allow_dws_metadata = True
@@ -1044,8 +1042,8 @@ class ListFolderChildrenTests(unittest.TestCase):
             stdout = ""
             stderr = "RESOURCE_NOT_FOUND"
 
-        with patch("dingtalk_doc_client.shutil.which", return_value="dws"), \
-             patch("dingtalk_doc_client.subprocess.run",
+        with patch("scripts.dingtalk_doc_client.shutil.which", return_value="dws"), \
+             patch("scripts.dingtalk_doc_client.subprocess.run",
                    return_value=FakeFailed()):
             self.assertEqual(client.list_folder_children("f1"), [])
 
@@ -1054,7 +1052,7 @@ class ReadDocumentFolderTests(unittest.TestCase):
     """v1.12.3：read_document folder 分支返回子节点枚举 + 文件夹名"""
 
     def test_folder_branch_returns_children_and_name(self):
-        from dingtalk_doc_client import DingTalkDocClient
+        from scripts.dingtalk_doc_client import DingTalkDocClient
         client = object.__new__(DingTalkDocClient)
         client.parse_doc_url = lambda url: {"node_id": "f1", "sheet_id": ""}
         client.get_document_name = lambda node_id: "部门周报"
@@ -1075,7 +1073,7 @@ class ReadDocumentFolderTests(unittest.TestCase):
         self.assertIn("33周部门周报", result["message"])
 
     def test_folder_empty_children_message(self):
-        from dingtalk_doc_client import DingTalkDocClient
+        from scripts.dingtalk_doc_client import DingTalkDocClient
         client = object.__new__(DingTalkDocClient)
         client.parse_doc_url = lambda url: {"node_id": "f1", "sheet_id": ""}
         client.get_document_name = lambda node_id: "部门周报"
@@ -1092,12 +1090,12 @@ class BotFolderLinkTests(unittest.TestCase):
     """v1.12.3 bot 识别文件夹链接：回复文件夹概要 + 登记看板源（enabled）"""
 
     def setUp(self):
-        from dashboard.doc_candidates import DocCandidateStore
+        from scripts.dashboard.doc_candidates import DocCandidateStore
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         self._db_path = path
         self._cand = DocCandidateStore(db_path=path)
-        self._patch_cand = patch("dashboard.doc_candidates.get_candidate_store",
+        self._patch_cand = patch("scripts.dashboard.doc_candidates.get_candidate_store",
                                  return_value=self._cand)
         self._patch_cand.start()
         self.addCleanup(self._patch_cand.stop)
@@ -1114,7 +1112,7 @@ class BotFolderLinkTests(unittest.TestCase):
                     pass
 
     def _make_handler(self):
-        from skills import dingtalk_bot
+        from scripts.skills import dingtalk_bot
         return object.__new__(dingtalk_bot.ErrorQueryHandler)
 
     def test_folder_link_replies_and_registers_enabled(self):
@@ -1125,7 +1123,7 @@ class BotFolderLinkTests(unittest.TestCase):
                     {"nodeId": "a1", "name": "33周部门周报", "nodeType": "file", "updateTime": 100},
                     {"nodeId": "a2", "name": "29-30周部门周报", "nodeType": "file", "updateTime": 50},
                 ]}
-        with patch("dingtalk_doc_client.get_doc_client") as mock_get:
+        with patch("scripts.dingtalk_doc_client.get_doc_client") as mock_get:
             mock_get.return_value.resolve_operator_id.return_value = "union1"
             mock_get.return_value.read_document.return_value = fake
             answer, _ = handler._handle_dingtalk_doc_link(

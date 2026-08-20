@@ -22,8 +22,8 @@ if sys.platform == "win32":
     sys.stdin.reconfigure(encoding="utf-8")
     sys.stdout.reconfigure(encoding="utf-8")
 
-from doc_mgr.engine import process_file
-from paths import STANDARDS_DIR
+from scripts.doc_mgr.engine import process_file
+from scripts.paths import STANDARDS_DIR
 
 STD_DIR = str(STANDARDS_DIR)
 

@@ -9,12 +9,10 @@ from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from skills.dashboard import DashboardSkill  # noqa: E402
-from dashboard.config_model import SourceConfig  # noqa: E402
-from dashboard.template_store import _DEFAULT_SECTION_SPEC  # noqa: E402
+from scripts.skills.dashboard import DashboardSkill  # noqa: E402
+from scripts.dashboard.config_model import SourceConfig  # noqa: E402
+from scripts.dashboard.template_store import _DEFAULT_SECTION_SPEC  # noqa: E402
 
 # A1（v1.12.6）后 dashboard_sources.json 静态配置已清空（数据源全走动态候选）。
 # v1.12.7（D1）创建流程数据源 = 任务级快照 owner 当前 enabled 候选（任务唯一
@@ -38,11 +36,11 @@ def _patch_sources_fixture(owner: str = "u1"):
     """
     import os
     import tempfile
-    from dashboard.doc_candidates import DocCandidate, DocCandidateStore
+    from scripts.dashboard.doc_candidates import DocCandidate, DocCandidateStore
 
     stack = contextlib.ExitStack()
     stack.enter_context(
-        mock.patch("dashboard.config_model.load_sources",
+        mock.patch("scripts.dashboard.config_model.load_sources",
                    return_value=_FIXTURE_SOURCES))
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
@@ -52,7 +50,7 @@ def _patch_sources_fixture(owner: str = "u1"):
     store.add(DocCandidate(user_id=owner, url="u2", node_id="n2",
                            kind="notable", enabled=True, name="整机下线测试问题"))
     stack.enter_context(
-        mock.patch("dashboard.doc_candidates.get_candidate_store",
+        mock.patch("scripts.dashboard.doc_candidates.get_candidate_store",
                    return_value=store))
 
     def _cleanup():
@@ -79,7 +77,7 @@ class MatchTests(unittest.TestCase):
     def test_concept_question_released_to_agent(self):
         """v1.12.3：概念疑问句「看板数据源和看板任务是分开的吗」→ LLM 判非订阅管理
         放行给 Agent 正常问答（修复 _QUERY_RE 的「看板.*任务」吞问题）"""
-        from dashboard import subscription_commands as sub_cmd
+        from scripts.dashboard import subscription_commands as sub_cmd
         q = "现在的看板数据源和看板任务是分开的吗"
         with mock.patch.object(sub_cmd, "_llm_verify_subscription",
                                return_value=None):
@@ -87,7 +85,7 @@ class MatchTests(unittest.TestCase):
 
     def test_concept_question_verified_query(self):
         """同一句 LLM 判是真订阅查询 → 保底接管（match True）"""
-        from dashboard import subscription_commands as sub_cmd
+        from scripts.dashboard import subscription_commands as sub_cmd
         q = "现在的看板数据源和看板任务是分开的吗"
         with mock.patch.object(sub_cmd, "_llm_verify_subscription",
                                return_value="query"):
@@ -95,7 +93,7 @@ class MatchTests(unittest.TestCase):
 
     def test_clear_query_no_llm_fast_path(self):
         """v1.12.3：明确查询（无疑问词）→ 正则快速路径，不付 LLM 成本"""
-        from dashboard import subscription_commands as sub_cmd
+        from scripts.dashboard import subscription_commands as sub_cmd
         with mock.patch.object(sub_cmd, "_llm_verify_subscription",
                                side_effect=AssertionError("不应调用 LLM")):
             for text in ("帮我查看现在的看板任务有哪些",
@@ -104,7 +102,7 @@ class MatchTests(unittest.TestCase):
 
     def test_real_time_query_not_match(self):
         """实时查询看板（今天怎么样/什么情况）→ 放给 Agent 调 dash_query 工具"""
-        with mock.patch("dashboard.subscription_commands.has_recent_kanban_activity",
+        with mock.patch("scripts.dashboard.subscription_commands.has_recent_kanban_activity",
                         return_value=False):
             for text in ("看板今天怎么样", "看板现在什么情况", "今天有哪些滞后项目"):
                 self.assertFalse(DashboardSkill.match(text), text)
@@ -114,19 +112,19 @@ class MatchTests(unittest.TestCase):
             self.assertFalse(DashboardSkill.match(text), text)
 
     def test_confirm_word_needs_recent_activity(self):
-        with mock.patch("dashboard.subscription_commands.has_recent_kanban_activity",
+        with mock.patch("scripts.dashboard.subscription_commands.has_recent_kanban_activity",
                         return_value=False):
             # 无近期活动 → 不拦截
             self.assertFalse(DashboardSkill.match("确认"))
 
     def test_confirm_word_with_recent_activity(self):
-        with mock.patch("dashboard.subscription_commands.has_recent_kanban_activity",
+        with mock.patch("scripts.dashboard.subscription_commands.has_recent_kanban_activity",
                         return_value=True):
             self.assertTrue(DashboardSkill.match("确认"))
 
     def test_natural_delete_confirmation_matches(self):
         """真实话术“是的，全部删除”应能确认已有删除提案。"""
-        with mock.patch("dashboard.subscription_commands.has_recent_kanban_activity",
+        with mock.patch("scripts.dashboard.subscription_commands.has_recent_kanban_activity",
                         return_value=True):
             self.assertTrue(DashboardSkill.match("是的，全部删除"))
 
@@ -134,16 +132,16 @@ class MatchTests(unittest.TestCase):
         """v1.12.4 回归：创建看板确认后用户回「对的」必须被 dashboard 承接，
         不能落 Agent 被 LLM 谎称「已开通」而实际未建订阅（袁会荧实测冲突）。
         有近期看板活动（有 pending）时「对的」是确认词。"""
-        with mock.patch("dashboard.subscription_commands.has_recent_kanban_activity",
+        with mock.patch("scripts.dashboard.subscription_commands.has_recent_kanban_activity",
                         return_value=True):
             for w in ("对的", "对呀", "是的呀", "好呀"):
                 self.assertTrue(DashboardSkill.match(w), w)
-        with mock.patch("dashboard.subscription_commands.has_recent_kanban_activity",
+        with mock.patch("scripts.dashboard.subscription_commands.has_recent_kanban_activity",
                         return_value=False):
             self.assertFalse(DashboardSkill.match("对的"))
 
     def test_unrelated_does_not_match(self):
-        with mock.patch("dashboard.subscription_commands.has_recent_kanban_activity",
+        with mock.patch("scripts.dashboard.subscription_commands.has_recent_kanban_activity",
                         return_value=False):
             self.assertFalse(DashboardSkill.match("你好"))
             self.assertFalse(DashboardSkill.match("d4-1 是什么故障"))
@@ -152,8 +150,8 @@ class MatchTests(unittest.TestCase):
         """审查 Critical 1 回归：A 聊完看板后 B 说「确认」不得被 dashboard 拦截。
         此前 match 用全局活动时间戳，A 的 pending 会让 B 的确认词被误接住，
         返回「您还没有待确认的看板操作」误导提示。"""
-        from dashboard import subscription_commands as sub_cmd
-        from skills import get_matched_skill
+        from scripts.dashboard import subscription_commands as sub_cmd
+        from scripts.skills import get_matched_skill
 
         sub_cmd.set_pending("userA", {"action": "create", "data_sources": []})
         try:
@@ -173,18 +171,18 @@ class HandleCreateTests(unittest.TestCase):
     """创建订阅：反问 → 确认 → 落地 + 推样例"""
 
     def setUp(self):
-        self.patch_pending = mock.patch("pending_context._pending", {})
+        self.patch_pending = mock.patch("scripts.pending_context._pending", {})
         self.patch_pending.start()
         self.addCleanup(self.patch_pending.stop)
         # 用临时订阅存储
         import tempfile, os
-        from dashboard.subscription_store import SubscriptionStore
+        from scripts.dashboard.subscription_store import SubscriptionStore
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         self._db_path = path
         self._store = SubscriptionStore(db_path=path)
         self.patch_store = mock.patch(
-            "skills.dashboard.get_subscription_store",
+            "scripts.skills.dashboard.get_subscription_store",
             return_value=self._store)
         self.patch_store.start()
         self.addCleanup(self.patch_store.stop)
@@ -200,8 +198,8 @@ class HandleCreateTests(unittest.TestCase):
                 except OSError:
                     pass
 
-    @mock.patch("skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
-    @mock.patch("skills.dashboard.DashboardSkill._user_template_hint", return_value="")
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._user_template_hint", return_value="")
     def test_create_flow(self, mock_hint, mock_staff):
         # 1. 说「帮我推个看板」→ 反问（v1.12.7 创建数据源 = 任务级快照
         #    owner 当前 enabled 候选）
@@ -212,7 +210,7 @@ class HandleCreateTests(unittest.TestCase):
             self.assertEqual(r["source"], "dashboard")
             self.assertIn("确认", r["answer"])
             self.assertIn("研发项目现况表", r["answer"])
-            with mock.patch("skills.dashboard.DashboardSkill._push_sample",
+            with mock.patch("scripts.skills.dashboard.DashboardSkill._push_sample",
                             return_value="已推送示例看板") as m_push:
                 r2 = DashboardSkill.handle("确认", user_id="union001")
             self.assertIn("开通", r2["answer"])
@@ -227,9 +225,9 @@ class HandleCreateTests(unittest.TestCase):
             self.assertEqual(subs[0].owner_staff_id, "staff001")
             self.assertIn("staff001", subs[0].recipients)
 
-    @mock.patch("skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
-    @mock.patch("skills.dashboard.DashboardSkill._push_sample", return_value="")
-    @mock.patch("skills.dashboard.DashboardSkill._user_template_hint", return_value="")
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._push_sample", return_value="")
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._user_template_hint", return_value="")
     def test_create_sets_defaults(self, m_hint, m_push, mock_staff):
         # v1.12.7（D1）：创建数据源 = 任务级快照 owner 当前 enabled 候选（doc_1/doc_2）
         with _patch_sources_fixture(owner="u1"):
@@ -251,17 +249,17 @@ class HandleChangeTests(unittest.TestCase):
     """改时间/频率/接收人：需先有订阅"""
 
     def setUp(self):
-        self.patch_pending = mock.patch("pending_context._pending", {})
+        self.patch_pending = mock.patch("scripts.pending_context._pending", {})
         self.patch_pending.start()
         self.addCleanup(self.patch_pending.stop)
         import tempfile, os
-        from dashboard.subscription_store import Subscription, SubscriptionStore
+        from scripts.dashboard.subscription_store import Subscription, SubscriptionStore
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         self._db_path = path
         self._store = SubscriptionStore(db_path=path)
         self.patch_store = mock.patch(
-            "skills.dashboard.get_subscription_store",
+            "scripts.skills.dashboard.get_subscription_store",
             return_value=self._store)
         self.patch_store.start()
         self.addCleanup(self.patch_store.stop)
@@ -294,7 +292,7 @@ class HandleChangeTests(unittest.TestCase):
         DashboardSkill.handle("确认", user_id="u1")
         self.assertEqual(self._store.get(self._sub_id).weekdays, "1,5")
 
-    @mock.patch("dashboard.subscription_commands.resolve_recipient",
+    @mock.patch("scripts.dashboard.subscription_commands.resolve_recipient",
                 side_effect=lambda name: {"张工": "staff_zhang"}[name])
     def test_change_recipient_flow(self, mock_resolve):
         DashboardSkill.handle("也推给张工", user_id="u1")
@@ -311,8 +309,8 @@ class HandleSetPerSourceTests(unittest.TestCase):
 
     def setUp(self):
         import tempfile, os
-        from dashboard.subscription_store import Subscription, SubscriptionStore
-        self.patch_pending = mock.patch("pending_context._pending", {})
+        from scripts.dashboard.subscription_store import Subscription, SubscriptionStore
+        self.patch_pending = mock.patch("scripts.pending_context._pending", {})
         self.patch_pending.start()
         self.addCleanup(self.patch_pending.stop)
         fd, path = tempfile.mkstemp(suffix=".db")
@@ -320,7 +318,7 @@ class HandleSetPerSourceTests(unittest.TestCase):
         self._db_path = path
         self._store = SubscriptionStore(db_path=path)
         self.patch_store = mock.patch(
-            "skills.dashboard.get_subscription_store", return_value=self._store)
+            "scripts.skills.dashboard.get_subscription_store", return_value=self._store)
         self.patch_store.start()
         self.addCleanup(self.patch_store.stop)
         self.addCleanup(self._cleanup_db)
@@ -368,13 +366,13 @@ class HandleSetPerSourceTests(unittest.TestCase):
 class HandleStopAndQueryTests(unittest.TestCase):
     def setUp(self):
         import tempfile, os
-        from dashboard.subscription_store import Subscription, SubscriptionStore
+        from scripts.dashboard.subscription_store import Subscription, SubscriptionStore
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         self._db_path = path
         self._store = SubscriptionStore(db_path=path)
         self.patch_store = mock.patch(
-            "skills.dashboard.get_subscription_store",
+            "scripts.skills.dashboard.get_subscription_store",
             return_value=self._store)
         self.patch_store.start()
         self.addCleanup(self.patch_store.stop)
@@ -421,18 +419,18 @@ class HandleDocCreateTests(unittest.TestCase):
     """「按这几个文档做每日看板」：动态数据源创建 + 确认落地"""
 
     def setUp(self):
-        self.patch_pending = mock.patch("pending_context._pending", {})
+        self.patch_pending = mock.patch("scripts.pending_context._pending", {})
         self.patch_pending.start()
         self.addCleanup(self.patch_pending.stop)
         import tempfile
-        from dashboard.subscription_store import SubscriptionStore
-        from dashboard.doc_candidates import DocCandidate, DocCandidateStore
+        from scripts.dashboard.subscription_store import SubscriptionStore
+        from scripts.dashboard.doc_candidates import DocCandidate, DocCandidateStore
         # 订阅存储
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         self._db_path = path
         self._store = SubscriptionStore(db_path=path)
-        self.patch_store = mock.patch("skills.dashboard.get_subscription_store",
+        self.patch_store = mock.patch("scripts.skills.dashboard.get_subscription_store",
                                       return_value=self._store)
         self.patch_store.start()
         self.addCleanup(self.patch_store.stop)
@@ -441,7 +439,7 @@ class HandleDocCreateTests(unittest.TestCase):
         os.close(fd2)
         self._cand_path = path2
         self._cands = DocCandidateStore(db_path=path2)
-        self.patch_cands = mock.patch("dashboard.doc_candidates.get_candidate_store",
+        self.patch_cands = mock.patch("scripts.dashboard.doc_candidates.get_candidate_store",
                                       return_value=self._cands)
         self.patch_cands.start()
         self.addCleanup(self.patch_cands.stop)
@@ -467,7 +465,7 @@ class HandleDocCreateTests(unittest.TestCase):
                         pass
 
     def _seed_candidates(self):
-        from dashboard.doc_candidates import DocCandidate
+        from scripts.dashboard.doc_candidates import DocCandidate
         self._cands.add(DocCandidate(
             user_id="u1", url="u1", node_id="n1", kind="notable",
             operator_union="u1", enabled=True, name="研发项目现况表"))
@@ -475,9 +473,9 @@ class HandleDocCreateTests(unittest.TestCase):
             user_id="u1", url="u2", node_id="n2", kind="notable",
             operator_union="u1", enabled=True, name="整机测试问题"))
 
-    @mock.patch("skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
-    @mock.patch("skills.dashboard.DashboardSkill._push_sample", return_value="已推送")
-    @mock.patch("skills.dashboard.DashboardSkill._user_template_hint", return_value="")
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._push_sample", return_value="已推送")
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._user_template_hint", return_value="")
     def test_doc_create_flow(self, m_hint, m_push, mock_staff):
         self._seed_candidates()
         # 1. 说「按这几个文档做每日看板」→ 反问
@@ -494,8 +492,8 @@ class HandleDocCreateTests(unittest.TestCase):
         self.assertEqual(sorted(subs[0].data_sources), ["doc_1", "doc_2"])
         self.assertTrue(subs[0].enabled)
 
-    @mock.patch("skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
-    @mock.patch("skills.dashboard.DashboardSkill._push_sample", return_value="已推送")
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._push_sample", return_value="已推送")
     def test_doc_request_uses_natural_time_and_coordination_template(self, m_push, mock_staff):
         """长请求的时间和三段式输出在确认前必须作为同一草稿保留。"""
         self._seed_candidates()
@@ -512,9 +510,9 @@ class HandleDocCreateTests(unittest.TestCase):
         self.assertEqual((sub.push_hour, sub.push_minute), (9, 30))
         self.assertEqual(sub.template_id, "coordination")
 
-    @mock.patch("skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
-    @mock.patch("skills.dashboard.DashboardSkill._push_sample", return_value="已推送")
-    @mock.patch("skills.dashboard.DashboardSkill._user_template_hint", return_value="")
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._push_sample", return_value="已推送")
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._user_template_hint", return_value="")
     def test_natural_confirm_word_duide_executes_pending(self, m_hint, m_push, mock_staff):
         """v1.12.4 回归（袁会荧实测）：发链接+「做每日看板」意图 → 反问确认 →
         用户回「对的」（自然口语确认）→ 必须执行 pending 建订阅。
@@ -534,16 +532,16 @@ class HandleDocCreateTests(unittest.TestCase):
         self.assertEqual(sorted(subs[0].data_sources), ["doc_1", "doc_2"])
         self.assertTrue(subs[0].enabled)
 
-    @mock.patch("skills.dashboard.DashboardSkill._staff_id_of", return_value="")
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._staff_id_of", return_value="")
     def test_no_documents_prompts_send_link(self, mock_staff):
         r = DashboardSkill.handle("按这几个文档做每日看板", user_id="u1")
         self.assertIn("发送", r["answer"])
         self.assertIn("文档链接", r["answer"])
 
-    @mock.patch("skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
     def test_doc_create_source_candidate_ids_only_takes_specified(self, mock_staff):
         """v1.11.4：传入本次候选 id 时，历史候选不得混入"""
-        from dashboard.doc_candidates import DocCandidate
+        from scripts.dashboard.doc_candidates import DocCandidate
         self._seed_candidates()
         # 历史候选（昨天登记的同一文档，非本次发送）——不应进入本次看板
         self._cands.add(DocCandidate(
@@ -554,22 +552,22 @@ class HandleDocCreateTests(unittest.TestCase):
         self.assertIn("研发项目现况表", r["answer"])
         self.assertIn("整机测试问题", r["answer"])
         self.assertNotIn("旧登记同文档", r["answer"])
-        from dashboard.subscription_commands import get_pending
+        from scripts.dashboard.subscription_commands import get_pending
         p = get_pending("u1")
         self.assertEqual(sorted(p["data_sources"]), ["doc_1", "doc_2"])
         self.assertEqual(p["alert_mode"], "always")
 
-    @mock.patch("skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
     def test_doc_create_without_candidate_ids_falls_back_all(self, mock_staff):
         """缺省 source_candidate_ids → 兜底取全部可看板候选"""
-        from dashboard.doc_candidates import DocCandidate
+        from scripts.dashboard.doc_candidates import DocCandidate
         self._seed_candidates()
         self._cands.add(DocCandidate(
             user_id="u1", url="u3", node_id="n3", kind="notable",
             operator_union="u1", enabled=True, name="历史登记"))
         r = DashboardSkill._handle_doc_create("u1")
         self.assertIn("历史登记", r["answer"])
-        from dashboard.subscription_commands import get_pending
+        from scripts.dashboard.subscription_commands import get_pending
         p = get_pending("u1")
         self.assertEqual(sorted(p["data_sources"]), ["doc_1", "doc_2", "doc_3"])
 
@@ -578,16 +576,16 @@ class DocCreatePrecheckTests(unittest.TestCase):
     """创建前权限预检在 _handle_doc_create 的整合（v1.11.6）"""
 
     def setUp(self):
-        self.patch_pending = mock.patch("pending_context._pending", {})
+        self.patch_pending = mock.patch("scripts.pending_context._pending", {})
         self.patch_pending.start()
         self.addCleanup(self.patch_pending.stop)
         import tempfile
-        from dashboard.doc_candidates import DocCandidate, DocCandidateStore
+        from scripts.dashboard.doc_candidates import DocCandidate, DocCandidateStore
         fd2, path2 = tempfile.mkstemp(suffix=".db")
         os.close(fd2)
         self._cand_path = path2
         self._cands = DocCandidateStore(db_path=path2)
-        self.patch_cands = mock.patch("dashboard.doc_candidates.get_candidate_store",
+        self.patch_cands = mock.patch("scripts.dashboard.doc_candidates.get_candidate_store",
                                       return_value=self._cands)
         self.patch_cands.start()
         self.addCleanup(self.patch_cands.stop)
@@ -604,12 +602,12 @@ class DocCreatePrecheckTests(unittest.TestCase):
                     pass
 
     def _seed(self):
-        from dashboard.doc_candidates import DocCandidate
+        from scripts.dashboard.doc_candidates import DocCandidate
         self._cands.add(DocCandidate(
             user_id="u1", url="u1", node_id="n1", kind="notable",
             operator_union="u1", enabled=True, name="研发项目现况表"))
 
-    @mock.patch("skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
     def test_all_blocked_prompts_permission(self, mock_staff):
         """全部文档不可读 → 明确提示权限问题，不建订阅"""
         self._seed()
@@ -618,13 +616,13 @@ class DocCreatePrecheckTests(unittest.TestCase):
                 return_value=([], [{"name": "研发项目现况表", "reason": "无权限"}])):
             r = DashboardSkill._handle_doc_create("u1")
         self.assertIn("无法读取", r["answer"])
-        from dashboard.subscription_commands import get_pending
+        from scripts.dashboard.subscription_commands import get_pending
         self.assertIsNone(get_pending("u1"))   # 未设 pending，不进入确认
 
-    @mock.patch("skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
     def test_partial_blocked_keeps_readable(self, mock_staff):
         """部分文档不可读 → 可读的继续，不可读的剔除"""
-        from dashboard.doc_candidates import DocCandidate
+        from scripts.dashboard.doc_candidates import DocCandidate
         self._seed()
         self._cands.add(DocCandidate(
             user_id="u1", url="u2", node_id="n2", kind="notable",
@@ -637,7 +635,7 @@ class DocCreatePrecheckTests(unittest.TestCase):
             r = DashboardSkill._handle_doc_create("u1")
         self.assertIn("研发项目现况表", r["answer"])
         self.assertNotIn("整机测试问题", r["answer"])
-        from dashboard.subscription_commands import get_pending
+        from scripts.dashboard.subscription_commands import get_pending
         p = get_pending("u1")
         self.assertEqual(p["data_sources"], ["doc_1"])
 
@@ -647,13 +645,13 @@ class HandleResumeDeleteTests(unittest.TestCase):
 
     def setUp(self):
         import tempfile
-        from dashboard.subscription_store import Subscription, SubscriptionStore
+        from scripts.dashboard.subscription_store import Subscription, SubscriptionStore
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         self._db_path = path
         self._store = SubscriptionStore(db_path=path)
         self.patch_store = mock.patch(
-            "skills.dashboard.get_subscription_store",
+            "scripts.skills.dashboard.get_subscription_store",
             return_value=self._store)
         self.patch_store.start()
         self.addCleanup(self.patch_store.stop)
@@ -670,7 +668,7 @@ class HandleResumeDeleteTests(unittest.TestCase):
                     pass
 
     def _sub(self, **kw):
-        from dashboard.subscription_store import Subscription
+        from scripts.dashboard.subscription_store import Subscription
         base = Subscription(owner_user_id="u1", owner_staff_id="staff001",
                             owner_union_id="u1", data_sources=["project_status"],
                             recipients=["staff001"])
@@ -732,8 +730,8 @@ class HandleResumeDeleteTests(unittest.TestCase):
         self.assertIn("已删除 2 个", r2["answer"])
         self.assertEqual(self._store.list_for_owner("u1"), [])
 
-    @mock.patch("skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
-    @mock.patch("skills.dashboard.DashboardSkill._push_sample", return_value="")
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._push_sample", return_value="")
     def test_exact_duplicate_create_is_reused(self, m_push, mock_staff):
         """相同用户、来源、时间、接收人和模式不得创建第二条订阅。
 
@@ -766,7 +764,7 @@ class PrecheckTests(unittest.TestCase):
 
     @staticmethod
     def _cand(node_id="n1", name="文档A"):
-        from dashboard.doc_candidates import DocCandidate
+        from scripts.dashboard.doc_candidates import DocCandidate
         return DocCandidate(user_id="u1", url=f"u/{node_id}", node_id=node_id,
                             kind="notable", operator_union="u1", enabled=True,
                             name=name)
@@ -775,7 +773,7 @@ class PrecheckTests(unittest.TestCase):
         cands = [self._cand(), self._cand("n2", "文档B")]
         client = mock.Mock()
         client.read_document.return_value = {"ok": True}
-        with mock.patch("dingtalk_doc_client.get_doc_client", return_value=client):
+        with mock.patch("scripts.dingtalk_doc_client.get_doc_client", return_value=client):
             usable, blocked = DashboardSkill._precheck_doc_candidates(cands)
         self.assertEqual(len(usable), 2)
         self.assertEqual(blocked, [])
@@ -787,7 +785,7 @@ class PrecheckTests(unittest.TestCase):
             {"ok": True},
             {"ok": False, "message": "无权限"},
         ]
-        with mock.patch("dingtalk_doc_client.get_doc_client", return_value=client):
+        with mock.patch("scripts.dingtalk_doc_client.get_doc_client", return_value=client):
             usable, blocked = DashboardSkill._precheck_doc_candidates(cands)
         self.assertEqual(len(usable), 1)
         self.assertEqual(usable[0].node_id, "n1")
@@ -795,11 +793,11 @@ class PrecheckTests(unittest.TestCase):
         self.assertIn("无权限", blocked[0]["reason"])
 
     def test_permission_error_blocked(self):
-        from dingtalk_doc_client import DingTalkDocPermissionError
+        from scripts.dingtalk_doc_client import DingTalkDocPermissionError
         cands = [self._cand()]
         client = mock.Mock()
         client.read_document.side_effect = DingTalkDocPermissionError("no perm")
-        with mock.patch("dingtalk_doc_client.get_doc_client", return_value=client):
+        with mock.patch("scripts.dingtalk_doc_client.get_doc_client", return_value=client):
             usable, blocked = DashboardSkill._precheck_doc_candidates(cands)
         self.assertEqual(usable, [])
         self.assertEqual(len(blocked), 1)
@@ -810,7 +808,7 @@ class PrecheckTests(unittest.TestCase):
         cands = [self._cand()]
         client = mock.Mock()
         client.read_document.side_effect = TimeoutError("timeout")
-        with mock.patch("dingtalk_doc_client.get_doc_client", return_value=client):
+        with mock.patch("scripts.dingtalk_doc_client.get_doc_client", return_value=client):
             usable, blocked = DashboardSkill._precheck_doc_candidates(cands)
         self.assertEqual(len(usable), 1)
         self.assertEqual(blocked, [])
@@ -825,7 +823,7 @@ class QueryDashboardToolContractTests(unittest.TestCase):
     """
 
     def test_description_requires_preserving_source_links(self):
-        from tools.dash_query import DEFINITION
+        from scripts.tools.dash_query import DEFINITION
         desc = DEFINITION["description"]
         self.assertIn("数据来源", desc)
         self.assertIn("查看原文", desc)
@@ -833,7 +831,7 @@ class QueryDashboardToolContractTests(unittest.TestCase):
 
     def test_execute_scopes_sources_to_current_user(self):
         """问题 4 回归：dash_query 必须按当前用户取数据源，防跨用户串看板"""
-        from tools.dash_query import execute
+        from scripts.tools.dash_query import execute
         import inspect
         src = inspect.getsource(execute)
         self.assertIn("get_current_user_id()", src)
@@ -843,7 +841,7 @@ class QueryDashboardToolContractTests(unittest.TestCase):
         """v1.11.10：dash_push 主动推送必须按当前用户隔离——
         只操作本人任务绑定的数据源和该任务接收人，防『现在推看板』把别人的
         私人表格或本人其他任务的接收人带入。"""
-        from tools.dash_push import execute as push_exec
+        from scripts.tools.dash_push import execute as push_exec
         import inspect
         src = inspect.getsource(push_exec)
         self.assertIn("resolve_subscription_sources(sub0)", src)
@@ -851,7 +849,7 @@ class QueryDashboardToolContractTests(unittest.TestCase):
         self.assertIn("recipients = list(sub0.recipients)", src)
 
     def test_dash_push_definition_mentions_own_subscription(self):
-        from tools.dash_push import DEFINITION
+        from scripts.tools.dash_push import DEFINITION
         self.assertIn("当前用户", DEFINITION["description"])
         self.assertIn("该用户启用的订阅", DEFINITION["description"])
 
@@ -865,7 +863,7 @@ class TemplateHintAndAdjustTests(unittest.TestCase):
     """v1.12.x：创建提醒自定义格式/复用私有模板 + 同名模板调节"""
 
     def setUp(self):
-        from dashboard.template_store import TemplateStore
+        from scripts.dashboard.template_store import TemplateStore
         import tempfile, os
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
@@ -873,7 +871,7 @@ class TemplateHintAndAdjustTests(unittest.TestCase):
         self._tpl_store = TemplateStore(db_path=path)
         self.addCleanup(self._cleanup)
         self.patch_ts = mock.patch(
-            "dashboard.template_store.get_template_store",
+            "scripts.dashboard.template_store.get_template_store",
             return_value=self._tpl_store)
         self.patch_ts.start()
         self.addCleanup(self.patch_ts.stop)
@@ -888,7 +886,7 @@ class TemplateHintAndAdjustTests(unittest.TestCase):
                 except OSError:
                     pass
 
-    @mock.patch("skills.dashboard.DashboardSkill._staff_id_of",
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._staff_id_of",
                 return_value="staff001")
     def test_user_template_hint_lists_private_templates(self, mock_staff):
         self._tpl_store.create_user_template(
@@ -899,9 +897,9 @@ class TemplateHintAndAdjustTests(unittest.TestCase):
         # 无私有模板 → 无提示
         self.assertEqual(DashboardSkill._user_template_hint("u2"), "")
 
-    @mock.patch("skills.dashboard.DashboardSkill._staff_id_of",
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._staff_id_of",
                 return_value="staff001")
-    @mock.patch("dashboard.template_store.TemplateStore.sync_user_template_file",
+    @mock.patch("scripts.dashboard.template_store.TemplateStore.sync_user_template_file",
                 return_value="")
     def test_save_user_template_same_name_updates(self, mock_sync, mock_staff):
         """同名再提交 = 调节模板内容（更新而非报错/加后缀）"""
@@ -925,13 +923,13 @@ class TemplateHintAndAdjustTests(unittest.TestCase):
                 if t.scope == "user"]
         self.assertEqual(len(mine), 1)
 
-    @mock.patch("skills.dashboard.DashboardSkill._staff_id_of",
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._staff_id_of",
                 return_value="staff001")
-    @mock.patch("dashboard.template_store.TemplateStore.sync_user_template_file",
+    @mock.patch("scripts.dashboard.template_store.TemplateStore.sync_user_template_file",
                 return_value="")
     def test_save_user_template_syncs_file(self, mock_sync, mock_staff):
         """保存后同步本地文件（调用点验证，写盘逻辑在 template_store 测试）"""
-        from dashboard.template_store import _DEFAULT_SECTION_SPEC as spec
+        from scripts.dashboard.template_store import _DEFAULT_SECTION_SPEC as spec
         ok, tpl, _ = DashboardSkill._save_user_template(
             "u1", {"name": "文件模板", "section_spec": spec})
         self.assertTrue(ok)
@@ -945,7 +943,7 @@ class PushSamplePerSourceTests(unittest.TestCase):
     """v1.12.5：样例推送改逐源多条（识别/预览场景，每个数据源一条）"""
 
     def _sub(self):
-        from dashboard.subscription_store import Subscription
+        from scripts.dashboard.subscription_store import Subscription
         return Subscription(owner_user_id="u1", owner_staff_id="staff001",
                             owner_union_id="u1", data_sources=["a", "b"],
                             recipients=["staff001"])
@@ -959,17 +957,17 @@ class PushSamplePerSourceTests(unittest.TestCase):
              "items": [], "detailed_items": [], "status_counts": {},
              "attention_items": [], "normal_items": [], "other_items": []},
         ]
-        with mock.patch("dashboard.service.resolve_subscription_sources",
+        with mock.patch("scripts.dashboard.service.resolve_subscription_sources",
                         return_value=[mock.MagicMock()]), \
-             mock.patch("dashboard.service.collect_and_parse",
+             mock.patch("scripts.dashboard.service.collect_and_parse",
                         return_value=(two_sources, [])), \
-             mock.patch("dashboard.service.source_resolution_warnings",
+             mock.patch("scripts.dashboard.service.source_resolution_warnings",
                         return_value=[]), \
-             mock.patch("dashboard.service.resolve_template",
+             mock.patch("scripts.dashboard.service.resolve_template",
                         return_value=None), \
-             mock.patch("dashboard.service.assemble_per_source_messages",
+             mock.patch("scripts.dashboard.service.assemble_per_source_messages",
                         return_value=["源A总结", "源B总结"]) as m_per_source, \
-             mock.patch("dashboard.service.push_messages",
+             mock.patch("scripts.dashboard.service.push_messages",
                         return_value=(True, "")) as m_push:
             note = DashboardSkill._push_sample(self._sub())
         self.assertIn("每个数据源一条", note)
@@ -990,23 +988,23 @@ class SpokenChoiceTests(unittest.TestCase):
     """
 
     def setUp(self):
-        self.patch_pending = mock.patch("pending_context._pending", {})
+        self.patch_pending = mock.patch("scripts.pending_context._pending", {})
         self.patch_pending.start()
         self.addCleanup(self.patch_pending.stop)
 
     def tearDown(self):
-        from dashboard import subscription_commands as sc
+        from scripts.dashboard import subscription_commands as sc
         sc._activity_by_user.clear()
         sc._last_activity_ts = 0.0
 
     # ===== parse_spoken_choice 纯函数 =====
     def test_parse_spoken_choice_no_pending_returns_none(self):
-        from dashboard import subscription_commands as sc
+        from scripts.dashboard import subscription_commands as sc
         for t in ("我说选第一个", "选第二个", "第一个", "就第三个吧"):
             self.assertIsNone(sc.parse_spoken_choice(t, "u_spoken"), t)
 
     def test_parse_spoken_choice_variants(self):
-        from dashboard import subscription_commands as sc
+        from scripts.dashboard import subscription_commands as sc
         sc.set_pending("u_spoken", {"intent": "create", "data_sources": []})
         cases = [
             ("我说选第一个", 1), ("我是说选第一个", 1), ("选第二个", 2),
@@ -1018,13 +1016,13 @@ class SpokenChoiceTests(unittest.TestCase):
             self.assertEqual(p["index"], expect, t)
 
     def test_parse_spoken_choice_requires_window(self):
-        from dashboard import subscription_commands as sc
+        from scripts.dashboard import subscription_commands as sc
         sc.set_pending("u_spoken", {"intent": "create", "data_sources": []})
         sc._activity_by_user["u_spoken"] = 0.0  # 反问窗口过期
         self.assertIsNone(sc.parse_spoken_choice("选第一个", "u_spoken"))
 
     def test_parse_spoken_choice_does_not_steal_normal_chat(self):
-        from dashboard import subscription_commands as sc
+        from scripts.dashboard import subscription_commands as sc
         sc.set_pending("u_spoken", {"intent": "create", "data_sources": []})
         for t in ("第一个文件我要看", "选一个", "第一个人是张工",
                   "你说第一个方案", "第一个提议不错"):
@@ -1032,7 +1030,7 @@ class SpokenChoiceTests(unittest.TestCase):
 
     # ===== 技能匹配/处理 =====
     def test_match_spoken_choice_with_pending(self):
-        from dashboard import subscription_commands as sc
+        from scripts.dashboard import subscription_commands as sc
         sc.set_pending("u_spoken", {"intent": "create", "data_sources": []})
         self.assertTrue(DashboardSkill.match("我说选第一个", user_id="u_spoken"))
 
@@ -1041,7 +1039,7 @@ class SpokenChoiceTests(unittest.TestCase):
 
     def test_handle_create_pending_honest_no_workorder(self):
         """create pending 中回「我说选第一个」→ 如实说明无分项候选项，不编造工单"""
-        from dashboard import subscription_commands as sc
+        from scripts.dashboard import subscription_commands as sc
         sc.set_pending("u_spoken", {
             "intent": "create", "data_sources": [],
             "push_hour": 9, "push_minute": 0, "weekdays": "",
@@ -1054,7 +1052,7 @@ class SpokenChoiceTests(unittest.TestCase):
 
     def test_handle_choose_template_spoken_maps(self):
         """choose_template 反问中「选第二个」→ 等价数字 2 → weekly"""
-        from dashboard import subscription_commands as sc
+        from scripts.dashboard import subscription_commands as sc
         sc.set_pending("u_spoken", {"intent": "choose_template", "sub_id": 1})
         with mock.patch.object(
                 DashboardSkill, "_execute_template_choice",
@@ -1065,7 +1063,7 @@ class SpokenChoiceTests(unittest.TestCase):
 
     def test_handle_choose_template_spoken_out_of_range(self):
         """choose_template 中「选第五个」超出 3 项 → 重列模板，不编造"""
-        from dashboard import subscription_commands as sc
+        from scripts.dashboard import subscription_commands as sc
         sc.set_pending("u_spoken", {"intent": "choose_template", "sub_id": 1})
         r = DashboardSkill.handle("选第五个", user_id="u_spoken")
         self.assertIn("3 个模板", r["answer"])
@@ -1077,8 +1075,8 @@ class ChangeSourcesTests(unittest.TestCase):
 
     def setUp(self):
         import tempfile
-        from dashboard.subscription_store import Subscription, SubscriptionStore
-        from dashboard.doc_candidates import DocCandidate, DocCandidateStore
+        from scripts.dashboard.subscription_store import Subscription, SubscriptionStore
+        from scripts.dashboard.doc_candidates import DocCandidate, DocCandidateStore
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         self._db_path = path
@@ -1094,10 +1092,10 @@ class ChangeSourcesTests(unittest.TestCase):
                                      kind="notable", enabled=True,
                                      name="研发项目现况表"))
         self.patch_store = mock.patch(
-            "skills.dashboard.get_subscription_store", return_value=self._store)
+            "scripts.skills.dashboard.get_subscription_store", return_value=self._store)
         self.patch_store.start()
         self.patch_cand = mock.patch(
-            "dashboard.doc_candidates.get_candidate_store",
+            "scripts.dashboard.doc_candidates.get_candidate_store",
             return_value=self._cands)
         self.patch_cand.start()
         self.addCleanup(self.patch_store.stop)
@@ -1116,7 +1114,7 @@ class ChangeSourcesTests(unittest.TestCase):
                         pass
 
     def _sub(self, data_sources=None):
-        from dashboard.subscription_store import Subscription
+        from scripts.dashboard.subscription_store import Subscription
         return Subscription(
             owner_user_id="u1", owner_staff_id="staff001", owner_union_id="u1",
             data_sources=data_sources or ["doc_1"],
@@ -1172,11 +1170,11 @@ class ChangeSourcesTests(unittest.TestCase):
     def test_cannot_edit_others_task(self):
         """他人任务不可改：pending 指向的 sub 非本用户所有 → 拒绝"""
         self._store.create(self._sub(["doc_1"]))  # u1 的
-        from dashboard.subscription_store import Subscription
+        from scripts.dashboard.subscription_store import Subscription
         self._store.create(Subscription(
             owner_user_id="u2", data_sources=["doc_1"], recipients=["s2"]))
         # 手动构造指向 u2 订阅的 pending（绕过 handle 只能命中最近订阅的限制）
-        from dashboard import subscription_commands as sc
+        from scripts.dashboard import subscription_commands as sc
         sub2 = self._store.list_for_owner("u2")[0]
         sc.set_pending("u1", {"intent": "change_sources", "sub_id": sub2.id,
                               "action": "add", "doc_name": "部门周报",
@@ -1193,13 +1191,13 @@ class PushHistorySkillTests(unittest.TestCase):
 
     def setUp(self):
         import tempfile
-        from dashboard.subscription_store import Subscription, SubscriptionStore
+        from scripts.dashboard.subscription_store import Subscription, SubscriptionStore
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         self._db_path = path
         self._store = SubscriptionStore(db_path=path)
         self.patch_store = mock.patch(
-            "skills.dashboard.get_subscription_store", return_value=self._store)
+            "scripts.skills.dashboard.get_subscription_store", return_value=self._store)
         self.patch_store.start()
         self.addCleanup(self.patch_store.stop)
         self.addCleanup(self._cleanup)
@@ -1217,18 +1215,18 @@ class PushHistorySkillTests(unittest.TestCase):
     def test_handle_history_replays_latest(self):
         """「看上次的看板」→ 回放最近一次留档内容"""
         import tempfile
-        from dashboard.push_history import PushHistoryStore
+        from scripts.dashboard.push_history import PushHistoryStore
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         hist = PushHistoryStore(db_path=path)
         self.patch_hist = mock.patch(
-            "dashboard.push_history.get_push_history_store", return_value=hist)
+            "scripts.dashboard.push_history.get_push_history_store", return_value=hist)
         self.patch_hist.start()
         self.addCleanup(self.patch_hist.stop)
         self.addCleanup(lambda: (hist.close(),
                                  *[os.path.exists(path + s) and os.remove(path + s)
                                    for s in ("", "-wal", "-shm")]))
-        from dashboard.subscription_store import Subscription
+        from scripts.dashboard.subscription_store import Subscription
         sub_id = self._store.create(Subscription(
             owner_user_id="u1", owner_staff_id="s", owner_union_id="u1",
             data_sources=["doc_1"], recipients=["s"]))
@@ -1241,18 +1239,18 @@ class PushHistorySkillTests(unittest.TestCase):
     def test_handle_history_no_archive_guides(self):
         """任务无留档 → 引导（不谎称有历史）"""
         import tempfile
-        from dashboard.push_history import PushHistoryStore
+        from scripts.dashboard.push_history import PushHistoryStore
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         hist = PushHistoryStore(db_path=path)
         self.patch_hist = mock.patch(
-            "dashboard.push_history.get_push_history_store", return_value=hist)
+            "scripts.dashboard.push_history.get_push_history_store", return_value=hist)
         self.patch_hist.start()
         self.addCleanup(self.patch_hist.stop)
         self.addCleanup(lambda: (hist.close(),
                                  *[os.path.exists(path + s) and os.remove(path + s)
                                    for s in ("", "-wal", "-shm")]))
-        from dashboard.subscription_store import Subscription
+        from scripts.dashboard.subscription_store import Subscription
         self._store.create(Subscription(
             owner_user_id="u1", owner_staff_id="s", owner_union_id="u1",
             data_sources=["doc_1"], recipients=["s"]))

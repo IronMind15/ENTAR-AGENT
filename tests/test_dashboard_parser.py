@@ -6,11 +6,9 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from dashboard.config_model import FieldSpec, SourceConfig  # noqa: E402
-from dashboard.parser import (  # noqa: E402
+from scripts.dashboard.config_model import FieldSpec, SourceConfig  # noqa: E402
+from scripts.dashboard.parser import (  # noqa: E402
     extract_cell_value, find_latest_week_table, format_number, parse_source_records,
 )
 
@@ -211,7 +209,7 @@ class EmptyFieldMapFallbackTests(unittest.TestCase):
     """动态源无 field_map 时兜底：label 用 field_id，进 other_items"""
 
     def test_infers_fields_from_first_record(self):
-        from dashboard.config_model import SourceConfig
+        from scripts.dashboard.config_model import SourceConfig
         src = SourceConfig(key="dyn", name="动态表", kind="notable",
                            base_id="n1", field_map={})
         records = [{"fields": {"a1": "值A", "b2": {"name": "单选"}}}]
@@ -228,7 +226,7 @@ class EmptyFieldMapFallbackTests(unittest.TestCase):
         self.assertEqual(result["normal_items"], [])
 
     def test_empty_records_no_crash(self):
-        from dashboard.config_model import SourceConfig
+        from scripts.dashboard.config_model import SourceConfig
         src = SourceConfig(key="dyn", name="动态表", kind="notable",
                            base_id="n1", field_map={})
         result = parse_source_records(src, [])

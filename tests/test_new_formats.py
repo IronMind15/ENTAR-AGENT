@@ -17,11 +17,9 @@ from unittest.mock import Mock, patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from doc_mgr import engine
-from doc_mgr.models import Document
+from scripts.doc_mgr import engine
+from scripts.doc_mgr.models import Document
 
 
 class FakeStore:
@@ -65,7 +63,7 @@ class WordExtractorTests(unittest.TestCase):
     def test_extract_headings_and_paragraphs(self):
         """测试标题和普通段落提取"""
         from docx import Document as DocxDocument
-        from doc_mgr.extractors.word import extract_docx_text
+        from scripts.doc_mgr.extractors.word import extract_docx_text
 
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "test.docx"
@@ -86,7 +84,7 @@ class WordExtractorTests(unittest.TestCase):
     def test_extract_table_as_markdown(self):
         """测试表格转为 Markdown 格式"""
         from docx import Document as DocxDocument
-        from doc_mgr.extractors.word import extract_docx_text
+        from scripts.doc_mgr.extractors.word import extract_docx_text
 
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "table.docx"
@@ -116,7 +114,7 @@ class WordExtractorTests(unittest.TestCase):
     def test_empty_docx_returns_empty(self):
         """空文档返回空字符串"""
         from docx import Document as DocxDocument
-        from doc_mgr.extractors.word import extract_docx_text
+        from scripts.doc_mgr.extractors.word import extract_docx_text
 
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "empty.docx"
@@ -128,7 +126,7 @@ class WordExtractorTests(unittest.TestCase):
 
     def test_non_docx_file_returns_empty(self):
         """非 docx 文件返回空字符串"""
-        from doc_mgr.extractors.word import extract_docx_text
+        from scripts.doc_mgr.extractors.word import extract_docx_text
 
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "test.txt"
@@ -148,7 +146,7 @@ class PptxExtractorTests(unittest.TestCase):
     def test_extract_slides_with_notes(self):
         """测试按 Slide 提取文本和备注"""
         from pptx import Presentation as PptxPresentation
-        from doc_mgr.extractors.pptx_ext import extract_pptx_text
+        from scripts.doc_mgr.extractors.pptx_ext import extract_pptx_text
 
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "test.pptx"
@@ -179,7 +177,7 @@ class PptxExtractorTests(unittest.TestCase):
     def test_empty_pptx_returns_empty(self):
         """空 PPT 返回空字符串"""
         from pptx import Presentation as PptxPresentation
-        from doc_mgr.extractors.pptx_ext import extract_pptx_text
+        from scripts.doc_mgr.extractors.pptx_ext import extract_pptx_text
 
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "empty.pptx"
@@ -196,7 +194,7 @@ class CsvExtractorTests(unittest.TestCase):
 
     def test_extract_utf8_csv(self):
         """测试 UTF-8 CSV 提取"""
-        from doc_mgr.extractors.csv_ext import extract_csv_rows, format_csv_row
+        from scripts.doc_mgr.extractors.csv_ext import extract_csv_rows, format_csv_row
 
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "test.csv"
@@ -220,7 +218,7 @@ class CsvExtractorTests(unittest.TestCase):
 
     def test_extract_gbk_csv(self):
         """测试 GBK 编码 CSV（中文 Windows 常见）"""
-        from doc_mgr.extractors.csv_ext import extract_csv_rows
+        from scripts.doc_mgr.extractors.csv_ext import extract_csv_rows
 
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "gbk.csv"
@@ -236,7 +234,7 @@ class CsvExtractorTests(unittest.TestCase):
 
     def test_empty_csv_returns_empty(self):
         """空 CSV 返回空列表"""
-        from doc_mgr.extractors.csv_ext import extract_csv_rows
+        from scripts.doc_mgr.extractors.csv_ext import extract_csv_rows
 
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "empty.csv"
@@ -247,7 +245,7 @@ class CsvExtractorTests(unittest.TestCase):
 
     def test_csv_with_empty_rows_skipped(self):
         """空行自动跳过"""
-        from doc_mgr.extractors.csv_ext import extract_csv_rows
+        from scripts.doc_mgr.extractors.csv_ext import extract_csv_rows
 
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "with_blanks.csv"

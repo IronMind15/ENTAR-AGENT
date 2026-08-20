@@ -16,16 +16,12 @@ import sys
 import threading
 import time
 
-_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _PARENT not in sys.path:
-    sys.path.insert(0, _PARENT)
-
 import httpx
 
-from config import (DASHBOARD_LLM_MODEL, DEEPSEEK_API_KEY, MAX_CONCURRENT_LLM, TESTING,
+from scripts.config import (DASHBOARD_LLM_MODEL, DEEPSEEK_API_KEY, MAX_CONCURRENT_LLM, TESTING,
                     MAX_CONTEXT_ROUNDS, KEEP_CONTEXT_ROUNDS)
-from skills import BaseSkill, register
-from tools import (get_tool_definitions, execute_tool as _execute_registered_tool,
+from scripts.skills import BaseSkill, register
+from scripts.tools import (get_tool_definitions, execute_tool as _execute_registered_tool,
                    get_tool_display_map, is_write_tool, render_tool_prompt)
 
 logger = logging.getLogger("agent")
@@ -165,7 +161,7 @@ def _load_system_prompt() -> str:
     # 优先从 DB 读取基础段
     base = ""
     try:
-        from user_store import get_prompt
+        from scripts.user_store import get_prompt
         db_prompt = get_prompt("system")
         if db_prompt:
             base = db_prompt
@@ -539,7 +535,7 @@ def _handle_impl(query: str, user_id: str = "", on_chunk=None) -> dict:
         return {"answer": "请输入问题", "source": "agent"}
 
     # ===== 第 1 关：快速通道（精确故障代码，毫秒级） =====
-    from skills.error_query import extract_fault_code, _exact_match_by_code, format_exact_result
+    from scripts.skills.error_query import extract_fault_code, _exact_match_by_code, format_exact_result
 
     code = extract_fault_code(q)
     if code:
@@ -552,7 +548,7 @@ def _handle_impl(query: str, user_id: str = "", on_chunk=None) -> dict:
             return {"answer": answer, "source": f"遥信（DI）表 第{row}行"}
 
     # ===== 第 1.5 关：快速通道（精确标准编号，毫秒级） =====
-    from skills.standards_query import extract_standard_id, exact_match_by_std_id, format_exact_result as format_std_exact_result
+    from scripts.skills.standards_query import extract_standard_id, exact_match_by_std_id, format_exact_result as format_std_exact_result
 
     std_id = extract_standard_id(q)
     if std_id:
@@ -573,7 +569,7 @@ def _handle_impl(query: str, user_id: str = "", on_chunk=None) -> dict:
     user_centers = None
     if user_id:
         try:
-            from user_store import get_store
+            from scripts.user_store import get_store
             store = get_store()
             user = store.get_user(user_id)
             if user:
@@ -603,11 +599,11 @@ def _handle_impl(query: str, user_id: str = "", on_chunk=None) -> dict:
                 except (json.JSONDecodeError, TypeError):
                     user_centers = None
                 if user_centers:
-                    from center_config import get_center_name
+                    from scripts.center_config import get_center_name
                     center_names = [get_center_name(c) for c in user_centers]
                     user_info_lines.append(f"归属中心：{'、'.join(center_names)}")
                     # 设置工具上下文，实现按中心隔离查询
-                    from tools import set_user_centers
+                    from scripts.tools import set_user_centers
                     set_user_centers(user_centers)
         except Exception as e:
             logger.warning(f"获取用户信息失败（不影响主流程）: {e}")
@@ -622,7 +618,7 @@ def _handle_impl(query: str, user_id: str = "", on_chunk=None) -> dict:
     window_msgs = []
     if user_id:
         try:
-            from user_store import get_store as get_user_store
+            from scripts.user_store import get_store as get_user_store
             window_msgs = get_user_store().get_window_context(
                 user_id, MAX_CONTEXT_ROUNDS,
                 keep_rounds=KEEP_CONTEXT_ROUNDS)
@@ -643,7 +639,7 @@ def _handle_impl(query: str, user_id: str = "", on_chunk=None) -> dict:
         logger.info(f"已注入用户档案 ({len(user_info_lines)} 条)")
     if user_id:
         try:
-            from skills import memory
+            from scripts.skills import memory
             long_term = memory.format_long_term(user_id)
             if long_term:
                 dynamic_parts.append(

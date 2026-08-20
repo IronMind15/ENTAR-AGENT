@@ -12,7 +12,7 @@ from typing import Iterable
 
 import requests
 
-from config import (
+from scripts.config import (
     DINGTALK_API_BASE,
     DINGTALK_CLIENT_ID,
     DINGTALK_CLIENT_SECRET,

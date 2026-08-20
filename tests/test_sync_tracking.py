@@ -8,12 +8,10 @@ from unittest.mock import Mock, patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from doc_mgr import scheduler
-from doc_mgr.models import Document
-from doc_mgr.sync_tracker import SyncTracker
+from scripts.doc_mgr import scheduler
+from scripts.doc_mgr.models import Document
+from scripts.doc_mgr.sync_tracker import SyncTracker
 
 
 class SyncTrackerTests(unittest.TestCase):

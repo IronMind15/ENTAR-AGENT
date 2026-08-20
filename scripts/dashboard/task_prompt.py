@@ -15,7 +15,7 @@ import tempfile
 import time
 from datetime import datetime
 
-from paths import DASHBOARD_TASKS_DIR
+from scripts.paths import DASHBOARD_TASKS_DIR
 
 
 PROMPT_VERSION = "task-prompt-v1"

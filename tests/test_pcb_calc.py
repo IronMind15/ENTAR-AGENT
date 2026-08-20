@@ -6,12 +6,10 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from skills import get_matched_skill
-from skills import pcb_calc
-from skills.pcb_calc import (
+from scripts.skills import get_matched_skill
+from scripts.skills import pcb_calc
+from scripts.skills.pcb_calc import (
     calc_min_width, calc_max_current, calc_resistance_drop,
     _is_pcb_calc_query, _extract_current, _extract_oz,
     _extract_temp_rise, _extract_layer, _extract_width,
@@ -166,7 +164,7 @@ class PCBToolTests(unittest.TestCase):
     """Agent 工具 calc_pcb_trace"""
 
     def test_tool_width_mode(self):
-        from tools import execute_tool
+        from scripts.tools import execute_tool
         out = execute_tool("calc_pcb_trace", {"current_a": 3, "oz": 1})
         import json
         data = json.loads(out)
@@ -174,7 +172,7 @@ class PCBToolTests(unittest.TestCase):
         self.assertIn("min_width_mil", data)
 
     def test_tool_current_mode(self):
-        from tools import execute_tool
+        from scripts.tools import execute_tool
         out = execute_tool("calc_pcb_trace", {"width_mil": 50, "oz": 1})
         import json
         data = json.loads(out)
@@ -182,7 +180,7 @@ class PCBToolTests(unittest.TestCase):
         self.assertIn("max_current_a", data)
 
     def test_tool_missing_args(self):
-        from tools import execute_tool
+        from scripts.tools import execute_tool
         out = execute_tool("calc_pcb_trace", {})
         import json
         data = json.loads(out)
@@ -569,7 +567,7 @@ class PCBTempRiseAndDefaultsTests(unittest.TestCase):
 
     def test_tool_rejects_oz_hallucination(self):
         """LLM 幻觉 oz=57 应被拦截（王哥「紫铜2×2」案例）"""
-        from tools.calc_pcb_trace import execute
+        from scripts.tools.calc_pcb_trace import execute
         out = execute({"width_mil": 78.74, "oz": 57, "temp_rise": 30})
         self.assertIn("铜厚 oz 取值异常", out)
         self.assertIn("铜排", out)  # 提示是铜排问题
@@ -577,7 +575,7 @@ class PCBTempRiseAndDefaultsTests(unittest.TestCase):
     def test_tool_is_internal_false_string(self):
         """is_internal 传字符串 false 不应误判为内层"""
         import json
-        from tools.calc_pcb_trace import execute
+        from scripts.tools.calc_pcb_trace import execute
         out = execute({"current_a": 10, "oz": 1, "temp_rise": 30, "is_internal": "false"})
         data = json.loads(out)
         self.assertFalse(data["is_internal"])
@@ -675,7 +673,7 @@ class PCBCreepageBusbarFixTests(unittest.TestCase):
 
     def test_busbar_tool_registered(self):
         """铜排工具已注册且可调用（LLM 有正确工具，不再瞎算）"""
-        from tools import execute_tool, get_tool_names
+        from scripts.tools import execute_tool, get_tool_names
         self.assertIn("calc_copper_busbar", get_tool_names())
         out = execute_tool("calc_copper_busbar", {"w_mm": 30, "h_mm": 3})
         self.assertIn("牛顿散热法", out)

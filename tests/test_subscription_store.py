@@ -8,10 +8,8 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from dashboard.subscription_store import Subscription, SubscriptionStore  # noqa: E402
+from scripts.dashboard.subscription_store import Subscription, SubscriptionStore  # noqa: E402
 
 
 class SubscriptionStoreTests(unittest.TestCase):

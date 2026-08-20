@@ -17,20 +17,15 @@ if sys.platform == "win32":
     sys.stdin.reconfigure(encoding="utf-8")
     sys.stdout.reconfigure(encoding="utf-8")
 
-# 确保 scripts/ 在模块搜索路径中（用于 from config import ...）
-_PARENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _PARENT_DIR not in sys.path:
-    sys.path.insert(0, _PARENT_DIR)
-
 import httpx
 
 # 共享 HTTP 客户端（复用连接，避免每次建新连接）
 _HTTP_CLIENT = httpx.Client(timeout=15, trust_env=False)
 
-from config import DEEPSEEK_API_KEY
-from skills import BaseSkill, register
-from doc_mgr.storage import get_store
-from skills.enhanced_search import enhanced_query, parse_query_results
+from scripts.config import DEEPSEEK_API_KEY
+from scripts.skills import BaseSkill, register
+from scripts.doc_mgr.storage import get_store
+from scripts.skills.enhanced_search import enhanced_query, parse_query_results
 
 logger = logging.getLogger("error_query")
 

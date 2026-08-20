@@ -13,7 +13,7 @@ contact_find（原 find_employee，v1.12.0 改名）— 钉钉通讯录员工查
 import json
 import logging
 
-from tools import register
+from scripts.tools import register
 
 logger = logging.getLogger("tools")
 
@@ -72,8 +72,8 @@ def execute(args: dict) -> str:
             )
 
         # 懒导入：避免 tools 包半初始化时循环依赖
-        from tools import get_current_staff_id
-        from contact_api import get_contact_client, is_contact_admin, ContactPermissionError
+        from scripts.tools import get_current_staff_id
+        from scripts.contact_api import get_contact_client, is_contact_admin, ContactPermissionError
 
         staff_id = get_current_staff_id()
         include_sensitive = is_contact_admin(staff_id)

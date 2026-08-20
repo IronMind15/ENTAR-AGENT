@@ -9,11 +9,9 @@ from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from dashboard.doc_candidates import DocCandidate, DocCandidateStore  # noqa: E402
-from dashboard.doc_learn import _records_to_markdown, learn_dingtalk_doc  # noqa: E402
+from scripts.dashboard.doc_candidates import DocCandidate, DocCandidateStore  # noqa: E402
+from scripts.dashboard.doc_learn import _records_to_markdown, learn_dingtalk_doc  # noqa: E402
 
 
 class LearnDingtalkDocTests(unittest.TestCase):
@@ -22,7 +20,7 @@ class LearnDingtalkDocTests(unittest.TestCase):
         os.close(fd)
         self._db_path = path
         self._cand = DocCandidateStore(db_path=path)
-        self.patch_cand = mock.patch("dashboard.doc_candidates.get_candidate_store",
+        self.patch_cand = mock.patch("scripts.dashboard.doc_candidates.get_candidate_store",
                                      return_value=self._cand)
         self.patch_cand.start()
         self.addCleanup(self.patch_cand.stop)
@@ -55,7 +53,7 @@ class LearnDingtalkDocTests(unittest.TestCase):
             "ok": True, "kind": "notable", "node_id": "n1",
             "records": [{"fields": {"名称": "项目A", "状态": "滞后"}}],
         }
-        with mock.patch("doc_mgr.engine.process_text",
+        with mock.patch("scripts.doc_mgr.engine.process_text",
                         return_value=mock.Mock(status="done", chunk_count=3)) as m_pt:
             result = learn_dingtalk_doc("u1", client=fake_client)
         self.assertTrue(result["has_candidate"])
@@ -78,7 +76,7 @@ class LearnDingtalkDocTests(unittest.TestCase):
         }
         kb = {"key": "产品手册", "name": "产品手册", "collection": "产品手册",
               "department": "rd"}
-        with mock.patch("doc_mgr.engine.process_text",
+        with mock.patch("scripts.doc_mgr.engine.process_text",
                         return_value=mock.Mock(status="done", chunk_count=2)) as m_pt:
             result = learn_dingtalk_doc("u1", client=fake_client, kb=kb)
         self.assertTrue(result["ok"])
@@ -105,7 +103,7 @@ class LearnDingtalkDocTests(unittest.TestCase):
             "records": [{"类型": "段落", "内容": "周会记录"}],
             "markdown": "周会记录\n\n| 项 | 状 |\n| --- | --- |\n| A | 滞后 |",
         }
-        with mock.patch("doc_mgr.engine.process_text",
+        with mock.patch("scripts.doc_mgr.engine.process_text",
                         return_value=mock.Mock(status="done", chunk_count=2)) as m_pt:
             result = learn_dingtalk_doc("u1", client=fake_client)
         self.assertTrue(result["ok"])
@@ -122,7 +120,7 @@ class LearnDingtalkDocTests(unittest.TestCase):
             "ok": True, "kind": "notable", "node_id": "n1",
             "records": [{"fields": {"名称": "A"}}],
         }
-        with mock.patch("doc_mgr.engine.process_text",
+        with mock.patch("scripts.doc_mgr.engine.process_text",
                         return_value=mock.Mock(status="error", message="入库失败")):
             result = learn_dingtalk_doc("u1", client=fake_client)
         self.assertFalse(result["ok"])

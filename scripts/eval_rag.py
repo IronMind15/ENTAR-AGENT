@@ -29,8 +29,9 @@ if sys.platform == "win32":
     sys.stderr.reconfigure(encoding="utf-8")
 
 _PARENT_DIR = os.path.dirname(os.path.abspath(__file__))
-if _PARENT_DIR not in sys.path:
-    sys.path.insert(0, _PARENT_DIR)
+_PROJECT_ROOT = os.path.dirname(_PARENT_DIR)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 # 项目根目录（用于定位 data/eval）
 _ROOT = os.path.dirname(_PARENT_DIR)
@@ -89,7 +90,7 @@ def load_cases() -> list:
 
 def run_mode(mode: str, cases: list, topk: int) -> dict:
     """跑单个模式，返回统计结果"""
-    from skills.enhanced_search import enhanced_query
+    from scripts.skills.enhanced_search import enhanced_query
 
     opts = _MODES[mode]
     meta_info, _ = load_cases()  # 取 match_field

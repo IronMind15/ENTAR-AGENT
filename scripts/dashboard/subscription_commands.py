@@ -541,13 +541,13 @@ def is_confirmation_text(text: str) -> bool:
 
     v1.12.1（M3）：确认词委托 pending_context（类型作用域，kanban 用通用词）。
     """
-    from pending_context import PT_KANBAN, is_confirm_text
+    from scripts.pending_context import PT_KANBAN, is_confirm_text
     return is_confirm_text(text, PT_KANBAN)
 
 
 def is_cancel_text(text: str) -> bool:
     """v1.12.1（M3）：取消词委托 pending_context"""
-    from pending_context import is_cancel_text as pc_is_cancel
+    from scripts.pending_context import is_cancel_text as pc_is_cancel
     return pc_is_cancel(text)
 
 
@@ -769,7 +769,7 @@ def _llm_verify_subscription(text: str, fallback_intent: Optional[str] = None,
     """
     try:
         if llm_fn is None:
-            from skills.agent import call_deepseek as llm_fn
+            from scripts.skills.agent import call_deepseek as llm_fn
         prompt = (
             "你是恩特小助手『每日项目看板』订阅意图分类器。判断下面这条钉钉消息"
             "是否在管理看板订阅。管理操作包括：开通(create)/停用(stop)/恢复(resume)/"
@@ -836,7 +836,7 @@ def resolve_recipient(name: str) -> str:
     if not name:
         return ""
     try:
-        from contact_api import get_contact_client
+        from scripts.contact_api import get_contact_client
         res = get_contact_client().search(keyword=name, limit=1)
         if res.get("found") and res.get("results"):
             return res["results"][0].get("userId", "") or ""
@@ -1062,7 +1062,7 @@ _activity_by_user: dict[str, float] = {}
 
 def set_pending(user_id: str, pending: dict):
     """登记看板 pending 并记录该用户刚进行过看板对话"""
-    from pending_context import PT_KANBAN, set as pc_set
+    from scripts.pending_context import PT_KANBAN, set as pc_set
     pc_set(user_id, PT_KANBAN, dict(pending))
     touch_activity(user_id)
 
@@ -1077,7 +1077,7 @@ def touch_activity(user_id: str):
 
 def get_pending(user_id: str) -> Optional[dict]:
     """取看板 pending（type=kanban 才返回 payload；被其他类型覆盖时视为无）"""
-    from pending_context import PT_KANBAN, get as pc_get
+    from scripts.pending_context import PT_KANBAN, get as pc_get
     entry = pc_get(user_id)
     if entry and entry["type"] == PT_KANBAN:
         return dict(entry["payload"])
@@ -1086,7 +1086,7 @@ def get_pending(user_id: str) -> Optional[dict]:
 
 def clear_pending(user_id: str):
     """清看板 pending（仅当当前还是 kanban 类型才清，防误清 tool/learn）"""
-    from pending_context import PT_KANBAN, clear_type
+    from scripts.pending_context import PT_KANBAN, clear_type
     clear_type(user_id, PT_KANBAN)
 
 

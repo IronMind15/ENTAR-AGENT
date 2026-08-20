@@ -17,7 +17,7 @@ import uuid
 from abc import ABC, abstractmethod
 from typing import Optional, Any
 
-from paths import KNOWLEDGE_BASE_DIR
+from scripts.paths import KNOWLEDGE_BASE_DIR
 
 logger = logging.getLogger("doc_mgr.storage")
 

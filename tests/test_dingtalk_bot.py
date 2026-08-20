@@ -10,10 +10,8 @@ from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from skills.dingtalk_bot import (
+from scripts.skills.dingtalk_bot import (
     ErrorQueryHandler,
     _is_fast_operation, PENDING_HINT_TEXT, ERROR_MESSAGE, ERROR_CODE_INTERNAL,
 )
@@ -111,7 +109,7 @@ class ProcessTextRoutingTests(unittest.TestCase):
         result = self.handler._process_text("同意同步 ABC123", "u1", "s1")
         self.assertNotEqual(result["source"], "knowledge_review")
 
-    @mock.patch("skills.get_matched_skill")
+    @mock.patch("scripts.skills.get_matched_skill")
     def test_skill_routing(self, mock_get_skill):
         """技能匹配 → 调用对应 skill.handle 并透传 user_id"""
         fake = mock.MagicMock()
@@ -122,7 +120,7 @@ class ProcessTextRoutingTests(unittest.TestCase):
         self.assertEqual(result["answer"], "技能回复")
         fake.handle.assert_called_once_with("随便问问", user_id="u1", on_chunk=None)
 
-    @mock.patch("skills.get_matched_skill")
+    @mock.patch("scripts.skills.get_matched_skill")
     def test_fallback(self, mock_get_skill):
         """无匹配技能 → fallback 兜底"""
         mock_get_skill.return_value = None
@@ -134,7 +132,7 @@ class ProcessTextRoutingTests(unittest.TestCase):
 
     def test_learn_regex_positive_and_negative(self):
         """「帮我学习」正则：锚定排除带宾语场景"""
-        from skills.dingtalk_bot import _is_learn_command
+        from scripts.skills.dingtalk_bot import _is_learn_command
         for ok in ("帮我学习", "学习", "学习一下", "入库", "帮我入库",
                    "学习这个文件", "帮我学习！"):
             self.assertTrue(_is_learn_command(ok), ok)
@@ -142,12 +140,12 @@ class ProcessTextRoutingTests(unittest.TestCase):
                    "学习计划怎么做", "帮我学习一下PCB", "今天学习了吗"):
             self.assertFalse(_is_learn_command(no), no)
 
-    @mock.patch("knowledge_review.learn_file_for_user")
+    @mock.patch("scripts.knowledge_review.learn_file_for_user")
     def test_learn_command_routes_to_knowledge_learn(self, mock_learn):
         """「帮我学习」→ knowledge_learn 分支，且必须优先于技能"""
         mock_learn.return_value = {"status": "ok", "file_name": "a.pdf",
                                    "collection": "standards", "chunk_count": 5}
-        with mock.patch("skills.get_matched_skill") as mock_skill:
+        with mock.patch("scripts.skills.get_matched_skill") as mock_skill:
             fake = mock.MagicMock()
             fake.name = "fake"
             fake.handle.return_value = {"answer": "技能", "source": "fake"}
@@ -158,7 +156,7 @@ class ProcessTextRoutingTests(unittest.TestCase):
         mock_learn.assert_called_once_with("u1")
         fake.handle.assert_not_called()
 
-    @mock.patch("knowledge_review.learn_file_for_user")
+    @mock.patch("scripts.knowledge_review.learn_file_for_user")
     def test_learn_no_file_hint(self, mock_learn):
         """没有待学习文件 → 引导先发文件"""
         mock_learn.return_value = {"status": "no_file",
@@ -166,7 +164,7 @@ class ProcessTextRoutingTests(unittest.TestCase):
         result = self.handler._process_text("帮我学习", "u1", "s1")
         self.assertIn("请先发送文件", result["answer"])
 
-    @mock.patch("knowledge_review.list_files_for_user")
+    @mock.patch("scripts.knowledge_review.list_files_for_user")
     def test_my_files_routes(self, mock_list):
         """「我的文件」→ my_files 分支，限本人文件"""
         mock_list.return_value = [{"file_name": "a.pdf", "sync_status": "synced"}]
@@ -176,7 +174,7 @@ class ProcessTextRoutingTests(unittest.TestCase):
         self.assertIn("已学习", result["answer"])
         mock_list.assert_called_once_with("u1", is_admin=False)
 
-    @mock.patch("knowledge_review.list_files_for_user")
+    @mock.patch("scripts.knowledge_review.list_files_for_user")
     def test_list_all_requires_admin(self, mock_list):
         """「查看全部文件」非管理员 → 拒绝且不查询"""
         result = self.handler._process_text("查看全部文件", "u1", "s1")
@@ -184,7 +182,7 @@ class ProcessTextRoutingTests(unittest.TestCase):
         self.assertIn("仅管理员", result["answer"])
         mock_list.assert_not_called()
 
-    @mock.patch("knowledge_review.delete_file_for_user")
+    @mock.patch("scripts.knowledge_review.delete_file_for_user")
     def test_delete_command_routes(self, mock_delete):
         """「删除学习 序号」→ 先建立待确认操作，不直接删除"""
         mock_delete.return_value = {"status": "ok", "file_name": "a.pdf",
@@ -193,10 +191,10 @@ class ProcessTextRoutingTests(unittest.TestCase):
         self.assertEqual(result["source"], "knowledge_delete")
         self.assertIn("回复「确认」", result["answer"])
         mock_delete.assert_not_called()
-        from tools import cancel_pending_operation
+        from scripts.tools import cancel_pending_operation
         cancel_pending_operation("u1")
 
-    @mock.patch("knowledge_review.relearn_file_for_user")
+    @mock.patch("scripts.knowledge_review.relearn_file_for_user")
     def test_relearn_command_routes(self, mock_relearn):
         """「重新学习 X」→ 先建立待确认操作，不直接覆盖索引"""
         mock_relearn.return_value = {"status": "ok", "file_name": "a.pdf",
@@ -205,12 +203,12 @@ class ProcessTextRoutingTests(unittest.TestCase):
         self.assertEqual(result["source"], "knowledge_relearn")
         self.assertIn("回复「确认」", result["answer"])
         mock_relearn.assert_not_called()
-        from tools import cancel_pending_operation
+        from scripts.tools import cancel_pending_operation
         cancel_pending_operation("u1")
 
     def test_admin_mode_enter_and_exit(self):
         """ENTARBOSS 口令进入管理员模式，可任意删改；退出后失效"""
-        from skills.dingtalk_bot import _admin_sessions, _is_admin
+        from scripts.skills.dingtalk_bot import _admin_sessions, _is_admin
         _admin_sessions.discard("admin1")
         try:
             result = self.handler._process_text("ENTARBOSS", "admin1", "s1")
@@ -250,7 +248,7 @@ class ProcessToThreadTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch(
             "asyncio.to_thread",
             new=mock.AsyncMock(return_value={"answer": "回复", "source": "x"}),
-        ) as m, mock.patch("skills.memory.add"):
+        ) as m, mock.patch("scripts.skills.memory.add"):
             code, status = await handler.process(msg)
             # 处理逻辑放行到 to_thread（_process_text 是主要放行对象）
             proc_calls = self._to_thread_calls(m, handler._process_text)
@@ -264,7 +262,7 @@ class ProcessToThreadTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch(
             "asyncio.to_thread",
             new=mock.AsyncMock(return_value={"answer": "ok", "source": "x"}),
-        ) as m, mock.patch("skills.memory.add"):
+        ) as m, mock.patch("scripts.skills.memory.add"):
             await handler.process(msg)
         proc_calls = self._to_thread_calls(m, handler._process_text)
         self.assertEqual(len(proc_calls), 1)
@@ -281,7 +279,7 @@ class ProcessToThreadTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch(
             "asyncio.to_thread",
             new=mock.AsyncMock(return_value={"answer": "回复", "source": "x"}),
-        ) as m, mock.patch("skills.memory.add") as mem_add:
+        ) as m, mock.patch("scripts.skills.memory.add") as mem_add:
             await handler.process(msg)
         # 普通 markdown 回复：reply_markdown 应通过 to_thread 调用
         md_calls = self._to_thread_calls(m, handler.reply_markdown)
@@ -304,7 +302,7 @@ class ProcessToThreadTests(unittest.IsolatedAsyncioTestCase):
             new=mock.AsyncMock(
                 return_value={"answer": "第一段", "messages": ["第二段", "第三段"],
                               "source": "x"}),
-        ) as m, mock.patch("skills.memory.add") as mem_add:
+        ) as m, mock.patch("scripts.skills.memory.add") as mem_add:
             await handler.process(msg)
         md_calls = self._to_thread_calls(m, handler.reply_markdown)
         self.assertEqual(len(md_calls), 3)  # 三条顺序消息
@@ -326,7 +324,7 @@ class ProcessToThreadTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch(
             "asyncio.to_thread",
             new=mock.AsyncMock(return_value={"answer": "回复", "source": "x"}),
-        ) as m, mock.patch("skills.memory.add") as mem_add:
+        ) as m, mock.patch("scripts.skills.memory.add") as mem_add:
             await handler.process(msg)
         md_calls = self._to_thread_calls(m, handler.reply_markdown)
         self.assertEqual(len(md_calls), 1)
@@ -338,7 +336,7 @@ class ProcessToThreadTests(unittest.IsolatedAsyncioTestCase):
 
     def test_split_long_text_breaks_paragraphs_without_page_header(self):
         """v1.12.5 兜底拆条：超长文本按完整段落拆、拼接还原原文、不带「第x/y页」标题"""
-        from skills.dingtalk_bot import _split_long_text
+        from scripts.skills.dingtalk_bot import _split_long_text
         # 15 段 × ~500 字 > 4500 安全线
         long_text = "\n\n".join(f"段落{i}：" + "内容" * 200 for i in range(1, 16))
         self.assertGreater(len(long_text), 4500)
@@ -375,7 +373,7 @@ class LLMConcurrencyTests(unittest.TestCase):
 
     def test_semaphore_capacity_equals_config(self):
         """信号量容量 = MAX_CONCURRENT_LLM（默认 20）"""
-        from skills import agent
+        from scripts.skills import agent
         self.assertIsInstance(agent._LLM_SEMAPHORE, threading.BoundedSemaphore)
         cap = 0
         while agent._LLM_SEMAPHORE.acquire(blocking=False):
@@ -386,7 +384,7 @@ class LLMConcurrencyTests(unittest.TestCase):
 
     def test_concurrent_llm_calls_limited(self):
         """并发调用 _call_deepseek 时，同时进行的请求数 ≤ 信号量容量"""
-        from skills import agent
+        from scripts.skills import agent
         old_sem, old_post, old_key = (
             agent._LLM_SEMAPHORE, agent._HTTP_CLIENT.post, agent.DEEPSEEK_API_KEY,
         )
@@ -446,7 +444,7 @@ class PerUserSerializationTests(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         # 清空每用户锁，避免跨测试复用绑定旧事件循环的锁
-        from skills.dingtalk_bot import _user_locks
+        from scripts.skills.dingtalk_bot import _user_locks
         _user_locks.clear()
 
     def _handler(self):
@@ -463,9 +461,9 @@ class PerUserSerializationTests(unittest.IsolatedAsyncioTestCase):
 
         # 注意：patch 必须在 gather 外层统一做一次——并发协程内各自 patch
         # 同一属性会因恢复顺序竞态泄漏 mock（见 v1.6.0 修复记录）
-        with mock.patch("skills.get_matched_skill", return_value=_SlowSkill), \
-             mock.patch("knowledge_review.handle_review_message", return_value=None), \
-             mock.patch("skills.memory.add"):
+        with mock.patch("scripts.skills.get_matched_skill", return_value=_SlowSkill), \
+             mock.patch("scripts.knowledge_review.handle_review_message", return_value=None), \
+             mock.patch("scripts.skills.memory.add"):
             async def run(text):
                 await handler.process(_make_text_msg(text, user_id="same_user"))
 
@@ -479,9 +477,9 @@ class PerUserSerializationTests(unittest.IsolatedAsyncioTestCase):
         handler = self._handler()
         t0 = time.time()
 
-        with mock.patch("skills.get_matched_skill", return_value=_SlowSkill), \
-             mock.patch("knowledge_review.handle_review_message", return_value=None), \
-             mock.patch("skills.memory.add"):
+        with mock.patch("scripts.skills.get_matched_skill", return_value=_SlowSkill), \
+             mock.patch("scripts.knowledge_review.handle_review_message", return_value=None), \
+             mock.patch("scripts.skills.memory.add"):
             async def run(text, uid):
                 await handler.process(_make_text_msg(text, user_id=uid))
 
@@ -497,7 +495,7 @@ class PerUserSerializationTests(unittest.IsolatedAsyncioTestCase):
         重连后新循环同用户并发会抛 RuntimeError "bound to a different event loop"。
         修复后：按 (loop, lock) 存储，检测到运行循环变化自动重建锁。
         """
-        from skills import dingtalk_bot
+        from scripts.skills import dingtalk_bot
         dingtalk_bot._user_locks.clear()
         handler = self._handler()
 
@@ -526,7 +524,7 @@ class PerUserSerializationTests(unittest.IsolatedAsyncioTestCase):
         用两个独立 asyncio.run 模拟钉钉重连（SDK start_forever 每次 asyncio.run
         都是新事件循环）。旧循环锁绑定旧循环，新循环再取锁应返回新锁。
         """
-        from skills import dingtalk_bot
+        from scripts.skills import dingtalk_bot
 
         def make_handler():
             h = ErrorQueryHandler()
@@ -562,25 +560,25 @@ class ConfirmLearnBranchTests(unittest.TestCase):
 
     def setUp(self):
         self.handler = ErrorQueryHandler()
-        import pending_context
+        import scripts.pending_context as pending_context
         pending_context.reset()
 
-    @mock.patch("knowledge_review.learn_file_path_for_user",
+    @mock.patch("scripts.knowledge_review.learn_file_path_for_user",
                 return_value={"status": "ok", "file_name": "a.pdf",
                               "collection": "standards", "chunk_count": 5})
     def test_confirm_with_pending_learns(self, m_learn):
         """有 learn pending 时「入库」→ 按路径入库 + 清除 pending"""
-        from knowledge_review import set_pending_learn
+        from scripts.knowledge_review import set_pending_learn
         set_pending_learn("u1", "/x/a.pdf", "a.pdf")
         result = self.handler._process_text("入库", "u1", "s1")
         self.assertEqual(result["source"], "knowledge_learn")
         self.assertIn("学习完成", result["answer"])
         m_learn.assert_called_once_with("u1", "/x/a.pdf", "a.pdf")
         # pending 已清除（真实 clear_pending_learn 走 clear_type 守卫）
-        import pending_context
+        import scripts.pending_context as pending_context
         self.assertIsNone(pending_context.get("u1"))
 
-    @mock.patch("skills.get_matched_skill", return_value=None)
+    @mock.patch("scripts.skills.get_matched_skill", return_value=None)
     def test_confirm_without_pending_not_intercepted(self, m_skill):
         """无 pending → 确认词不被统一路由拦截（继续路由到兜底）"""
         result = self.handler._process_text("确认", "u1", "s1")
@@ -610,17 +608,17 @@ class FeedbackNumberConflictTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch(
             "asyncio.to_thread",
             new=mock.AsyncMock(return_value=patch_return),
-        ) as m, mock.patch("skills.memory.add"), mock.patch(
-            "user_store.get_last_conversation",
+        ) as m, mock.patch("scripts.skills.memory.add"), mock.patch(
+            "scripts.user_store.get_last_conversation",
             return_value={"query": "上一条问题", "answer": "上一条回答"},
-        ), mock.patch("user_store.add_feedback"):
+        ), mock.patch("scripts.user_store.add_feedback"):
             await handler.process(msg)
         return handler, m
 
     async def test_clarify_pending_skips_feedback_hook(self):
         """有澄清反问 → 回「1」走编号解析（_process_text），不记反馈"""
-        from routing import ask_clarification
-        from pending_context import clear as pc_clear
+        from scripts.routing import ask_clarification
+        from scripts.pending_context import clear as pc_clear
         ask_clarification("u1", [{"key": "delete", "label": "删除学习内容「x」"},
                                  {"key": "kanban", "label": "看板订阅相关操作"}])
         try:
@@ -636,8 +634,8 @@ class FeedbackNumberConflictTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_choose_template_pending_skips_feedback_hook(self):
         """选模板反问窗口内 → 回「1」走模板选择（_process_text），不记反馈"""
-        from dashboard.subscription_commands import set_pending
-        from pending_context import clear as pc_clear
+        from scripts.dashboard.subscription_commands import set_pending
+        from scripts.pending_context import clear as pc_clear
         set_pending("u1", {"intent": "choose_template", "sub_id": "s1"})
         try:
             handler, m = await self._run_process(
@@ -654,10 +652,10 @@ class FeedbackNumberConflictTests(unittest.IsolatedAsyncioTestCase):
         msg = _make_text_msg("1", user_id="u1")
         with mock.patch(
             "asyncio.to_thread", new=mock.AsyncMock(),
-        ) as m, mock.patch("skills.memory.add"), mock.patch(
-            "user_store.get_last_conversation",
+        ) as m, mock.patch("scripts.skills.memory.add"), mock.patch(
+            "scripts.user_store.get_last_conversation",
             return_value={"query": "上一条问题", "answer": "上一条回答"},
-        ), mock.patch("user_store.add_feedback") as m_add:
+        ), mock.patch("scripts.user_store.add_feedback") as m_add:
             await handler.process(msg)
         proc_calls = self._to_thread_calls(m, handler._process_text)
         self.assertEqual(len(proc_calls), 0)
@@ -689,11 +687,11 @@ class ImageMessageRecognitionTests(unittest.TestCase):
             "message": "ok",
         }
 
-    @mock.patch("tools.execute_tool")
-    @mock.patch("file_handler.download_and_save_file")
+    @mock.patch("scripts.tools.execute_tool")
+    @mock.patch("scripts.file_handler.download_and_save_file")
     @mock.patch.object(ErrorQueryHandler, "reply_markdown")
     @mock.patch.object(ErrorQueryHandler, "reply_text")
-    @mock.patch("config.DASHSCOPE_API_KEY", "sk-test")
+    @mock.patch("scripts.config.DASHSCOPE_API_KEY", "sk-test")
     def test_recognize_success(self, m_reply, m_md, m_save, m_tool):
         """识图成功 → 先发提示，再发含描述的 Markdown"""
         import json
@@ -707,11 +705,11 @@ class ImageMessageRecognitionTests(unittest.TestCase):
         self.assertIn("一张电路板照片", text)
         self.assertEqual(m_md.call_args[1]["title"], "恩特小助手 - 图片识别")
 
-    @mock.patch("tools.execute_tool")
-    @mock.patch("file_handler.download_and_save_file")
+    @mock.patch("scripts.tools.execute_tool")
+    @mock.patch("scripts.file_handler.download_and_save_file")
     @mock.patch.object(ErrorQueryHandler, "reply_markdown")
     @mock.patch.object(ErrorQueryHandler, "reply_text")
-    @mock.patch("config.DASHSCOPE_API_KEY", "sk-test")
+    @mock.patch("scripts.config.DASHSCOPE_API_KEY", "sk-test")
     def test_recognize_failure_fallback(self, m_reply, m_md, m_save, m_tool):
         """识图失败 → 降级该张，回复保存确认"""
         import json
@@ -723,11 +721,11 @@ class ImageMessageRecognitionTests(unittest.TestCase):
         self.assertIn("图片已保存", text)
         self.assertEqual(m_md.call_args[1]["title"], "恩特小助手 - 图片接收")
 
-    @mock.patch("tools.execute_tool")
-    @mock.patch("file_handler.download_and_save_file")
+    @mock.patch("scripts.tools.execute_tool")
+    @mock.patch("scripts.file_handler.download_and_save_file")
     @mock.patch.object(ErrorQueryHandler, "reply_markdown")
     @mock.patch.object(ErrorQueryHandler, "reply_text")
-    @mock.patch("config.DASHSCOPE_API_KEY", "")
+    @mock.patch("scripts.config.DASHSCOPE_API_KEY", "")
     def test_no_key_skip(self, m_reply, m_md, m_save, m_tool):
         """未配置 key → 跳过识图，回复旧文案，不调识图工具"""
         m_save.return_value = self._saved_file()
@@ -736,11 +734,11 @@ class ImageMessageRecognitionTests(unittest.TestCase):
         text = m_md.call_args[1]["text"]
         self.assertIn("图片已保存", text)
 
-    @mock.patch("tools.execute_tool")
-    @mock.patch("file_handler.download_and_save_file")
+    @mock.patch("scripts.tools.execute_tool")
+    @mock.patch("scripts.file_handler.download_and_save_file")
     @mock.patch.object(ErrorQueryHandler, "reply_markdown")
     @mock.patch.object(ErrorQueryHandler, "reply_text")
-    @mock.patch("config.DASHSCOPE_API_KEY", "sk-test")
+    @mock.patch("scripts.config.DASHSCOPE_API_KEY", "sk-test")
     def test_save_failed(self, m_reply, m_md, m_save, m_tool):
         """保存失败 → 回复接收失败，不调识图"""
         m_save.return_value = {"success": False, "message": "下载失败"}
@@ -771,11 +769,11 @@ class FileMessageImageRecognitionTests(unittest.TestCase):
             "message": "ok",
         }
 
-    @mock.patch("tools.execute_tool")
-    @mock.patch("file_handler.download_and_save_file")
+    @mock.patch("scripts.tools.execute_tool")
+    @mock.patch("scripts.file_handler.download_and_save_file")
     @mock.patch.object(ErrorQueryHandler, "reply_markdown")
     @mock.patch.object(ErrorQueryHandler, "reply_text")
-    @mock.patch("config.DASHSCOPE_API_KEY", "sk-test")
+    @mock.patch("scripts.config.DASHSCOPE_API_KEY", "sk-test")
     def test_file_image_recognized(self, m_reply, m_md, m_save, m_tool):
         """图片当文件发 → 调识图，回复含识别内容"""
         import json
@@ -787,11 +785,11 @@ class FileMessageImageRecognitionTests(unittest.TestCase):
         self.assertIn("图片识别", text)
         self.assertIn("一张电路板照片", text)
 
-    @mock.patch("tools.execute_tool")
-    @mock.patch("file_handler.download_and_save_file")
+    @mock.patch("scripts.tools.execute_tool")
+    @mock.patch("scripts.file_handler.download_and_save_file")
     @mock.patch.object(ErrorQueryHandler, "reply_markdown")
     @mock.patch.object(ErrorQueryHandler, "reply_text")
-    @mock.patch("config.DASHSCOPE_API_KEY", "")
+    @mock.patch("scripts.config.DASHSCOPE_API_KEY", "")
     def test_file_image_no_key_skip(self, m_reply, m_md, m_save, m_tool):
         """未配置 key → 图片当文件发不调识图，仍提示图片已保存"""
         m_save.return_value = self._saved_file()
@@ -800,12 +798,12 @@ class FileMessageImageRecognitionTests(unittest.TestCase):
         text = m_md.call_args[1]["text"]
         self.assertIn("图片已保存", text)
 
-    @mock.patch("tools.execute_tool")
-    @mock.patch("knowledge_review.set_pending_learn")
-    @mock.patch("file_handler.download_and_save_file")
+    @mock.patch("scripts.tools.execute_tool")
+    @mock.patch("scripts.knowledge_review.set_pending_learn")
+    @mock.patch("scripts.file_handler.download_and_save_file")
     @mock.patch.object(ErrorQueryHandler, "reply_markdown")
     @mock.patch.object(ErrorQueryHandler, "reply_text")
-    @mock.patch("config.DASHSCOPE_API_KEY", "sk-test")
+    @mock.patch("scripts.config.DASHSCOPE_API_KEY", "sk-test")
     def test_non_image_file_not_recognized(self, m_reply, m_md, m_save, m_learn, m_tool):
         """非图片文件（.txt）→ 不调识图，走入库推荐（不误伤普通文件）"""
         m_save.return_value = self._saved_file("说明.txt")

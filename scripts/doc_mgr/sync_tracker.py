@@ -18,7 +18,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from paths import DB_PATH as _DEFAULT_DB_PATH
+from scripts.paths import DB_PATH as _DEFAULT_DB_PATH
 
 logger = logging.getLogger("doc_mgr.sync_tracker")
 

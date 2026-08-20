@@ -5,7 +5,7 @@
 替代原 data/chat_memory.json 的 JSON 文件方案。
 
 用法：
-    from user_store import get_store
+    from scripts.user_store import get_store
     store = get_store()
     store.add_memory("user_001", "user", "你好")
     ctx = store.get_context("user_001")
@@ -26,7 +26,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Optional
 
-from paths import DB_PATH as _DEFAULT_DB_PATH
+from scripts.paths import DB_PATH as _DEFAULT_DB_PATH
 
 import requests
 
@@ -484,7 +484,7 @@ class SQLiteUserStore(UserStore):
         total_max: 总字数预算，超出时从最早的对话开始丢弃（保护上下文窗口）；None 用配置 MEMORY_BUDGET_TOKENS
         """
         if total_max is None:
-            total_max = getattr(__import__("config"), "MEMORY_BUDGET_TOKENS", 20000)
+            total_max = getattr(__import__("scripts.config"), "MEMORY_BUDGET_TOKENS", 20000)
         context = self.get_context(user_id, max_rounds)
         if not context:
             return ""
@@ -515,7 +515,7 @@ class SQLiteUserStore(UserStore):
         """
         try:
             import importlib
-            cfg = importlib.import_module("config")
+            cfg = importlib.import_module("scripts.config")
             timeout_min = int(getattr(cfg, "SESSION_TIMEOUT_MINUTES", 30))
         except Exception:
             timeout_min = 30
@@ -687,7 +687,7 @@ class SQLiteUserStore(UserStore):
         """长期记忆超上限时淘汰（先删最旧 summary，再删最旧 fact）"""
         try:
             import importlib
-            cfg = importlib.import_module("config")
+            cfg = importlib.import_module("scripts.config")
             limit = int(getattr(cfg, "LONG_TERM_MAX_PER_USER", 50))
         except Exception:
             limit = 50
@@ -727,7 +727,7 @@ class SQLiteUserStore(UserStore):
         """
         try:
             import importlib
-            cfg = importlib.import_module("config")
+            cfg = importlib.import_module("scripts.config")
             window = int(getattr(cfg, "MAX_CONTEXT_ROUNDS", 8)) * 2
         except Exception:
             window = 16
@@ -954,7 +954,7 @@ class SQLiteUserStore(UserStore):
         """获取旧版钉钉 API access_token（用 appkey + appsecret）"""
         try:
             import importlib
-            cfg = importlib.import_module("config")
+            cfg = importlib.import_module("scripts.config")
             appkey = getattr(cfg, "DINGTALK_CLIENT_ID", "")
             appsecret = getattr(cfg, "DINGTALK_CLIENT_SECRET", "")
         except Exception:

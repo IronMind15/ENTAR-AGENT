@@ -15,10 +15,8 @@ from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from routing import (ask_clarification, clear_clarification, detect_domains,
+from scripts.routing import (ask_clarification, clear_clarification, detect_domains,
                      get_clarification, resolve_clarification)
 
 _USER_IDS = ("u1", "u2", "u3")
@@ -96,7 +94,7 @@ class ClarificationTests(unittest.TestCase):
 
     def test_render_clarification_numbered(self):
         self._ask()
-        from routing import render_clarification
+        from scripts.routing import render_clarification
         rendered = render_clarification("u1")
         self.assertIn("1.", rendered)
         self.assertIn("2.", rendered)
@@ -107,12 +105,12 @@ class BotFileCommandGateTests(unittest.TestCase):
     """M1 让位 + M2 澄清 + M3 澄清路由（bot._process_text 集成）"""
 
     def setUp(self):
-        from skills.dingtalk_bot import ErrorQueryHandler
+        from scripts.skills.dingtalk_bot import ErrorQueryHandler
         self.handler = ErrorQueryHandler()
         for uid in _USER_IDS:
             clear_clarification(uid)
 
-    @mock.patch("skills.get_matched_skill")
+    @mock.patch("scripts.skills.get_matched_skill")
     def test_delete_kanban_defers_to_skill(self, mock_get_skill):
         """「删除看板订阅」→ bot 删除正则让位 → 落到技能层（dashboard）"""
         fake = mock.MagicMock()
@@ -124,7 +122,7 @@ class BotFileCommandGateTests(unittest.TestCase):
         fake.handle.assert_called_once()
         mock_get_skill.assert_called_once_with("删除看板订阅", "u1")
 
-    @mock.patch("knowledge_review.delete_file_for_user")
+    @mock.patch("scripts.knowledge_review.delete_file_for_user")
     def test_delete_learn_unchanged(self, mock_delete):
         """「删除学习 1」→ 无业务领域 → 照旧 knowledge_delete（回归）"""
         mock_delete.return_value = {"status": "ok", "file_name": "a.pdf",
@@ -133,7 +131,7 @@ class BotFileCommandGateTests(unittest.TestCase):
         self.assertEqual(result["source"], "knowledge_delete")
         self.assertIn("回复「确认」", result["answer"])
 
-    @mock.patch("knowledge_review.relearn_file_for_user")
+    @mock.patch("scripts.knowledge_review.relearn_file_for_user")
     def test_relearn_unchanged(self, mock_relearn):
         """「重新学习 1」→ 照旧 knowledge_relearn（回归）"""
         mock_relearn.return_value = {"status": "ok", "file_name": "a.pdf",
@@ -153,10 +151,10 @@ class BotFileCommandGateTests(unittest.TestCase):
         self.assertEqual(result2["source"], "knowledge_delete")
         self.assertIn("回复「确认」", result2["answer"])
         self.assertIsNone(get_clarification("u1"))
-        from tools import cancel_pending_operation
+        from scripts.tools import cancel_pending_operation
         cancel_pending_operation("u1")
 
-    @mock.patch("knowledge_review.delete_file_for_user")
+    @mock.patch("scripts.knowledge_review.delete_file_for_user")
     def test_delete_learn_with_standard_id_proceeds(self, mock_delete):
         """「删除学习 GB/T 34133-2023」→ 单标准领域只是文件名，带「学习」动词 → 照旧删除（v1.12.2 修复）"""
         mock_delete.return_value = {"status": "ok", "file_name": "GB_T_34133-2023.pdf",
@@ -165,7 +163,7 @@ class BotFileCommandGateTests(unittest.TestCase):
         self.assertEqual(result["source"], "knowledge_delete")
         self.assertIn("回复「确认」", result["answer"])
 
-    @mock.patch("knowledge_review.relearn_file_for_user")
+    @mock.patch("scripts.knowledge_review.relearn_file_for_user")
     def test_relearn_with_pcb_term_proceeds(self, mock_relearn):
         """「重新学习 母线载流计算」→ 单 PCB 领域只是文件名 → 照旧重学（v1.12.2 修复）"""
         mock_relearn.return_value = {"status": "ok", "file_name": "母线载流计算.md",
@@ -187,7 +185,7 @@ class BotFileCommandGateTests(unittest.TestCase):
         self.assertIn("已取消", result2["answer"])
         self.assertIsNone(get_clarification("u2"))
 
-    @mock.patch("skills.get_matched_skill", return_value=None)
+    @mock.patch("scripts.skills.get_matched_skill", return_value=None)
     def test_clarify_word_does_not_block_normal_flow(self, mock_get_skill):
         """澄清 pending 存在但回复无法解析 → 不阻塞、不误路由，pending 保留"""
         ask_clarification("u3", [{"key": "a", "label": "操作A"}])
@@ -202,13 +200,13 @@ class QueryChainTests(unittest.TestCase):
     """查询盲区（非操作类）：统一查知识库链路，不补前缀枚举"""
 
     def setUp(self):
-        from skills.dingtalk_bot import ErrorQueryHandler
+        from scripts.skills.dingtalk_bot import ErrorQueryHandler
         self.handler = ErrorQueryHandler()
         for uid in _USER_IDS:
             clear_clarification(uid)
 
-    @mock.patch("kb_registry.get_visible_knowledge_bases")
-    @mock.patch("tools.kb_search._search_one")
+    @mock.patch("scripts.kb_registry.get_visible_knowledge_bases")
+    @mock.patch("scripts.tools.kb_search._search_one")
     def test_cqc_routes_to_standards_semantic(self, mock_search, mock_visible):
         """CQC 3310 无前缀枚举 → kb_search 留空库全库搜索仍命中"""
         mock_visible.return_value = [{
@@ -219,7 +217,7 @@ class QueryChainTests(unittest.TestCase):
             "std_id": "CQC 3310-2017", "std_title": "光伏并网逆变器",
             "_match_type": "semantic", "_score": 0.42,
         }]
-        from tools.kb_search import execute
+        from scripts.tools.kb_search import execute
         out = json.loads(execute({"query": "CQC 3310 标准是什么"}))
         self.assertTrue(out["found"])
         # 原样 query 进入语义搜索（不依赖前缀枚举即命中库中 CQC 数据）
@@ -227,7 +225,7 @@ class QueryChainTests(unittest.TestCase):
         self.assertEqual(out["results"][0]["std_id"], "CQC 3310-2017")
         self.assertEqual(out["results"][0]["kb_name"], "标准知识库")
 
-    @mock.patch("skills.get_matched_skill")
+    @mock.patch("scripts.skills.get_matched_skill")
     def test_kanban_settings_query_falls_to_agent(self, mock_get_skill):
         """「看板设置是什么」→ 非操作类 → 让位 Agent（mock 验证不误接订阅管理）"""
         fake = mock.MagicMock()

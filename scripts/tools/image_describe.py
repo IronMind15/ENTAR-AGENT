@@ -11,12 +11,12 @@ import os
 import time
 from pathlib import Path
 
-from paths import UPLOADS_DIR
+from scripts.paths import UPLOADS_DIR
 
 import httpx
 
-from config import DASHSCOPE_API_KEY, VISION_MODEL
-from tools import register
+from scripts.config import DASHSCOPE_API_KEY, VISION_MODEL
+from scripts.tools import register
 
 logger = logging.getLogger("tool.vision")
 

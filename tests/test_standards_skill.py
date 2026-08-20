@@ -7,11 +7,9 @@ from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from skills import get_matched_skill  # noqa: E402
-from skills import standards_query as sq  # noqa: E402
+from scripts.skills import get_matched_skill  # noqa: E402
+from scripts.skills import standards_query as sq  # noqa: E402
 
 
 class StandardsRoutingTests(unittest.TestCase):

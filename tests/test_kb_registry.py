@@ -10,10 +10,8 @@ from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from kb_registry import KBRegistry  # noqa: E402
+from scripts.kb_registry import KBRegistry  # noqa: E402
 
 
 class _RegistryBase(unittest.TestCase):
@@ -122,16 +120,16 @@ class CreateToolTests(_RegistryBase):
 
     def setUp(self):
         super().setUp()
-        self.patch = mock.patch("kb_registry.get_registry", return_value=self.reg)
+        self.patch = mock.patch("scripts.kb_registry.get_registry", return_value=self.reg)
         self.patch.start()
         self.addCleanup(self.patch.stop)
 
     def test_tool_registered(self):
-        from tools import get_tool_names
+        from scripts.tools import get_tool_names
         self.assertIn("kb_create", get_tool_names())
 
     def test_create_ok(self):
-        from tools.kb_create import execute
+        from scripts.tools.kb_create import execute
         r = json.loads(execute({
             "name": "产品手册", "description": "产品说明书", "department": "rd"}))
         self.assertTrue(r["created"])
@@ -140,18 +138,18 @@ class CreateToolTests(_RegistryBase):
         self.assertIn("学到", r["message"])
 
     def test_empty_name(self):
-        from tools.kb_create import execute
+        from scripts.tools.kb_create import execute
         r = json.loads(execute({"name": "  "}))
         self.assertIn("error", r)
 
     def test_invalid_department(self):
-        from tools.kb_create import execute
+        from scripts.tools.kb_create import execute
         r = json.loads(execute({"name": "坏库", "department": "mars"}))
         self.assertIn("error", r)
         self.assertIn("不合法", r["error"])
 
     def test_duplicate(self):
-        from tools.kb_create import execute
+        from scripts.tools.kb_create import execute
         execute({"name": "重复库"})
         r = json.loads(execute({"name": "重复库"}))
         self.assertIn("error", r)

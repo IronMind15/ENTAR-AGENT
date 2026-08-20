@@ -31,7 +31,7 @@ from typing import Optional
 
 import requests
 
-from config import (
+from scripts.config import (
     DINGTALK_API_BASE,
     DINGTALK_CLIENT_ID,
     DINGTALK_CLIENT_SECRET,
@@ -256,7 +256,7 @@ class DingTalkDocClient:
         if staff_id in self._union_cache:
             return self._union_cache[staff_id]
         try:
-            from contact_api import get_contact_client
+            from scripts.contact_api import get_contact_client
             detail = get_contact_client().get_user_detail(staff_id)
             unionid = str(detail.get("unionid") or "")
         except Exception as e:

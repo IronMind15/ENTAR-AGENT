@@ -9,15 +9,13 @@ from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from dashboard.doc_candidates import DocCandidate, DocCandidateStore  # noqa: E402
-from dashboard.service import (  # noqa: E402
+from scripts.dashboard.doc_candidates import DocCandidate, DocCandidateStore  # noqa: E402
+from scripts.dashboard.service import (  # noqa: E402
     assemble_per_source_messages, build_dynamic_source, load_all_available_sources,
     resolve_subscription_sources, source_resolution_warnings,
 )
-from dashboard.subscription_store import Subscription  # noqa: E402
+from scripts.dashboard.subscription_store import Subscription  # noqa: E402
 
 
 class BuildDynamicSourceTests(unittest.TestCase):
@@ -59,7 +57,7 @@ class ResolveSubscriptionSourcesTests(unittest.TestCase):
         self._db_path = path
         self._store = DocCandidateStore(db_path=path)
         self.patch_cand = mock.patch(
-            "dashboard.doc_candidates.get_candidate_store", return_value=self._store)
+            "scripts.dashboard.doc_candidates.get_candidate_store", return_value=self._store)
         self.patch_cand.start()
         self.addCleanup(self.patch_cand.stop)
         self.addCleanup(self._cleanup)
@@ -88,7 +86,7 @@ class ResolveSubscriptionSourcesTests(unittest.TestCase):
         self._store.add(DocCandidate(user_id="u1", url="u2", node_id="n2",
                                      kind="notable", enabled=True))
         sub = self._sub(["doc_1"])
-        with mock.patch("dashboard.config_model.load_sources", return_value=[]):
+        with mock.patch("scripts.dashboard.config_model.load_sources", return_value=[]):
             sources = resolve_subscription_sources(sub)
         self.assertEqual([s.key for s in sources], ["doc_1"])
 
@@ -99,7 +97,7 @@ class ResolveSubscriptionSourcesTests(unittest.TestCase):
         self._store.add(DocCandidate(user_id="u2", url="u", node_id="n2",
                                      kind="notable", enabled=True))
         sub = self._sub(["doc_1"])
-        with mock.patch("dashboard.config_model.load_sources", return_value=[]):
+        with mock.patch("scripts.dashboard.config_model.load_sources", return_value=[]):
             sources = resolve_subscription_sources(sub)
         self.assertEqual([s.key for s in sources], ["doc_1"])
 
@@ -108,7 +106,7 @@ class ResolveSubscriptionSourcesTests(unittest.TestCase):
         self._store.add(DocCandidate(user_id="u1", url="u", node_id="n1",
                                      kind="notable", enabled=False))
         sub = self._sub(["doc_1"])
-        with mock.patch("dashboard.config_model.load_sources", return_value=[]):
+        with mock.patch("scripts.dashboard.config_model.load_sources", return_value=[]):
             sources = resolve_subscription_sources(sub)
         self.assertEqual(sources, [])
 
@@ -117,11 +115,11 @@ class ResolveSubscriptionSourcesTests(unittest.TestCase):
 
         即使 owner 有动态候选 doc_1，任务边界固定不并入（用户没把它加进任务）。
         """
-        from dashboard.config_model import SourceConfig
+        from scripts.dashboard.config_model import SourceConfig
         self._store.add(DocCandidate(user_id="u1", url="u", node_id="n1",
                                      kind="notable", enabled=True))
         sub = self._sub(["project_status"])
-        with mock.patch("dashboard.config_model.get_source",
+        with mock.patch("scripts.dashboard.config_model.get_source",
                         return_value=SourceConfig(key="project_status",
                                                   name="研发项目现况表",
                                                   base_id="b1")):
@@ -133,20 +131,20 @@ class ResolveSubscriptionSourcesTests(unittest.TestCase):
 
         绑定的 project_status 存在 → 出；doc_999 无对应候选 → 跳过，不崩。
         """
-        from dashboard.config_model import SourceConfig
+        from scripts.dashboard.config_model import SourceConfig
         sub = self._sub(["project_status", "doc_999"])
-        with mock.patch("dashboard.config_model.get_source",
+        with mock.patch("scripts.dashboard.config_model.get_source",
                         return_value=SourceConfig(key="project_status",
                                                   name="研发项目现况表",
                                                   base_id="b1")), \
-                mock.patch("dashboard.config_model.load_sources", return_value=[]):
+                mock.patch("scripts.dashboard.config_model.load_sources", return_value=[]):
             sources = resolve_subscription_sources(sub)
         self.assertEqual([s.key for s in sources], ["project_status"])
 
     def test_no_sources_at_all(self):
         sub = self._sub(["doc_999"])
-        with mock.patch("dashboard.config_model.get_source", return_value=None), \
-                mock.patch("dashboard.config_model.load_sources", return_value=[]):
+        with mock.patch("scripts.dashboard.config_model.get_source", return_value=None), \
+                mock.patch("scripts.dashboard.config_model.load_sources", return_value=[]):
             sources = resolve_subscription_sources(sub)
         self.assertEqual(sources, [])
 
@@ -170,7 +168,7 @@ class LoadAllAvailableSourcesTests(unittest.TestCase):
         self._db_path = path
         self._store = DocCandidateStore(db_path=path)
         self.patch_cand = mock.patch(
-            "dashboard.doc_candidates.get_candidate_store", return_value=self._store)
+            "scripts.dashboard.doc_candidates.get_candidate_store", return_value=self._store)
         self.patch_cand.start()
         self.addCleanup(self.patch_cand.stop)
         self.addCleanup(self._cleanup)
@@ -186,10 +184,10 @@ class LoadAllAvailableSourcesTests(unittest.TestCase):
                     pass
 
     def test_config_plus_dynamic(self):
-        from dashboard.config_model import SourceConfig
+        from scripts.dashboard.config_model import SourceConfig
         self._store.add(DocCandidate(user_id="u1", url="u", node_id="n1",
                                      kind="notable", enabled=True))
-        with mock.patch("dashboard.config_model.load_sources",
+        with mock.patch("scripts.dashboard.config_model.load_sources",
                         return_value=[SourceConfig(key="project_status",
                                                    name="研发项目现况表",
                                                    base_id="b1")]):
@@ -200,7 +198,7 @@ class LoadAllAvailableSourcesTests(unittest.TestCase):
         # v1.11.1：doc 也纳入看板数据源
         self._store.add(DocCandidate(user_id="u1", url="u", node_id="n3",
                                      kind="doc", enabled=True))
-        with mock.patch("dashboard.config_model.load_sources", return_value=[]):
+        with mock.patch("scripts.dashboard.config_model.load_sources", return_value=[]):
             sources = load_all_available_sources()
         self.assertEqual({s.key for s in sources}, {"doc_1"})
         self.assertEqual(sources[0].kind, "doc")
@@ -210,7 +208,7 @@ class LoadAllAvailableSourcesTests(unittest.TestCase):
         self._store.add(DocCandidate(user_id="u1", url="u", node_id="f1",
                                      kind="folder", enabled=True,
                                      name="部门周报"))
-        with mock.patch("dashboard.config_model.load_sources", return_value=[]):
+        with mock.patch("scripts.dashboard.config_model.load_sources", return_value=[]):
             sources = load_all_available_sources()
         self.assertEqual({s.key for s in sources}, {"doc_1"})
         self.assertEqual(sources[0].kind, "folder")
@@ -222,10 +220,10 @@ class LoadAllAvailableSourcesTests(unittest.TestCase):
                                      kind="notable", enabled=True))
         self._store.add(DocCandidate(user_id="u2", url="u2", node_id="n2",
                                      kind="notable", enabled=True))
-        with mock.patch("dashboard.config_model.load_sources", return_value=[]):
+        with mock.patch("scripts.dashboard.config_model.load_sources", return_value=[]):
             scoped = load_all_available_sources(user_id="u1")
         self.assertEqual({s.key for s in scoped}, {"doc_1"})
-        with mock.patch("dashboard.config_model.load_sources", return_value=[]):
+        with mock.patch("scripts.dashboard.config_model.load_sources", return_value=[]):
             all_ = load_all_available_sources()
         self.assertEqual({s.key for s in all_}, {"doc_1", "doc_2"})
 
@@ -244,7 +242,7 @@ class AssemblePerSourceMessagesTests(unittest.TestCase):
         fake_report = mock.MagicMock()
         fake_report.messages = ["总结"]
         build = mock.patch(
-            "dashboard.llm_pipeline.build_dashboard_report",
+            "scripts.dashboard.llm_pipeline.build_dashboard_report",
             return_value=fake_report).start()
         self.addCleanup(mock.patch.stopall)
         msgs = assemble_per_source_messages(
@@ -263,13 +261,13 @@ class AssemblePerSourceMessagesTests(unittest.TestCase):
         parsed = [self._parsed_item("a")]
         report = mock.MagicMock()
         report.messages = ["第1页", "第2页"]
-        with mock.patch("dashboard.llm_pipeline.build_dashboard_report",
+        with mock.patch("scripts.dashboard.llm_pipeline.build_dashboard_report",
                         return_value=report):
             msgs = assemble_per_source_messages(parsed)
         self.assertEqual(msgs, ["第1页", "第2页"])
 
     def test_empty_parsed_returns_empty(self):
-        with mock.patch("dashboard.llm_pipeline.build_dashboard_report") as build:
+        with mock.patch("scripts.dashboard.llm_pipeline.build_dashboard_report") as build:
             msgs = assemble_per_source_messages([])
         self.assertEqual(msgs, [])
         build.assert_not_called()
@@ -279,8 +277,8 @@ class CollectAndParsePartialFailureTests(unittest.TestCase):
     """v1.12.6（C8）：collect_and_parse 对部分失败（error 与 records 并存）保留数据"""
 
     def _run(self, sources, collected):
-        from dashboard.service import collect_and_parse
-        with mock.patch("dashboard.collector.Collector.collect_all",
+        from scripts.dashboard.service import collect_and_parse
+        with mock.patch("scripts.dashboard.collector.Collector.collect_all",
                         return_value=collected):
             return collect_and_parse(sources, operator_id="op")
 

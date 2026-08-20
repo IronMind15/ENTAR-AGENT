@@ -3,9 +3,7 @@
 from pathlib import Path
 import unittest
 
-import paths
-import skills
-import tools
+from scripts import paths, skills, tools
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

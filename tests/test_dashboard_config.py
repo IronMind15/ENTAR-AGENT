@@ -9,10 +9,8 @@ from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-import dashboard.config_model as cm  # noqa: E402
+import scripts.dashboard.config_model as cm  # noqa: E402
 
 
 class LoadSourcesTests(unittest.TestCase):
@@ -124,11 +122,11 @@ class SourceUsableTests(unittest.TestCase):
 class LoadPushConfigTests(unittest.TestCase):
     """推送配置加载"""
 
-    @mock.patch("config.DASHBOARD_PUSH_HOUR", "10")
-    @mock.patch("config.DASHBOARD_PUSH_MINUTE", "30")
-    @mock.patch("config.DASHBOARD_ALERT_MODE", "always")
-    @mock.patch("config.DASHBOARD_TITLE", "测试看板")
-    @mock.patch("config.DASHBOARD_WEEKDAYS", "1,5")
+    @mock.patch("scripts.config.DASHBOARD_PUSH_HOUR", "10")
+    @mock.patch("scripts.config.DASHBOARD_PUSH_MINUTE", "30")
+    @mock.patch("scripts.config.DASHBOARD_ALERT_MODE", "always")
+    @mock.patch("scripts.config.DASHBOARD_TITLE", "测试看板")
+    @mock.patch("scripts.config.DASHBOARD_WEEKDAYS", "1,5")
     def test_load_push_config(self):
         cfg = cm.load_push_config()
         self.assertEqual(cfg.push_hour, 10)
@@ -137,11 +135,11 @@ class LoadPushConfigTests(unittest.TestCase):
         self.assertEqual(cfg.title, "测试看板")
         self.assertEqual(cfg.weekdays, "1,5")
 
-    @mock.patch("config.DASHBOARD_PUSH_HOUR", "9")
-    @mock.patch("config.DASHBOARD_PUSH_MINUTE", "0")
-    @mock.patch("config.DASHBOARD_ALERT_MODE", "bad_mode")
-    @mock.patch("config.DASHBOARD_TITLE", "x")
-    @mock.patch("config.DASHBOARD_WEEKDAYS", "")
+    @mock.patch("scripts.config.DASHBOARD_PUSH_HOUR", "9")
+    @mock.patch("scripts.config.DASHBOARD_PUSH_MINUTE", "0")
+    @mock.patch("scripts.config.DASHBOARD_ALERT_MODE", "bad_mode")
+    @mock.patch("scripts.config.DASHBOARD_TITLE", "x")
+    @mock.patch("scripts.config.DASHBOARD_WEEKDAYS", "")
     def test_alert_mode_normalized(self):
         """非法 alert_mode 归一为 always"""
         cfg = cm.load_push_config()

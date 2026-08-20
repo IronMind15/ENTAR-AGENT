@@ -22,11 +22,12 @@ import datetime
 import os
 import sys
 
-_PARENT = os.path.dirname(os.path.abspath(__file__))
-if _PARENT not in sys.path:
-    sys.path.insert(0, _PARENT)
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
-_OUTPUT = os.path.join(os.path.dirname(_PARENT), "docs", "能力清单.md")
+_OUTPUT = os.path.join(_PROJECT_ROOT, "docs", "能力清单.md")
 
 
 # ===== 各入口采集（惰性 import + 降级） =====
@@ -34,7 +35,7 @@ _OUTPUT = os.path.join(os.path.dirname(_PARENT), "docs", "能力清单.md")
 def collect_tools() -> list[dict]:
     """LLM 工具：tools 注册中心元数据"""
     try:
-        from tools import get_tool_metadata
+        from scripts.tools import get_tool_metadata
         return get_tool_metadata()
     except Exception as e:  # pragma: no cover — 降级路径
         return [{"error": f"tools 采集失败: {e}"}]
@@ -43,7 +44,7 @@ def collect_tools() -> list[dict]:
 def collect_skills() -> list[dict]:
     """技能层：skills 注册中心（name/description/priority）"""
     try:
-        from skills import get_skill_list
+        from scripts.skills import get_skill_list
         return [{"name": s.name, "description": s.description,
                  "priority": s.priority} for s in get_skill_list()]
     except Exception as e:  # pragma: no cover
@@ -53,7 +54,7 @@ def collect_skills() -> list[dict]:
 def collect_bot_commands() -> list[dict]:
     """Bot 命令：dingtalk_bot._BOT_COMMANDS 登记表"""
     try:
-        from skills import dingtalk_bot as bot
+        from scripts.skills import dingtalk_bot as bot
         return list(bot._BOT_COMMANDS)
     except Exception as e:  # pragma: no cover
         return [{"error": f"bot 命令采集失败: {e}"}]
@@ -62,7 +63,7 @@ def collect_bot_commands() -> list[dict]:
 def collect_dashboard_intents() -> list[dict]:
     """看板意图：subscription_commands._INTENT_DEFS 登记表"""
     try:
-        from dashboard.subscription_commands import _INTENT_DEFS
+        from scripts.dashboard.subscription_commands import _INTENT_DEFS
         return list(_INTENT_DEFS)
     except Exception as e:  # pragma: no cover
         return [{"error": f"看板意图采集失败: {e}"}]

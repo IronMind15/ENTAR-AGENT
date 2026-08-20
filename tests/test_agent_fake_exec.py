@@ -16,10 +16,8 @@ from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from skills.agent import (  # noqa: E402
+from scripts.skills.agent import (  # noqa: E402
     _needs_fake_exec_correction, _FAKE_EXEC_CORRECTION,
 )
 
@@ -72,10 +70,10 @@ class FakeExecCorrectionIntegrationTests(unittest.TestCase):
     """集成：mock LLM 无写操作工具调用 → 幻觉回答被追加纠偏"""
 
     def _handle(self, query):
-        from skills.agent import RAGAgentSkill
+        from scripts.skills.agent import RAGAgentSkill
         return RAGAgentSkill.handle(query, user_id="")
 
-    @mock.patch("skills.agent._call_deepseek",
+    @mock.patch("scripts.skills.agent._call_deepseek",
                 return_value={"content": "✅ 已确认修改！您的订阅已调整。",
                               "tool_calls": None})
     def test_confirm_modify_gets_correction(self, mock_llm):
@@ -83,7 +81,7 @@ class FakeExecCorrectionIntegrationTests(unittest.TestCase):
         self.assertIn("本轮我未执行任何写操作", r["answer"])
         self.assertIn("正式确认流程", r["answer"])
 
-    @mock.patch("skills.agent._call_deepseek",
+    @mock.patch("scripts.skills.agent._call_deepseek",
                 return_value={"content": "今天天气不错，适合户外活动。",
                               "tool_calls": None})
     def test_normal_chat_no_correction(self, mock_llm):

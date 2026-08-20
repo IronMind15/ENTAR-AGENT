@@ -1,14 +1,7 @@
-"""恩特小助手脚本包入口。
+"""恩特小助手脚本包。
 
-保留历史上 ``python scripts/main.py`` 的直接启动方式，同时提供稳定的
-``python -m scripts.main`` 调用方式。项目内部模块仍使用既有的扁平导入名，
-这里把 ``scripts/`` 放入模块搜索路径，避免不同启动目录造成导入错乱。
+活动代码统一从 ``scripts`` 包加载，避免同一文件同时以 ``tools`` / ``skills``
+和 ``scripts.tools`` / ``scripts.skills`` 两个模块名进入 ``sys.modules``。
+直接执行 ``python scripts/main.py`` 的兼容处理位于入口脚本本身，不再由包
+初始化阶段修改全局模块搜索路径。
 """
-
-from pathlib import Path
-import sys
-
-
-_SCRIPT_DIR = str(Path(__file__).resolve().parent)
-if _SCRIPT_DIR not in sys.path:
-    sys.path.insert(0, _SCRIPT_DIR)

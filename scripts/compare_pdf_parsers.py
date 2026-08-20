@@ -28,11 +28,10 @@ if sys.platform == "win32":
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-from paths import STANDARDS_DIR
+from scripts.paths import STANDARDS_DIR
 
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
 
@@ -102,8 +101,8 @@ def _overlap_rate(local_text: str, mineru_text: str) -> tuple[float, int, int]:
 
 def run_local(file_path: Path, expected_chars: int) -> dict:
     """本地 PyMuPDF 路径：提取 + 质量校验 + 切块计数"""
-    from doc_mgr.extractors.pdf_mupdf import extract_pdf_text, validate_local_text
-    from doc_mgr.chunkers import PdfChunker
+    from scripts.doc_mgr.extractors.pdf_mupdf import extract_pdf_text, validate_local_text
+    from scripts.doc_mgr.chunkers import PdfChunker
 
     t0 = time.time()
     full_text, std_id, std_title = extract_pdf_text(str(file_path))
@@ -131,8 +130,8 @@ def run_local(file_path: Path, expected_chars: int) -> dict:
 
 def run_mineru(file_path: Path, force: bool = False) -> dict:
     """MinerU 路径：远程转换 → Markdown → 切块计数"""
-    from doc_mgr import engine
-    from doc_mgr.chunkers import MarkdownChunker
+    from scripts.doc_mgr import engine
+    from scripts.doc_mgr.chunkers import MarkdownChunker
 
     t0 = time.time()
     try:
@@ -152,7 +151,7 @@ def run_mineru(file_path: Path, force: bool = False) -> dict:
     with open(md_path, "r", encoding="utf-8") as f:
         md_text = f.read()
 
-    from doc_mgr.extractors.pdf_mupdf import detect_standard_id, detect_standard_title
+    from scripts.doc_mgr.extractors.pdf_mupdf import detect_standard_id, detect_standard_title
     std_id = detect_standard_id(md_text, file_path.name)
     std_title = detect_standard_title(md_text, file_path.name)
 
@@ -171,7 +170,7 @@ def run_mineru(file_path: Path, force: bool = False) -> dict:
 
 
 def compare_one(file_path: Path, no_mineru: bool, force_mineru: bool = False) -> dict:
-    from doc_mgr.extractors.pdf_mupdf import classify_pdf_type
+    from scripts.doc_mgr.extractors.pdf_mupdf import classify_pdf_type
 
     print(f"\n{'='*70}")
     print(f"[文件] {file_path.name}")
@@ -228,14 +227,14 @@ def compare_one(file_path: Path, no_mineru: bool, force_mineru: bool = False) ->
 
 
 def extract_local_text(file_path: Path) -> str:
-    from doc_mgr.extractors.pdf_mupdf import extract_pdf_text
+    from scripts.doc_mgr.extractors.pdf_mupdf import extract_pdf_text
     full_text, _, _ = extract_pdf_text(str(file_path))
     return full_text or ""
 
 
 def read_mineru_text(file_path: Path, mineru: dict) -> str:
     """读回 MinerU 的 Markdown 用于重合度对比（避免二次调用）"""
-    from doc_mgr import engine
+    from scripts.doc_mgr import engine
     md_path = engine._try_mineru(str(file_path), file_path.name, content_hash="")
     if md_path and os.path.isfile(md_path):
         with open(md_path, "r", encoding="utf-8") as f:

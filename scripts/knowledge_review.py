@@ -10,13 +10,13 @@ import re
 import threading
 from pathlib import Path
 
-from paths import UPLOADS_DIR
+from scripts.paths import UPLOADS_DIR
 from typing import Callable, Optional
 
-from config import KNOWLEDGE_REVIEW_MODE, KNOWLEDGE_REVIEWER_STAFF_IDS
-from center_config import resolve_center, get_center_name
-from dingtalk_notifier import DingTalkNotifier
-from doc_mgr.sync_tracker import SyncTracker
+from scripts.config import KNOWLEDGE_REVIEW_MODE, KNOWLEDGE_REVIEWER_STAFF_IDS
+from scripts.center_config import resolve_center, get_center_name
+from scripts.dingtalk_notifier import DingTalkNotifier
+from scripts.doc_mgr.sync_tracker import SyncTracker
 
 logger = logging.getLogger("knowledge_review")
 
@@ -358,7 +358,7 @@ class KnowledgeReviewService:
         kb: 可选，指定知识库（v1.11.5 多库：resolve_kb 结果 dict），
             其 collection/department 覆盖默认库与 'public'。
         """
-        from doc_mgr.engine import process_file
+        from scripts.doc_mgr.engine import process_file
 
         rows = [r for r in self.tracker.get_pending_files()
                 if r.get("upload_user_id") == user_id]
@@ -398,7 +398,7 @@ class KnowledgeReviewService:
                     "message": str(exc)[:200]}
 
         if doc.status == "done":
-            from skills.enhanced_search import invalidate_bm25_cache
+            from scripts.skills.enhanced_search import invalidate_bm25_cache
             invalidate_bm25_cache(collection)
             return {"status": "ok", "file_name": file_name,
                     "collection": collection,
@@ -416,7 +416,7 @@ class KnowledgeReviewService:
         同步 process_file → 返回同构结果。engine.process_file 行为不变。
         kb: 可选，指定知识库（v1.11.5），覆盖 tracker 登记库与默认库。
         """
-        from doc_mgr.engine import process_file
+        from scripts.doc_mgr.engine import process_file
 
         if not file_path:
             return {"status": "no_file", "message": "未找到待学习的文件。"}
@@ -459,7 +459,7 @@ class KnowledgeReviewService:
                     "message": str(exc)[:200]}
 
         if doc.status == "done":
-            from skills.enhanced_search import invalidate_bm25_cache
+            from scripts.skills.enhanced_search import invalidate_bm25_cache
             invalidate_bm25_cache(collection)
             return {"status": "ok", "file_name": fname, "collection": collection,
                     "chunk_count": int(getattr(doc, "chunk_count", 0) or 0),
@@ -474,7 +474,7 @@ class KnowledgeReviewService:
 
         kb: 可选，指定知识库（v1.11.5），覆盖登记库。
         """
-        from doc_mgr.engine import process_file
+        from scripts.doc_mgr.engine import process_file
 
         located = self._locate_file(user_id, target, is_admin)
         if located["status"] != "ok":
@@ -510,7 +510,7 @@ class KnowledgeReviewService:
             return {"status": "failed", "file_name": file_name,
                     "message": str(exc)[:200]}
         if doc.status == "done":
-            from skills.enhanced_search import invalidate_bm25_cache
+            from scripts.skills.enhanced_search import invalidate_bm25_cache
             invalidate_bm25_cache(collection)
             return {"status": "ok", "file_name": file_name,
                     "collection": collection,
@@ -525,8 +525,8 @@ class KnowledgeReviewService:
 
         权限硬校验：非管理员只能删 upload_user_id == user_id 的记录。
         """
-        from doc_mgr.engine import get_store
-        from doc_mgr.identity import stable_document_id
+        from scripts.doc_mgr.engine import get_store
+        from scripts.doc_mgr.identity import stable_document_id
 
         located = self._locate_file(user_id, target, is_admin)
         if located["status"] != "ok":
@@ -554,7 +554,7 @@ class KnowledgeReviewService:
             if before_ids:
                 store.delete(collection, ids=before_ids)
                 deleted_chunks = len(before_ids)
-                from skills.enhanced_search import invalidate_bm25_cache
+                from scripts.skills.enhanced_search import invalidate_bm25_cache
                 invalidate_bm25_cache(collection)
         except Exception as exc:
             logger.warning(f"删除知识库内容失败（继续删源文件）: {exc}")
@@ -595,8 +595,8 @@ class KnowledgeReviewService:
         Args:
             department: 所属中心 ID，优先用参数值，无则从 row 中读取
         """
-        from doc_mgr.engine import process_file
-        from doc_mgr.task_manager import get_manager
+        from scripts.doc_mgr.engine import process_file
+        from scripts.doc_mgr.task_manager import get_manager
 
         if not department or department == "public":
             department = row.get("suggested_department", "public")
@@ -644,7 +644,7 @@ def _get_user_centers(user_id: str) -> list[str]:
     再回退到 public。
     """
     try:
-        from user_store import get_store
+        from scripts.user_store import get_store
         store = get_store()
         centers = store.get_user_centers(user_id)
         if centers:
@@ -707,12 +707,12 @@ def learn_file_for_user(user_id: str, user_name: str = "",
 # v1.12.1（M3）：pending 统一收口到 pending_context（type=learn），薄封装保留 API。
 def set_pending_learn(user_id: str, file_path: str, file_name: str = ""):
     """保存文件成功后登记推荐确认（精确对应刚上传的文件，规避多文件歧义）"""
-    from pending_context import PT_LEARN, set as pc_set
+    from scripts.pending_context import PT_LEARN, set as pc_set
     pc_set(user_id, PT_LEARN, {"file_path": file_path, "file_name": file_name})
 
 
 def get_pending_learn(user_id: str) -> Optional[dict]:
-    from pending_context import PT_LEARN, get as pc_get
+    from scripts.pending_context import PT_LEARN, get as pc_get
     entry = pc_get(user_id)
     if entry and entry["type"] == PT_LEARN:
         return dict(entry["payload"])
@@ -720,7 +720,7 @@ def get_pending_learn(user_id: str) -> Optional[dict]:
 
 
 def clear_pending_learn(user_id: str):
-    from pending_context import PT_LEARN, clear_type
+    from scripts.pending_context import PT_LEARN, clear_type
     clear_type(user_id, PT_LEARN)
 
 

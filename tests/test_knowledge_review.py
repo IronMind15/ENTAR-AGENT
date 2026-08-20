@@ -8,14 +8,12 @@ from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from dingtalk_notifier import DingTalkNotifier
-from doc_mgr.identity import file_sha256
-from doc_mgr.sync_tracker import SyncTracker
-from file_handler import sanitize_file_name
-from knowledge_review import (
+from scripts.dingtalk_notifier import DingTalkNotifier
+from scripts.doc_mgr.identity import file_sha256
+from scripts.doc_mgr.sync_tracker import SyncTracker
+from scripts.file_handler import sanitize_file_name
+from scripts.knowledge_review import (
     KnowledgeReviewService, default_collection, _collection_from_text,
     clear_pending_learn, get_pending_learn, learn_file_path_for_user,
     set_pending_learn,
@@ -235,7 +233,7 @@ class KnowledgeReviewServiceTests(unittest.TestCase):
 
     def test_learn_for_user_syncs_latest_pending_file(self):
         """「帮我学习」取最新待学习文件，同步 process_file（department=public）"""
-        with patch("doc_mgr.engine.process_file") as process:
+        with patch("scripts.doc_mgr.engine.process_file") as process:
             process.return_value = SimpleNamespace(
                 status="done", chunk_count=5, collection="standards", message="")
             result = self.service.learn_for_user("uploader-union-id", "测试员工")
@@ -249,8 +247,8 @@ class KnowledgeReviewServiceTests(unittest.TestCase):
 
     def test_learn_for_user_invalidates_bm25_cache(self):
         """v1.12.x（审查 Critical 3）：学习成功后清 BM25 缓存（防混合检索旧索引）"""
-        with patch("doc_mgr.engine.process_file") as process, \
-             patch("skills.enhanced_search.invalidate_bm25_cache") as invalidate:
+        with patch("scripts.doc_mgr.engine.process_file") as process, \
+             patch("scripts.skills.enhanced_search.invalidate_bm25_cache") as invalidate:
             process.return_value = SimpleNamespace(
                 status="done", chunk_count=5, collection="standards", message="")
             result = self.service.learn_for_user("uploader-union-id", "测试员工")
@@ -262,7 +260,7 @@ class KnowledgeReviewServiceTests(unittest.TestCase):
         # 移除 setUp 里的 sample.pdf，避免同秒时间戳下「最新」排序不稳定
         self.tracker.delete_file(str(self.file_path))
         md_path = self._upsert_for("经验排查.md")
-        with patch("doc_mgr.engine.process_file") as process:
+        with patch("scripts.doc_mgr.engine.process_file") as process:
             process.return_value = SimpleNamespace(
                 status="done", chunk_count=2, collection="experience_kb", message="")
             result = self.service.learn_for_user("uploader-union-id")
@@ -272,13 +270,13 @@ class KnowledgeReviewServiceTests(unittest.TestCase):
 
     def test_learn_ignores_other_users_pending_files(self):
         """只能学习自己上传的文件；别人 pending 的文件不处理"""
-        with patch("doc_mgr.engine.process_file") as process:
+        with patch("scripts.doc_mgr.engine.process_file") as process:
             result = self.service.learn_for_user("another-user")
         self.assertEqual("no_file", result["status"])
         process.assert_not_called()
 
     def test_learn_process_error_marks_tracker_error(self):
-        with patch("doc_mgr.engine.process_file",
+        with patch("scripts.doc_mgr.engine.process_file",
                    side_effect=RuntimeError("boom")):
             result = self.service.learn_for_user("uploader-union-id")
         self.assertEqual("failed", result["status"])
@@ -288,7 +286,7 @@ class KnowledgeReviewServiceTests(unittest.TestCase):
     def test_delete_own_file_removes_content_source_and_record(self):
         """删除：按 doc_id 删知识库内容 + 删源文件 + 清 tracker 记录"""
         fake = _FakeStore()
-        with patch("doc_mgr.engine.get_store", return_value=fake):
+        with patch("scripts.doc_mgr.engine.get_store", return_value=fake):
             result = self.service.delete_for_user("uploader-union-id", "1")
         self.assertEqual("ok", result["status"])
         self.assertEqual(2, result["deleted_chunks"])
@@ -303,7 +301,7 @@ class KnowledgeReviewServiceTests(unittest.TestCase):
         此前 get 走可见性过滤只取 active，retired 块残留，崩溃恢复会把它恢复为
         active —— 用户删掉的内容隔天「复活」。"""
         fake = _FakeStore()
-        with patch("doc_mgr.engine.get_store", return_value=fake):
+        with patch("scripts.doc_mgr.engine.get_store", return_value=fake):
             result = self.service.delete_for_user("uploader-union-id", "1")
         self.assertEqual("ok", result["status"])
         # 取版本时必须 include_hidden=True（覆盖 retired/staging）
@@ -314,7 +312,7 @@ class KnowledgeReviewServiceTests(unittest.TestCase):
 
     def test_other_user_cannot_see_or_delete_others_file(self):
         """越权防护：其他用户看不到/删不掉 uploader 的文件，且不触碰任何数据"""
-        with patch("doc_mgr.engine.get_store") as store:
+        with patch("scripts.doc_mgr.engine.get_store") as store:
             result = self.service.delete_for_user("other-user", "sample.pdf")
         # 该用户自己的文件列表为空 → no_file（找不到即可，数据毫发无损）
         self.assertEqual("no_file", result["status"])
@@ -325,7 +323,7 @@ class KnowledgeReviewServiceTests(unittest.TestCase):
     def test_admin_can_delete_any_users_file(self):
         """管理员模式可删任意用户文件"""
         fake = _FakeStore()
-        with patch("doc_mgr.engine.get_store", return_value=fake):
+        with patch("scripts.doc_mgr.engine.get_store", return_value=fake):
             result = self.service.delete_for_user("admin-user", "1",
                                                   is_admin=True)
         self.assertEqual("ok", result["status"])
@@ -342,7 +340,7 @@ class KnowledgeReviewServiceTests(unittest.TestCase):
 
     def test_relearn_forces_reprocessing(self):
         """重新学习：force=True 重新解析入库"""
-        with patch("doc_mgr.engine.process_file") as process:
+        with patch("scripts.doc_mgr.engine.process_file") as process:
             process.return_value = SimpleNamespace(
                 status="done", chunk_count=3, collection="standards", message="")
             result = self.service.relearn_for_user("uploader-union-id", "1")
@@ -383,7 +381,7 @@ class LearnFilePathTests(unittest.TestCase):
         fake_doc = SimpleNamespace(status="done", chunk_count=3, message="")
         svc = self._svc()
         with patch.object(svc, "_is_safe_upload_file", return_value=True), \
-             patch("doc_mgr.engine.process_file",
+             patch("scripts.doc_mgr.engine.process_file",
                    return_value=fake_doc) as m_process:
             result = svc.learn_file_path("u1", "/x/测试.md", "测试.md")
         self.assertEqual(result["status"], "ok")
@@ -394,14 +392,14 @@ class LearnFilePathTests(unittest.TestCase):
     def test_learn_file_path_unsafe_rejected(self):
         svc = self._svc()
         with patch.object(svc, "_is_safe_upload_file", return_value=False), \
-             patch("doc_mgr.engine.process_file") as m_process:
+             patch("scripts.doc_mgr.engine.process_file") as m_process:
             result = svc.learn_file_path("u1", "/bad/path.pdf", "bad.pdf")
         self.assertEqual(result["status"], "failed")
         m_process.assert_not_called()
 
     def test_learn_file_path_empty(self):
         svc = self._svc()
-        with patch("doc_mgr.engine.process_file") as m_process:
+        with patch("scripts.doc_mgr.engine.process_file") as m_process:
             result = svc.learn_file_path("u1", "", "")
         self.assertEqual(result["status"], "no_file")
         m_process.assert_not_called()
@@ -410,7 +408,7 @@ class LearnFilePathTests(unittest.TestCase):
         fake_doc = SimpleNamespace(status="error", chunk_count=0, message="解析失败")
         svc = self._svc()
         with patch.object(svc, "_is_safe_upload_file", return_value=True), \
-             patch("doc_mgr.engine.process_file", return_value=fake_doc):
+             patch("scripts.doc_mgr.engine.process_file", return_value=fake_doc):
             result = svc.learn_file_path("u1", "/x/a.pdf", "a.pdf")
         self.assertEqual(result["status"], "failed")
         self.assertIn("解析失败", result["message"])
@@ -430,7 +428,7 @@ class PendingLearnTests(unittest.TestCase):
         svc = KnowledgeReviewService()
         with patch.object(svc, "learn_file_path",
                           return_value={"status": "ok"}) as m_learn, \
-             patch("knowledge_review.get_review_service", return_value=svc):
+             patch("scripts.knowledge_review.get_review_service", return_value=svc):
             result = learn_file_path_for_user("u1", "/x/a.pdf", "a.pdf")
         self.assertEqual(result["status"], "ok")
         # v1.11.5：模块级入口透传 kb 参数（未指定时 None）

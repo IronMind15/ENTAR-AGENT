@@ -5,7 +5,7 @@
 后续可在每个中心下扩展子部门（department）列表。
 
 用法：
-    from center_config import CENTER_MAP, get_center_name, is_valid_center
+    from scripts.center_config import CENTER_MAP, get_center_name, is_valid_center
 
 当前中心（2026-07-22 设定，五中心 + 公共区）：
   - pmo   : 产品与项目管理中心（PMO）

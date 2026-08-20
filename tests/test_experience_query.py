@@ -9,10 +9,8 @@ from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from skills.experience_query import (
+from scripts.skills.experience_query import (
     search_kb, format_experience_result, format_experience_results,
 )
 
@@ -32,7 +30,7 @@ class ExperienceSearchTests(unittest.TestCase):
             }]],
             "distances": [[0.35]],
         }
-        with mock.patch("skills.experience_query.enhanced_query",
+        with mock.patch("scripts.skills.experience_query.enhanced_query",
                         return_value=fake) as m:
             results = search_kb("IGBT 过温怎么排查")
         m.assert_called_once()
@@ -43,12 +41,12 @@ class ExperienceSearchTests(unittest.TestCase):
 
     def test_search_kb_no_results(self):
         fake = {"documents": [[]], "metadatas": [[]], "distances": [[]]}
-        with mock.patch("skills.experience_query.enhanced_query",
+        with mock.patch("scripts.skills.experience_query.enhanced_query",
                         return_value=fake):
             self.assertEqual(search_kb("不存在的经验"), [])
 
     def test_search_kb_exception_returns_empty(self):
-        with mock.patch("skills.experience_query.enhanced_query",
+        with mock.patch("scripts.skills.experience_query.enhanced_query",
                         side_effect=RuntimeError("boom")):
             self.assertEqual(search_kb("触发异常"), [])
 
@@ -86,12 +84,12 @@ class SearchExperienceToolTests(unittest.TestCase):
 
     def setUp(self):
         import tempfile
-        from kb_registry import KBRegistry
+        from scripts.kb_registry import KBRegistry
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         self._db_path = path
         self.reg = KBRegistry(db_path=path)
-        self.patch_reg = mock.patch("kb_registry.get_registry", return_value=self.reg)
+        self.patch_reg = mock.patch("scripts.kb_registry.get_registry", return_value=self.reg)
         self.patch_reg.start()
         self.addCleanup(self.patch_reg.stop)
         self.addCleanup(self._cleanup)
@@ -110,23 +108,23 @@ class SearchExperienceToolTests(unittest.TestCase):
                     pass
 
     def test_tool_registered(self):
-        from tools import get_tool_names
+        from scripts.tools import get_tool_names
         self.assertIn("kb_search", get_tool_names())
         # 旧独立工具不再注册（统一由通用工具承担）
         self.assertNotIn("search_experience_kb", get_tool_names())
 
     def test_tool_empty_query_error(self):
-        from tools.kb_search import execute
+        from scripts.tools.kb_search import execute
         r = json.loads(execute({"query": "  "}))
         self.assertIn("error", r)
 
     def test_tool_found_structure(self):
-        from tools.kb_search import execute
+        from scripts.tools.kb_search import execute
         fake_results = [{
             "std_title": "经验条目：过温", "_content": "清理风扇",
             "chapter_title": "解决方案", "_score": 0.3, "_match_type": "semantic",
         }]
-        with mock.patch("skills.experience_query.search_kb",
+        with mock.patch("scripts.skills.experience_query.search_kb",
                         return_value=fake_results):
             r = json.loads(execute({"query": "过温", "knowledge_base": "经验知识库"}))
         self.assertTrue(r["found"])
@@ -137,8 +135,8 @@ class SearchExperienceToolTests(unittest.TestCase):
         self.assertNotIn("_match_type", r["results"][0])
 
     def test_tool_not_found(self):
-        from tools.kb_search import execute
-        with mock.patch("skills.experience_query.search_kb", return_value=[]):
+        from scripts.tools.kb_search import execute
+        with mock.patch("scripts.skills.experience_query.search_kb", return_value=[]):
             r = json.loads(execute({"query": "xxx", "knowledge_base": "经验知识库"}))
         self.assertFalse(r["found"])
 

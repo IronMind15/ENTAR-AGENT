@@ -170,7 +170,7 @@ def source_usable(src: Optional[SourceConfig]) -> bool:
 def load_push_config() -> PushConfig:
     """加载推送配置（标量走 config.py / local_config.py）"""
     try:
-        from config import (
+        from scripts.config import (
             DASHBOARD_PUSH_HOUR, DASHBOARD_PUSH_MINUTE,
             DASHBOARD_ALERT_MODE, DASHBOARD_TITLE,
         )
@@ -179,7 +179,7 @@ def load_push_config() -> PushConfig:
     except Exception:
         push_hour, push_minute = 9, 0
     try:
-        from config import DASHBOARD_WEEKDAYS
+        from scripts.config import DASHBOARD_WEEKDAYS
         weekdays = DASHBOARD_WEEKDAYS
     except Exception:
         weekdays = ""

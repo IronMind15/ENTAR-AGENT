@@ -15,13 +15,11 @@ from types import SimpleNamespace
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SCRIPTS_DIR = os.path.join(PROJECT_ROOT, "scripts")
-if SCRIPTS_DIR not in sys.path:
-    sys.path.insert(0, SCRIPTS_DIR)
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from doc_mgr import router as admin_router
+from scripts.doc_mgr import router as admin_router
 
 
 def _rec(uid="u1", name="张三", status="synced", updated="2026-08-14 10:00:00", **kw):
@@ -105,7 +103,7 @@ class PeopleRouteTests(unittest.TestCase):
         self.assertEqual(r.status_code, 401)
 
     def test_returns_people_structure(self):
-        with mock.patch("doc_mgr.sync_tracker.SyncTracker") as M:
+        with mock.patch("scripts.doc_mgr.sync_tracker.SyncTracker") as M:
             M.return_value.list_all.return_value = [
                 _rec("u1", "张三", "synced"),
             ]
@@ -124,7 +122,7 @@ class PeopleRouteTests(unittest.TestCase):
             last_run_stage="push", last_run_reason="推送失败：权限不足",
             last_alert_status="failed",
         )
-        with mock.patch("dashboard.subscription_store.get_subscription_store") as get_store:
+        with mock.patch("scripts.dashboard.subscription_store.get_subscription_store") as get_store:
             get_store.return_value.list_all.return_value = [sub]
             r = self.client.get("/admin/dashboard-status?password=secret")
         self.assertEqual(r.status_code, 200)

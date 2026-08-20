@@ -29,7 +29,7 @@ def _get_backend() -> str:
     try:
         # memory.py 在 scripts/skills/ 下，config 在 scripts/ 下
         import importlib
-        cfg = importlib.import_module("config")
+        cfg = importlib.import_module("scripts.config")
         return getattr(cfg, "MEMORY_BACKEND", "sqlite")
     except Exception:
         return "sqlite"
@@ -39,7 +39,7 @@ def _get_max_rounds() -> int:
     """获取配置的最大轮数"""
     try:
         import importlib
-        cfg = importlib.import_module("config")
+        cfg = importlib.import_module("scripts.config")
         return int(getattr(cfg, "MAX_CONTEXT_ROUNDS", 5))
     except Exception:
         return 5
@@ -47,7 +47,7 @@ def _get_max_rounds() -> int:
 
 def _get_sqlite_store():
     """懒加载 SQLite 存储"""
-    from user_store import get_store
+    from scripts.user_store import get_store
     return get_store()
 
 
@@ -139,7 +139,7 @@ def _get_config_flag(name, default):
     """读取 config 配置项（带默认值）"""
     try:
         import importlib
-        cfg = importlib.import_module("config")
+        cfg = importlib.import_module("scripts.config")
         return getattr(cfg, name, default)
     except Exception:
         return default
@@ -155,7 +155,7 @@ def _maybe_schedule_compress(user_id: str):
     try:
         if not _get_config_flag("LONG_TERM_MEMORY_ENABLED", True):
             return
-        from skills import memory_compress
+        from scripts.skills import memory_compress
         if memory_compress.is_pending(user_id):
             return
         store = _get_sqlite_store()
@@ -165,7 +165,7 @@ def _maybe_schedule_compress(user_id: str):
         if not memory_compress.add_pending(user_id):
             return
 
-        from doc_mgr.task_manager import get_manager
+        from scripts.doc_mgr.task_manager import get_manager
 
         def _run():
             try:

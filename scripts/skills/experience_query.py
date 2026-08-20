@@ -19,7 +19,7 @@ if sys.platform == "win32":
     sys.stdin.reconfigure(encoding="utf-8")
     sys.stdout.reconfigure(encoding="utf-8")
 
-from skills.enhanced_search import enhanced_query, parse_query_results
+from scripts.skills.enhanced_search import enhanced_query, parse_query_results
 
 logger = logging.getLogger("experience_query")
 

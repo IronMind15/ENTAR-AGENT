@@ -13,11 +13,9 @@ from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from dashboard.doc_candidates import DocCandidate, DocCandidateStore  # noqa: E402
-from tools.doc_summarize import DEFINITION, execute  # noqa: E402
+from scripts.dashboard.doc_candidates import DocCandidate, DocCandidateStore  # noqa: E402
+from scripts.tools.doc_summarize import DEFINITION, execute  # noqa: E402
 
 
 class SummarizeDocToolTests(unittest.TestCase):
@@ -26,7 +24,7 @@ class SummarizeDocToolTests(unittest.TestCase):
         os.close(fd)
         self._db_path = path
         self._cand = DocCandidateStore(db_path=path)
-        self.patch_cand = patch("dashboard.doc_candidates.get_candidate_store",
+        self.patch_cand = patch("scripts.dashboard.doc_candidates.get_candidate_store",
                                 return_value=self._cand)
         self.patch_cand.start()
         self.addCleanup(self.patch_cand.stop)
@@ -48,8 +46,8 @@ class SummarizeDocToolTests(unittest.TestCase):
             node_id=node_id, kind=kind, operator_union="u1", name=name))
 
     def _patch_context(self, user_id="u1", staff_id="staff1"):
-        patch_uid = patch("tools.get_current_user_id", return_value=user_id)
-        patch_sid = patch("tools.get_current_staff_id", return_value=staff_id)
+        patch_uid = patch("scripts.tools.get_current_user_id", return_value=user_id)
+        patch_sid = patch("scripts.tools.get_current_staff_id", return_value=staff_id)
         patch_uid.start()
         patch_sid.start()
         self.addCleanup(patch_uid.stop)
@@ -57,7 +55,7 @@ class SummarizeDocToolTests(unittest.TestCase):
 
     def test_definition_registered(self):
         self.assertEqual(DEFINITION["name"], "doc_summarize")
-        from tools import get_tool_names
+        from scripts.tools import get_tool_names
         self.assertIn("doc_summarize", get_tool_names())
 
     def test_summarize_success_by_node_id(self):
@@ -68,9 +66,9 @@ class SummarizeDocToolTests(unittest.TestCase):
             "ok": True, "kind": "notable", "node_id": "n1",
             "records": [{"fields": {"名称": "项目A", "状态": "滞后"}}],
         }
-        with patch("dingtalk_doc_client.get_doc_client",
+        with patch("scripts.dingtalk_doc_client.get_doc_client",
                    return_value=fake_client), \
-             patch("skills.agent.call_deepseek",
+             patch("scripts.skills.agent.call_deepseek",
                    return_value="1. 项目A：状态滞后") as m_llm:
             out = json.loads(execute({"doc_ref": "n1"}))
         self.assertTrue(out["ok"])
@@ -92,9 +90,9 @@ class SummarizeDocToolTests(unittest.TestCase):
             "ok": True, "kind": "notable", "node_id": "n9",
             "records": [{"fields": {"名称": "B"}}],
         }
-        with patch("dingtalk_doc_client.get_doc_client",
+        with patch("scripts.dingtalk_doc_client.get_doc_client",
                    return_value=fake_client), \
-             patch("skills.agent.call_deepseek", return_value="要点"):
+             patch("scripts.skills.agent.call_deepseek", return_value="要点"):
             out = json.loads(execute({}))
         self.assertTrue(out["ok"])
         self.assertEqual(out["doc_name"], "33周汇总")
@@ -115,7 +113,7 @@ class SummarizeDocToolTests(unittest.TestCase):
         self._patch_context()
         fake_client = unittest.mock.Mock()
         fake_client.read_document.return_value = {"ok": False, "message": "无权限"}
-        with patch("dingtalk_doc_client.get_doc_client",
+        with patch("scripts.dingtalk_doc_client.get_doc_client",
                    return_value=fake_client):
             out = json.loads(execute({"doc_ref": "n1"}))
         self.assertIn("无权限", out["error"])
@@ -128,9 +126,9 @@ class SummarizeDocToolTests(unittest.TestCase):
             "ok": True, "kind": "notable", "node_id": "n1",
             "records": [{"fields": {"名称": "项目A"}}],
         }
-        with patch("dingtalk_doc_client.get_doc_client",
+        with patch("scripts.dingtalk_doc_client.get_doc_client",
                    return_value=fake_client), \
-             patch("skills.agent.call_deepseek", return_value=""):
+             patch("scripts.skills.agent.call_deepseek", return_value=""):
             out = json.loads(execute({"doc_ref": "n1"}))
         self.assertTrue(out["ok"])
         self.assertIn("项目A", out["summary"])  # 兜底给原文前 500 字
@@ -143,9 +141,9 @@ class SummarizeDocToolTests(unittest.TestCase):
             "ok": True, "kind": "doc", "node_id": "n5",
             "records": [], "markdown": "周会记录\n\n| 项 | 状 |\n| A | 滞后 |",
         }
-        with patch("dingtalk_doc_client.get_doc_client",
+        with patch("scripts.dingtalk_doc_client.get_doc_client",
                    return_value=fake_client), \
-             patch("skills.agent.call_deepseek", return_value="要点") as m_llm:
+             patch("scripts.skills.agent.call_deepseek", return_value="要点") as m_llm:
             out = json.loads(execute({"doc_ref": "n5"}))
         self.assertTrue(out["ok"])
         self.assertIn("| A | 滞后 |", m_llm.call_args[0][0])  # doc 走保真 markdown
@@ -158,10 +156,10 @@ class SummarizeDocToolTests(unittest.TestCase):
             "ok": True, "kind": "notable", "node_id": "n1",
             "records": [{"fields": {"名称": "A"}}],
         }
-        with patch("dingtalk_doc_client.get_doc_client",
+        with patch("scripts.dingtalk_doc_client.get_doc_client",
                    return_value=fake_client), \
-             patch("skills.agent.call_deepseek", return_value="要点"), \
-             patch("dingtalk_notifier.DingTalkNotifier") as m_notif:
+             patch("scripts.skills.agent.call_deepseek", return_value="要点"), \
+             patch("scripts.dingtalk_notifier.DingTalkNotifier") as m_notif:
             out = json.loads(execute({"doc_ref": "n1", "push_to_self": True}))
         self.assertTrue(out["ok"])
         self.assertTrue(out["pushed"])
@@ -179,10 +177,10 @@ class SummarizeDocToolTests(unittest.TestCase):
             "ok": True, "kind": "notable", "node_id": "n1",
             "records": [{"fields": {"名称": "A"}}],
         }
-        with patch("dingtalk_doc_client.get_doc_client",
+        with patch("scripts.dingtalk_doc_client.get_doc_client",
                    return_value=fake_client), \
-             patch("skills.agent.call_deepseek", return_value="要点"), \
-             patch("dingtalk_notifier.DingTalkNotifier") as m_notif:
+             patch("scripts.skills.agent.call_deepseek", return_value="要点"), \
+             patch("scripts.dingtalk_notifier.DingTalkNotifier") as m_notif:
             m_notif.return_value.send_markdown_to_users.side_effect = \
                 RuntimeError("接口超时")
             out = json.loads(execute({"doc_ref": "n1", "push_to_self": True}))

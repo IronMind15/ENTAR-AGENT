@@ -2,7 +2,7 @@
 
 import json
 
-from tools import register
+from scripts.tools import register
 
 DEFINITION = {
     "name": "dash_query",
@@ -28,8 +28,8 @@ DEFINITION = {
     ),
 )
 def execute(args: dict) -> str:
-    from dashboard import service
-    from tools import get_current_user_id
+    from scripts.dashboard import service
+    from scripts.tools import get_current_user_id
     sources = service.load_all_available_sources(user_id=get_current_user_id())
     if not sources:
         return json.dumps(
@@ -37,14 +37,14 @@ def execute(args: dict) -> str:
                      "请先发钉钉文档，再回复「按这几个文档做每日看板」登记数据源。"},
             ensure_ascii=False)
 
-    from tools import get_current_staff_id
+    from scripts.tools import get_current_staff_id
     parsed, errors = service.collect_and_parse(sources, staff_id=get_current_staff_id())
     if not parsed:
         return json.dumps(
             {"error": "看板暂无数据：" + ("；".join(errors[:3]) or "数据源未配置")},
             ensure_ascii=False)
     try:
-        from skills.agent import call_deepseek_json
+        from scripts.skills.agent import call_deepseek_json
         text = service.assemble(parsed, date_str=service.today_str(),
                                 llm_func=call_deepseek_json,
                                 evidence_pipeline=True, errors=errors)

@@ -21,6 +21,7 @@
 
 import argparse
 import sys
+from pathlib import Path
 
 # Windows 控制台 GBK 打不出 emoji/部分 Unicode，强制 UTF-8 输出（替换不报错）
 try:
@@ -29,9 +30,11 @@ try:
 except Exception:
     pass
 
-sys.path.insert(0, __file__.rsplit("\\", 1)[0].rsplit("/", 1)[0])
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
-from dingtalk_doc_client import (  # noqa: E402
+from scripts.dingtalk_doc_client import (  # noqa: E402
     get_doc_client, DingTalkDocClient,
     _WORKBOOK_SHEET_PATHS, _WORKBOOK_RECORD_PATHS, _FIELD_CANDIDATE_PATHS,
 )

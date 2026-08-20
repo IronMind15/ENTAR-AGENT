@@ -21,17 +21,15 @@ from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
 
 class MemoryTestBase(unittest.TestCase):
     """每个用例独立的临时 SQLite 库，并替换 user_store 全局单例"""
 
     def setUp(self):
-        import user_store
-        from user_store import SQLiteUserStore
-        from skills import memory_compress
+        import scripts.user_store as user_store
+        from scripts.user_store import SQLiteUserStore
+        from scripts.skills import memory_compress
         self._tmp = tempfile.mkdtemp()
         self.db_path = os.path.join(self._tmp, "test.db")
         self.store = SQLiteUserStore(db_path=self.db_path)
@@ -47,8 +45,8 @@ class MemoryTestBase(unittest.TestCase):
             memory_compress._pending.clear()
 
     def tearDown(self):
-        import user_store
-        from skills import memory_compress
+        import scripts.user_store as user_store
+        from scripts.skills import memory_compress
         user_store._store = None
         with memory_compress._pending_lock:
             memory_compress._pending.clear()
@@ -60,7 +58,7 @@ class MemoryTestBase(unittest.TestCase):
 
 class TestShortWindow(MemoryTestBase):
     def test_add_dedup(self):
-        from skills import memory
+        from scripts.skills import memory
         memory.add("u1", "user", "重复内容")
         memory.add("u1", "user", "重复内容")  # 连续同 role 同内容去重
         memory.add("u1", "assistant", "回答")
@@ -158,7 +156,7 @@ class TestSessionId(MemoryTestBase):
 
     def test_session_timeout_generates_new(self):
         import datetime as _dt
-        import user_store
+        import scripts.user_store as user_store
         self.store.add_memory("u1", "user", "a")
         self.store.add_memory("u1", "assistant", "b")
         conn = sqlite3.connect(self.db_path)
@@ -208,7 +206,7 @@ class TestLongTerm(MemoryTestBase):
         self.assertEqual(stats2["summaries"], 2)
 
     def test_eviction_summary_first(self):
-        import config
+        import scripts.config as config
         old_limit = config.LONG_TERM_MAX_PER_USER
         config.LONG_TERM_MAX_PER_USER = 6  # 临时调小触发淘汰
         try:
@@ -227,24 +225,24 @@ class TestLongTerm(MemoryTestBase):
 
 class TestParseJson(MemoryTestBase):
     def test_plain_json(self):
-        from skills import memory_compress as mc
+        from scripts.skills import memory_compress as mc
         r = mc._parse_llm_json('{"facts": ["a"], "summary": "s"}')
         self.assertEqual(r, {"facts": ["a"], "summary": "s"})
 
     def test_fenced_json(self):
-        from skills import memory_compress as mc
+        from scripts.skills import memory_compress as mc
         r = mc._parse_llm_json('```json\n{"facts": ["a", "b"], "summary": "s"}\n```')
         self.assertEqual(r["facts"], ["a", "b"])
         self.assertEqual(r["summary"], "s")
 
     def test_no_json(self):
-        from skills import memory_compress as mc
+        from scripts.skills import memory_compress as mc
         self.assertEqual(mc._parse_llm_json("无 JSON 内容"), {"facts": [], "summary": ""})
         self.assertEqual(mc._parse_llm_json(None), {"facts": [], "summary": ""})
         self.assertEqual(mc._parse_llm_json(""), {"facts": [], "summary": ""})
 
     def test_missing_fields(self):
-        from skills import memory_compress as mc
+        from scripts.skills import memory_compress as mc
         r = mc._parse_llm_json('{"facts": ["a"]}')
         self.assertEqual(r["summary"], "")
         r2 = mc._parse_llm_json('{"summary": "s"}')
@@ -253,13 +251,13 @@ class TestParseJson(MemoryTestBase):
 
 class TestCompressFlow(MemoryTestBase):
     def test_compress_mocked(self):
-        from skills import memory_compress as mc
+        from scripts.skills import memory_compress as mc
         for i in range(26):  # 26 轮 = 52 条 > 窗口 20 轮（40 条）
             self.store.add_memory("u2", "user", f"问题{i}")
             self.store.add_memory("u2", "assistant", f"回答{i}")
         self.store.get_window_context("u2", 20)  # 触发批量滚动
         with mock.patch(
-            "skills.memory_compress._call_llm",
+            "scripts.skills.memory_compress._call_llm",
             return_value='{"facts": ["负责项目A", "型号B"], "summary": "问了5轮"}',
         ) as m:
             res = mc.compress_user_history("u2")
@@ -272,19 +270,19 @@ class TestCompressFlow(MemoryTestBase):
         m.assert_called_once()
 
     def test_compress_no_batch(self):
-        from skills import memory_compress as mc
-        with mock.patch("skills.memory_compress._call_llm") as m:
+        from scripts.skills import memory_compress as mc
+        with mock.patch("scripts.skills.memory_compress._call_llm") as m:
             res = mc.compress_user_history("nobody")
         self.assertEqual(res["compressed"], 0)
         m.assert_not_called()
 
     def test_compress_llm_failure_keeps_batch(self):
-        from skills import memory_compress as mc
+        from scripts.skills import memory_compress as mc
         for i in range(26):  # 26 轮 = 52 条 > 窗口 40 条
             self.store.add_memory("u2", "user", f"q{i}")
             self.store.add_memory("u2", "assistant", f"a{i}")
         self.store.get_window_context("u2", 20)  # 触发滚动 → 窗口外有批次
-        with mock.patch("skills.memory_compress._call_llm", return_value=None):
+        with mock.patch("scripts.skills.memory_compress._call_llm", return_value=None):
             res = mc.compress_user_history("u2")
         # LLM 无有效输出时不标记 compressed，批次保留待下次重试（避免静默丢记忆）
         self.assertEqual(res["compressed"], 0)
@@ -294,35 +292,35 @@ class TestCompressFlow(MemoryTestBase):
 
 class TestSchedule(MemoryTestBase):
     def test_schedule_disabled(self):
-        import config
-        from skills import memory
+        import scripts.config as config
+        from scripts.skills import memory
         old = config.LONG_TERM_MEMORY_ENABLED
         config.LONG_TERM_MEMORY_ENABLED = False
         try:
-            with mock.patch("skills.memory_compress.add_pending") as ap:
+            with mock.patch("scripts.skills.memory_compress.add_pending") as ap:
                 memory._maybe_schedule_compress("u1")
                 ap.assert_not_called()
         finally:
             config.LONG_TERM_MEMORY_ENABLED = old
 
     def test_schedule_pending_dedup(self):
-        from skills import memory
-        from skills import memory_compress as mc
+        from scripts.skills import memory
+        from scripts.skills import memory_compress as mc
         with mock.patch.object(mc, "is_pending", return_value=True), \
-                mock.patch("doc_mgr.task_manager.get_manager") as gm:
+                mock.patch("scripts.doc_mgr.task_manager.get_manager") as gm:
             memory._maybe_schedule_compress("u1")
             gm.assert_not_called()
 
     def test_schedule_trigger(self):
-        from skills import memory
+        from scripts.skills import memory
         # 26 轮 = 52 条 > 窗口 20 轮（40 条），触发滚动后窗口外有未压缩
         for i in range(26):
             self.store.add_memory("u1", "user", f"q{i}")
             self.store.add_memory("u1", "assistant", f"a{i}")
         self.store.get_window_context("u1", 20)  # 触发批量滚动
         with mock.patch(
-            "skills.memory_compress.add_pending", return_value=True
-        ) as ap, mock.patch("doc_mgr.task_manager.get_manager") as gm:
+            "scripts.skills.memory_compress.add_pending", return_value=True
+        ) as ap, mock.patch("scripts.doc_mgr.task_manager.get_manager") as gm:
             memory._maybe_schedule_compress("u1")
             ap.assert_called_once_with("u1")
             gm.return_value.run_async.assert_called_once()
@@ -330,7 +328,7 @@ class TestSchedule(MemoryTestBase):
 
 class TestFormatLongTerm(MemoryTestBase):
     def test_format(self):
-        from skills import memory
+        from scripts.skills import memory
         self.store.save_long_term("u1", "fact", "负责项目A")
         self.store.save_long_term("u1", "summary", "咨询过故障")
         out = memory.format_long_term("u1")
@@ -339,13 +337,13 @@ class TestFormatLongTerm(MemoryTestBase):
         self.assertLess(out.index("[事实]"), out.index("[摘要]"))  # facts 前置
 
     def test_format_empty(self):
-        from skills import memory
+        from scripts.skills import memory
         self.assertEqual(memory.format_long_term("nobody"), "")
 
 
 class TestBackfill(MemoryTestBase):
     def test_backfill_old_rows(self):
-        from user_store import SQLiteUserStore
+        from scripts.user_store import SQLiteUserStore
         db = os.path.join(self._tmp, "old.db")
         conn = sqlite3.connect(db)
         conn.executescript("""

@@ -11,10 +11,10 @@
 import logging
 import re
 
-from dashboard import service
-from dashboard import subscription_commands as sub_cmd
-from dashboard.subscription_store import Subscription, get_subscription_store
-from skills import BaseSkill, register
+from scripts.dashboard import service
+from scripts.dashboard import subscription_commands as sub_cmd
+from scripts.dashboard.subscription_store import Subscription, get_subscription_store
+from scripts.skills import BaseSkill, register
 
 logger = logging.getLogger("dashboard.skill")
 
@@ -218,7 +218,7 @@ class DashboardSkill(BaseSkill):
 
         if intent == "describe_template":
             # v1.12.0：描述成模板（LLM 生成 → 确认 → 保存并应用）
-            from dashboard.template_builder import describe_to_spec
+            from scripts.dashboard.template_builder import describe_to_spec
             tdef = describe_to_spec(parsed.get("description") or "")
             if not tdef.get("ok"):
                 return {"answer": tdef.get("message", "生成模板失败，请换个描述试试。"),
@@ -232,14 +232,14 @@ class DashboardSkill(BaseSkill):
 
         if intent == "submit_template":
             # v1.12.0：提交模板（解析最近上传文件 → 确认 → 保存并应用）
-            from knowledge_review import get_pending_learn
+            from scripts.knowledge_review import get_pending_learn
             uploaded = get_pending_learn(uid)
             if not uploaded or not uploaded.get("file_path"):
                 return {"answer":
                         "请先上传一个 Excel 或 Markdown 文件（Excel 用第一行表头、"
                         "Markdown 用 # 标题定义章节），再回复「把这个当看板模板」。",
                         "source": "dashboard"}
-            from dashboard.template_builder import parse_template_file
+            from scripts.dashboard.template_builder import parse_template_file
             tdef = parse_template_file(uploaded["file_path"],
                                        uploaded.get("file_name") or "")
             if not tdef.get("ok"):
@@ -349,7 +349,7 @@ class DashboardSkill(BaseSkill):
         （避免历史候选混入）；缺省时兜底取全部可看板候选（如纯「帮我推个看板」）。
         """
         try:
-            from dashboard.doc_candidates import get_candidate_store
+            from scripts.dashboard.doc_candidates import get_candidate_store
             store = get_candidate_store()
             if source_candidate_ids:
                 cands = [store.get(cid) for cid in source_candidate_ids]
@@ -477,7 +477,7 @@ class DashboardSkill(BaseSkill):
         「33周部门周报」）。返回 DocCandidate 或 None（可加源且 enabled）。
         """
         try:
-            from dashboard.doc_candidates import get_candidate_store
+            from scripts.dashboard.doc_candidates import get_candidate_store
             store = get_candidate_store()
             if not name:
                 cand = store.get_pending(user_id)
@@ -506,7 +506,7 @@ class DashboardSkill(BaseSkill):
         lines.append("")
         lines.append("您登记过的可加文档：")
         try:
-            from dashboard.doc_candidates import get_candidate_store
+            from scripts.dashboard.doc_candidates import get_candidate_store
             cands = get_candidate_store().list_dashboard_ready(user_id)
         except Exception:
             cands = []
@@ -526,7 +526,7 @@ class DashboardSkill(BaseSkill):
         # 「把这个文档加进看板」（change_sources 意图）。
         sources = []
         try:
-            from dashboard.doc_candidates import get_candidate_store
+            from scripts.dashboard.doc_candidates import get_candidate_store
             cands = get_candidate_store().list_dashboard_ready(user_id)
             sources = [f"doc_{c.id}" for c in cands]
         except Exception as e:
@@ -554,7 +554,7 @@ class DashboardSkill(BaseSkill):
                     "source": "dashboard"}
         key = choice.get("choice")
         try:
-            from dashboard.template_store import get_template_store
+            from scripts.dashboard.template_store import get_template_store
             tpl = get_template_store().get(key, user_id=user_id)
         except Exception:
             tpl = None
@@ -823,7 +823,7 @@ class DashboardSkill(BaseSkill):
                 return {"answer": "模板不存在或已不是您的私有模板，请重新「看板模板」查看。",
                         "source": "dashboard"}
             tdef = pending.get("template_def") or {}
-            from dashboard.template_store import get_template_store
+            from scripts.dashboard.template_store import get_template_store
             updated = get_template_store().update_user_template(
                 key, user_id,
                 description=tdef.get("description", ""),
@@ -854,7 +854,7 @@ class DashboardSkill(BaseSkill):
                 return {"answer": "任务不存在、已删除，或不属于您，未修改提示词。",
                         "source": "dashboard"}
             try:
-                from dashboard.task_prompt import set_custom_prompt
+                from scripts.dashboard.task_prompt import set_custom_prompt
                 set_custom_prompt(sub, pending.get("task_prompt") or "")
             except ValueError as exc:
                 sub_cmd.clear_pending(user_id)
@@ -917,7 +917,7 @@ class DashboardSkill(BaseSkill):
         # 复用 LLM 组装（失败规则兜底）+ 订阅模板输出格式。
         template = service.resolve_template(sub)
         try:
-            from skills.agent import call_dashboard_json
+            from scripts.skills.agent import call_dashboard_json
             msgs = service.assemble_per_source_messages(
                 parsed, title=sub.title, date_str=service.today_str(),
                 llm_func=call_dashboard_json, old_snapshot=sub.last_snapshot,
@@ -1017,7 +1017,7 @@ class DashboardSkill(BaseSkill):
             return "您还没有订阅看板。说「帮我推个看板」开通后，每次推送都会留档，随时可回看。"
         target = subs[-1]
         try:
-            from dashboard.push_history import get_push_history_store
+            from scripts.dashboard.push_history import get_push_history_store
             latest = get_push_history_store().latest(target.id)
         except Exception as e:
             logger.warning(f"回放看板留档失败({target.id}): {e}")
@@ -1103,7 +1103,7 @@ class DashboardSkill(BaseSkill):
     @staticmethod
     def _history_count(sub_id: int) -> int:
         try:
-            from dashboard.push_history import get_push_history_store
+            from scripts.dashboard.push_history import get_push_history_store
             return get_push_history_store().count(sub_id)
         except Exception:
             return 0
@@ -1145,7 +1145,7 @@ class DashboardSkill(BaseSkill):
         if not cands:
             return [], []
         try:
-            from dingtalk_doc_client import (DingTalkDocPermissionError,
+            from scripts.dingtalk_doc_client import (DingTalkDocPermissionError,
                                              get_doc_client)
             client = get_doc_client()
         except Exception:
@@ -1161,7 +1161,7 @@ class DashboardSkill(BaseSkill):
                     if real_name and real_name != c.name:
                         c.name = real_name
                         try:
-                            from dashboard.doc_candidates import get_candidate_store
+                            from scripts.dashboard.doc_candidates import get_candidate_store
                             get_candidate_store().update_name(c.id, real_name)
                         except Exception as exc:
                             logger.debug("回填文档真实标题失败(cand=%s): %s", c.id, exc)
@@ -1187,7 +1187,7 @@ class DashboardSkill(BaseSkill):
         if not user_id:
             return ""
         try:
-            from user_store import get_store
+            from scripts.user_store import get_store
             return (get_store().get_user(user_id) or {}).get("staff_id", "") or ""
         except Exception:
             return ""
@@ -1197,7 +1197,7 @@ class DashboardSkill(BaseSkill):
     def _render_template_list(cls, user_id: str, hint: bool = False) -> str:
         """列出用户可见模板；hint=True 时追加使用提示（切换指令模板名没对上时）"""
         try:
-            from dashboard.template_store import get_template_store
+            from scripts.dashboard.template_store import get_template_store
             templates = get_template_store().list_visible(user_id)
         except Exception as e:
             logger.warning(f"取模板列表失败: {e}")
@@ -1233,7 +1233,7 @@ class DashboardSkill(BaseSkill):
     def _match_template(cls, text: str, user_id: str):
         """按名称/别名解析模板（TemplateStore.resolve）；返回模板或 None"""
         try:
-            from dashboard.template_store import get_template_store
+            from scripts.dashboard.template_store import get_template_store
             return get_template_store().resolve(text, user_id)
         except Exception as e:
             logger.warning(f"解析看板模板失败({text}): {e}")
@@ -1245,7 +1245,7 @@ class DashboardSkill(BaseSkill):
         if not key:
             return None
         try:
-            from dashboard.template_store import get_template_store
+            from scripts.dashboard.template_store import get_template_store
             return get_template_store().get(key, user_id)
         except Exception:
             return None
@@ -1260,7 +1260,7 @@ class DashboardSkill(BaseSkill):
 
         Returns: (ok, template_or_None, message)
         """
-        from dashboard.template_store import get_template_store
+        from scripts.dashboard.template_store import get_template_store
         store_t = get_template_store()
         name = (tdef.get("name") or "").strip() or "自定义模板"
         base_key = "".join((name or "模板").split()) or "模板"
@@ -1302,7 +1302,7 @@ class DashboardSkill(BaseSkill):
         if tpl is None or tpl.scope != "user":
             return
         try:
-            from dashboard.template_store import TemplateStore
+            from scripts.dashboard.template_store import TemplateStore
             TemplateStore.sync_user_template_file(
                 tpl, DashboardSkill._staff_id_of(user_id))
         except Exception as e:
@@ -1315,7 +1315,7 @@ class DashboardSkill(BaseSkill):
         v1.12.x：用户此前自定义过格式时提醒复用，避免每次重新描述。
         """
         try:
-            from dashboard.template_store import get_template_store
+            from scripts.dashboard.template_store import get_template_store
             mine = [t for t in get_template_store().list_visible(user_id)
                     if t.scope == "user"]
             if mine:
@@ -1330,7 +1330,7 @@ class DashboardSkill(BaseSkill):
     def _handle_edit_template(cls, text: str, user_id: str, parsed: dict) -> dict:
         """编辑已有用户模板：目标解析 → 有描述生成 spec 入 pending，无描述展示当前内容引导"""
         try:
-            from dashboard.template_store import get_template_store
+            from scripts.dashboard.template_store import get_template_store
             store_t = get_template_store()
         except Exception as e:
             logger.warning(f"取模板存储失败: {e}")
@@ -1359,7 +1359,7 @@ class DashboardSkill(BaseSkill):
                     "source": "dashboard"}
 
         # 有描述 → LLM 生成新 spec → pending → 确认
-        from dashboard.template_builder import describe_to_spec
+        from scripts.dashboard.template_builder import describe_to_spec
         tdef = describe_to_spec(desc)
         if not tdef.get("ok"):
             return {"answer": tdef.get("message", "生成模板失败，请换个描述试试。"),
@@ -1377,7 +1377,7 @@ class DashboardSkill(BaseSkill):
     @classmethod
     def _render_template_detail(cls, tpl) -> str:
         """展示单个模板当前内容（编辑引导/确认前用）"""
-        from dashboard.subscription_commands import format_spec_summary
+        from scripts.dashboard.subscription_commands import format_spec_summary
         lines = [f"📄 模板「{tpl.name}」（{tpl.key}）当前结构：",
                  f"📐 {format_spec_summary(tpl.section_spec)}",
                  f"📝 {tpl.description or '（无描述）'}"]

@@ -29,22 +29,22 @@ _DOMAIN_KEYS = ("fault", "standard", "pcb", "kanban")
 
 
 def _fault_pred(text: str) -> bool:
-    from skills.error_query import FAULT_CODE_PATTERN
+    from scripts.skills.error_query import FAULT_CODE_PATTERN
     return bool(FAULT_CODE_PATTERN.search(text))
 
 
 def _standard_pred(text: str) -> bool:
-    from skills.standards_query import STANDARD_ID_PATTERN
+    from scripts.skills.standards_query import STANDARD_ID_PATTERN
     return bool(STANDARD_ID_PATTERN.search(text))
 
 
 def _pcb_pred(text: str) -> bool:
-    from skills.pcb_calc import _is_pcb_calc_query
+    from scripts.skills.pcb_calc import _is_pcb_calc_query
     return _is_pcb_calc_query(text)
 
 
 def _kanban_pred(text: str) -> bool:
-    from dashboard.subscription_commands import is_kanban_topic
+    from scripts.dashboard.subscription_commands import is_kanban_topic
     return is_kanban_topic(text)
 
 
@@ -94,7 +94,7 @@ def ask_clarification(user_id: str, options: list[dict],
     key 是路由目标（调用方用它决定进入哪个确认流程）；
     label 是展示给用户的可选项文案。
     """
-    from pending_context import PT_CLARIFY, set as pc_set
+    from scripts.pending_context import PT_CLARIFY, set as pc_set
     pc_set(user_id, PT_CLARIFY,
            {"options": list(options), "ctx": ctx or {}},
            ttl=_CLARIFY_TIMEOUT)
@@ -102,7 +102,7 @@ def ask_clarification(user_id: str, options: list[dict],
 
 def get_clarification(user_id: str) -> dict | None:
     """取未过期的澄清上下文；过期/不存在返回 None。只读，不清除。"""
-    from pending_context import PT_CLARIFY, get as pc_get
+    from scripts.pending_context import PT_CLARIFY, get as pc_get
     entry = pc_get(user_id)
     if entry and entry["type"] == PT_CLARIFY:
         return dict(entry["payload"])
@@ -110,7 +110,7 @@ def get_clarification(user_id: str) -> dict | None:
 
 
 def clear_clarification(user_id: str) -> None:
-    from pending_context import PT_CLARIFY, clear_type
+    from scripts.pending_context import PT_CLARIFY, clear_type
     clear_type(user_id, PT_CLARIFY)
 
 
