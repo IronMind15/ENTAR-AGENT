@@ -24,6 +24,9 @@ from datetime import datetime as dt
 from fastapi import APIRouter, Depends, UploadFile, File, Form, Query, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+from paths import (DATA_ROOT, EXPERIENCE_DIR, FAULT_CODES_DIR, RUNTIME_DIR,
+                   STANDARDS_DIR, UPLOADS_DIR)
+
 from .engine import process_file
 from .storage import get_store
 from .views import ADMIN_HTML
@@ -35,17 +38,14 @@ logger = logging.getLogger("doc_mgr.router")
 router = APIRouter(prefix="/admin")
 
 # 文件保存目录映射（按 collection 分类存储）
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.normpath(os.path.join(_SCRIPT_DIR, "..", ".."))
-
 FILE_DIRS = {
-    "standards":  os.path.join(_PROJECT_ROOT, "data", "standards"),
-    "error_codes": os.path.join(_PROJECT_ROOT, "data", "fault_codes"),
-    "experience_kb": os.path.join(_PROJECT_ROOT, "data", "experience"),
+    "standards": str(STANDARDS_DIR),
+    "error_codes": str(FAULT_CODES_DIR),
+    "experience_kb": str(EXPERIENCE_DIR),
 }
 
 # 钉钉上传目录（按用户/日期分类）
-UPLOAD_DIR = os.path.join(_PROJECT_ROOT, "data", "uploads")
+UPLOAD_DIR = str(UPLOADS_DIR)
 
 # ===== 上传安全（P1 安全收尾） =====
 MAX_UPLOAD_MB = 50
@@ -55,7 +55,8 @@ _ALLOWED_COLLECTIONS = {"standards", "error_codes", "experience_kb"}
 
 # 数据根目录：sync-delete / sync-trigger 等接受 file_path 的接口
 # 只能操作此目录内的文件，防止未授权删除/处理服务器任意路径
-_DATA_ROOT = os.path.join(_PROJECT_ROOT, "data")
+_DATA_ROOT = str(DATA_ROOT)
+_RUNTIME_ROOT = str(RUNTIME_DIR)
 _ADMIN_SESSION_COOKIE = "entar_admin_session"
 _ADMIN_SESSION_VALID: ContextVar[bool] = ContextVar(
     "entar_admin_session_valid", default=False)
@@ -66,10 +67,10 @@ def _is_within_data_dir(path: str) -> bool:
     if not path:
         return False
     try:
-        root = os.path.abspath(_DATA_ROOT)
         candidate = os.path.abspath(os.path.normpath(path))
-        return (candidate == root
-                or candidate.startswith(root + os.sep))
+        roots = [os.path.abspath(_DATA_ROOT), os.path.abspath(_RUNTIME_ROOT)]
+        return any(candidate == root or candidate.startswith(root + os.sep)
+                   for root in roots)
     except (OSError, ValueError):
         return False
 
@@ -713,17 +714,15 @@ def list_sync_files(password: str = Query("", description="管理员密码")):
 
     # 扫描目录
     scan_dirs = {
-        "uploads":     ("data/uploads", "standards"),
-        "standards":   ("data/standards", "standards"),
-        "fault_codes": ("data/fault_codes", "error_codes"),
-        "experience":  ("data/experience", "experience_kb"),
+        "uploads":     (UPLOAD_DIR, "standards"),
+        "standards":   (str(STANDARDS_DIR), "standards"),
+        "fault_codes": (str(FAULT_CODES_DIR), "error_codes"),
+        "experience":  (str(EXPERIENCE_DIR), "experience_kb"),
     }
     result: dict = {"directories": {}}
 
-    for dir_key, (rel_dir, default_coll) in scan_dirs.items():
-        abs_dir = os.path.normpath(os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "..", "..", rel_dir
-        ))
+    for dir_key, (abs_dir, default_coll) in scan_dirs.items():
+        abs_dir = os.path.normpath(abs_dir)
         files: list[dict] = []
         if os.path.isdir(abs_dir):
             for root, dirs, fnames in os.walk(abs_dir):
@@ -1033,13 +1032,11 @@ def sync_stats(password: str = Query("", description="管理员密码")):
     stats = tracker.get_stats()
 
     # 补充目录文件数
-    for dir_key, rel_dir in [("files_in_uploads", "data/uploads"),
-                              ("files_in_standards", "data/standards"),
-                              ("files_in_fault_codes", "data/fault_codes"),
-                              ("files_in_experience", "data/experience")]:
-        abs_dir = os.path.normpath(os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "..", "..", rel_dir
-        ))
+    for dir_key, abs_dir in [("files_in_uploads", UPLOAD_DIR),
+                              ("files_in_standards", str(STANDARDS_DIR)),
+                              ("files_in_fault_codes", str(FAULT_CODES_DIR)),
+                              ("files_in_experience", str(EXPERIENCE_DIR))]:
+        abs_dir = os.path.normpath(abs_dir)
         count = 0
         if os.path.isdir(abs_dir):
             for root, dirs, fnames in os.walk(abs_dir):

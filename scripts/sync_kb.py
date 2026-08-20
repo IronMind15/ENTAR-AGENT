@@ -20,9 +20,9 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
 
 from doc_mgr.engine import process_file
+from paths import FAULT_CODES_DIR
 
-_PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-EXCEL_FILE = os.path.join(_PROJECT_ROOT, "..", "data", "fault_codes", "PCS参数表 V1.6.2.xlsx")
+EXCEL_FILE = str(FAULT_CODES_DIR / "PCS参数表 V1.6.2.xlsx")
 
 
 def sync():

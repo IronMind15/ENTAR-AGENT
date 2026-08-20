@@ -11,6 +11,8 @@ import os
 import time
 from pathlib import Path
 
+from paths import UPLOADS_DIR
+
 import httpx
 
 from config import DASHSCOPE_API_KEY, VISION_MODEL
@@ -27,7 +29,7 @@ _RETRYABLE_STATUS = (429, 500, 502, 503, 504)
 # V1 大小守卫：base64 膨胀约 1.33×，8MB 原图约 10.6MB base64，留足余量
 _MAX_IMAGE_BYTES = 8 * 1024 * 1024
 # 图片路径白名单根目录（防提示注入诱导读取任意文件外传）
-_UPLOAD_ROOT = Path(__file__).resolve().parents[2] / "data" / "uploads"
+_UPLOAD_ROOT = UPLOADS_DIR
 
 
 def _resolve_image_path(image_path: str) -> str:

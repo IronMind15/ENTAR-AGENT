@@ -32,14 +32,16 @@ SCRIPTS_DIR = PROJECT_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+from paths import STANDARDS_DIR
+
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
 
 # 默认对比集（用户确认的 4 份精选：2 扫描 + 2 文字）
 DEFAULT_FILES = [
-    PROJECT_ROOT / "data/standards/GBT16935.1-2008.pdf",   # 扫描版 58p
-    PROJECT_ROOT / "data/standards/EN50438_2008.pdf",       # 扫描版 54p
-    PROJECT_ROOT / "data/standards/EN50178.pdf",            # 文字版 102p
-    PROJECT_ROOT / "data/standards/GB_T_34133-2023.pdf",    # 文字版 49p
+    STANDARDS_DIR / "GBT16935.1-2008.pdf",   # 扫描版 58p
+    STANDARDS_DIR / "EN50438_2008.pdf",       # 扫描版 54p
+    STANDARDS_DIR / "EN50178.pdf",            # 文字版 102p
+    STANDARDS_DIR / "GB_T_34133-2023.pdf",    # 文字版 49p
 ]
 
 # 中文句子切分（句号/分号/问号/感叹号/换行）

@@ -23,9 +23,9 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
 
 from doc_mgr.engine import process_file
+from paths import STANDARDS_DIR
 
-_PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-STD_DIR = os.path.join(_PROJECT_ROOT, "..", "data", "standards")
+STD_DIR = str(STANDARDS_DIR)
 
 
 def sync():

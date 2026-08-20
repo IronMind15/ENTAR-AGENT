@@ -20,6 +20,8 @@ import re
 import sqlite3
 import threading
 from dataclasses import dataclass, field
+
+from paths import DASHBOARD_TEMPLATES_DIR
 from datetime import datetime
 from typing import Optional
 
@@ -27,9 +29,7 @@ logger = logging.getLogger("dashboard.template_store")
 
 # 用户模板的本地文件目录（v1.12.x：模板要求落地为用户文件夹下的 JSON 文件，
 # 可查看/备份/转移；SQLite 仍是运行事实源）
-_TEMPLATE_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "data", "dashboard_templates")
+_TEMPLATE_DIR = str(DASHBOARD_TEMPLATES_DIR)
 
 # 复用 user_store.db（同一 data 目录）
 from user_store import DB_PATH as _DEFAULT_DB_PATH  # noqa: E402

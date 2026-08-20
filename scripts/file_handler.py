@@ -22,6 +22,8 @@ _NET_SESSION.trust_env = False
 
 from datetime import datetime
 from pathlib import Path
+
+from paths import UPLOADS_DIR
 from typing import Optional
 
 from doc_mgr.identity import file_sha256
@@ -29,7 +31,7 @@ from doc_mgr.identity import file_sha256
 logger = logging.getLogger("file_handler")
 
 # 文件保存根目录
-_UPLOAD_ROOT = Path(__file__).parent.parent / "data" / "uploads"
+_UPLOAD_ROOT = UPLOADS_DIR
 
 # 支持自动处理的文件类型
 _AUTO_PROCESS_EXTENSIONS = {".pdf", ".xlsx", ".xls", ".md"}

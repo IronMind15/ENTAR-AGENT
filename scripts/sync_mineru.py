@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from doc_mgr.engine import process_file
 from doc_mgr.storage import get_store
+from paths import STANDARDS_DIR
 
 # 配置日志
 logging.basicConfig(
@@ -37,7 +38,7 @@ logging.basicConfig(
 logger = logging.getLogger("sync_mineru")
 
 # MinerU 输出目录
-MINERU_OUTPUT_DIR = Path(__file__).parent.parent / "data" / "standards" / "mineru_output"
+MINERU_OUTPUT_DIR = STANDARDS_DIR / "mineru_output"
 
 
 def find_markdown_files() -> list[dict]:

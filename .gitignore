@@ -33,6 +33,9 @@ data/chat_memory.json
 # ── 用户信息数据库（SQLite，自动生成，不退版本） ──
 data/user_store.db*
 
+# ── 测试运行时数据（与生产 data/ 隔离） ──
+data/_test_runtime/
+
 # ── 用户上传文件（自动生成，不退版本） ──
 data/uploads/
 

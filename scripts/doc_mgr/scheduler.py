@@ -19,24 +19,25 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from .engine import process_file, check_chroma_has_file
 from .sync_tracker import SyncTracker
 from .identity import file_sha256
+from paths import STANDARDS_DIR, UPLOADS_DIR
 
 logger = logging.getLogger("doc_mgr.scheduler")
 
-# ===== 项目根目录 =====
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.normpath(os.path.join(_SCRIPT_DIR, "..", ".."))
-
 # 扫描配置：{相对目录: (默认 collection)}
 SCAN_DIRS = {
-    "data/uploads": "standards",
-    "data/standards": "standards",
+    str(UPLOADS_DIR): "standards",
+    str(STANDARDS_DIR): "standards",
 }
 # 注意：fault_codes/ 由手动上传，不自动扫描
 
 
 def _resolve(relative: str) -> str:
     """将相对路径解析为绝对路径"""
-    return os.path.normpath(os.path.join(_PROJECT_ROOT, relative))
+    if os.path.isabs(relative):
+        return os.path.normpath(relative)
+    project_root = os.path.normpath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+    return os.path.normpath(os.path.join(project_root, relative))
 
 
 def _compute_hash(file_path: str) -> str:

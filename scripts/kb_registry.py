@@ -26,13 +26,13 @@ import threading
 from datetime import datetime
 from typing import Optional
 
+from paths import DB_PATH as _DEFAULT_DB_PATH
+
 logger = logging.getLogger("kb_registry")
 
 # ===== 数据库路径（复用 user_store.db，模式同 doc_mgr/sync_tracker.py） =====
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.join(_SCRIPT_DIR, "..")
-DB_DIR = os.path.join(_PROJECT_ROOT, "data")
-DB_PATH = os.path.join(DB_DIR, "user_store.db")
+DB_PATH = str(_DEFAULT_DB_PATH)
+DB_DIR = os.path.dirname(DB_PATH)
 
 # ===== 现有默认知识库（种子数据，INSERT OR IGNORE 幂等写入） =====
 _DEFAULT_KBS = [

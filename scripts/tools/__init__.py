@@ -8,13 +8,16 @@
 新增工具只需：
     1. 在 tools/ 下新建 .py 文件
     2. 定义 DEFINITION + execute(args) 函数
-    3. 用 @register 装饰 execute，或在底部 from . import 新模块
+    3. 用 @register 装饰 execute；活动模块会自动发现，
+       不需要再修改本注册中心。
 
 路由开销约 60~150 纳秒（Python dict 哈希查找），相比 LLM API 调用（秒级）可忽略。
 """
 
+import importlib
 import json
 import logging
+import pkgutil
 from typing import Any, Callable
 
 logger = logging.getLogger("tools")
@@ -288,17 +291,17 @@ def confirm_pending_operation(user_id: str) -> str:
     return result
 
 
-# ===== 自动导入工具模块（确保 @register 装饰器执行） =====
-# 注：search_standards / search_experience_kb 两个旧查询工具 v1.11.5 起不再注册，
-# 统一由 kb_search（通用查询，可按知识库选择）替代，文件保留作参考。
-# 注：v1.12.0 工具名带板块前缀（kb/calc/dash/contact/image/doc），文件随名 rename。
-from . import kb_search          # noqa: E402, F811 — 通用知识库查询（v1.11.5 多库，v1.12.0 改名）
-from . import kb_create          # noqa: E402, F811 — 创建知识库（v1.11.5 多库，v1.12.0 改名）
-from . import calc_pcb_trace     # noqa: E402, F811 — PCB 走线计算（IPC-2221）
-from . import calc_copper_busbar # noqa: E402, F811 — 铜排/母线载流（v1.6.0）
-from . import contact_find       # noqa: E402, F811 — 钉钉通讯录员工查询（v1.7.0，v1.12.0 改名）
-from . import image_describe     # noqa: E402, F811 — 图片识别（千问视觉，v1.10.0，v1.12.0 改名）
-from . import dash_query         # noqa: E402, F811 — 看板实时查询（v1.11.0，v1.12.0 改名）
-from . import dash_push          # noqa: E402, F811 — 看板主动推送（v1.11.0，v1.12.0 改名）
-from . import doc_summarize      # noqa: E402, F811 — 钉钉文档总结（v1.11.3，v1.12.0 改名）
-from . import kb_file_manage     # noqa: E402, F811 — 文件删除/重学（统一二次确认，v1.12.0 改名）
+# ===== 自动发现工具模块（确保 @register 装饰器执行） =====
+# 旧查询工具只保留作历史参考，不能随自动发现重新注册。
+_AUTOLOAD_EXCLUDED = {"search_standards", "search_experience_kb"}
+
+
+def _autoload_modules() -> None:
+    for info in sorted(pkgutil.iter_modules(__path__), key=lambda item: item.name):
+        name = info.name
+        if name.startswith("_") or name in _AUTOLOAD_EXCLUDED:
+            continue
+        importlib.import_module(f"{__name__}.{name}")
+
+
+_autoload_modules()

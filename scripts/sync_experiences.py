@@ -24,9 +24,9 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
 
 from doc_mgr.engine import process_file
+from paths import EXPERIENCE_DIR as EXPERIENCE_SOURCE_DIR
 
-_PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-EXPERIENCE_DIR = os.path.join(_PROJECT_ROOT, "..", "data", "experience")
+EXPERIENCE_DIR = str(EXPERIENCE_SOURCE_DIR)
 
 
 def sync():

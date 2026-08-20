@@ -8,9 +8,11 @@ main.py 和 dingtalk_bot.py 通过 get_matched_skill() 统一路由。
   1. 在 skills/ 下新建 .py 文件
   2. 定义继承 BaseSkill 的类，实现 match() 和 handle()
   3. 用 @register 装饰
-  4. 在本文件底部加入 from . import 新模块
+  4. 不需要再修改本注册中心；活动模块会自动发现
 """
 
+import importlib
+import pkgutil
 from typing import Optional
 
 
@@ -70,9 +72,21 @@ def get_skill_list() -> list[type[BaseSkill]]:
     return list(_skill_registry)
 
 
-# ===== 自动导入技能模块（确保 @register 装饰器执行） =====
-from . import error_query      # noqa: E402, F811 — 优先级 100：仅精确故障代码快速通道
-from . import pcb_calc         # noqa: E402, F811 — 优先级 90 ：PCB 设计计算（IPC-2221 秒回）
-from . import dashboard        # noqa: E402, F811 — 优先级 80 ：每日项目看板（v1.11.0）
-from . import standards_query  # noqa: E402, F811 — 优先级 70 ：标准编号快速通道 + 语义搜索（v1.11.6 统一）
-from . import agent            # noqa: E402, F811 — 优先级 50 ：RAG Agent（LLM + 工具调用，统一处理所有问题）
+# ===== 自动发现活动技能模块（确保 @register 装饰器执行） =====
+# 以下是技能包内的基础设施/入口模块，不是 BaseSkill 注册模块，避免导入
+# dingtalk SDK、记忆实现或检索实现时产生额外副作用和循环依赖。
+_AUTOLOAD_EXCLUDED = {
+    "dingtalk_bot", "enhanced_search", "experience_query",
+    "memory", "memory_compress",
+}
+
+
+def _autoload_modules() -> None:
+    for info in sorted(pkgutil.iter_modules(__path__), key=lambda item: item.name):
+        name = info.name
+        if name.startswith("_") or name in _AUTOLOAD_EXCLUDED:
+            continue
+        importlib.import_module(f"{__name__}.{name}")
+
+
+_autoload_modules()

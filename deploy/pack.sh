@@ -9,7 +9,9 @@ echo "📦 打包恩特小助手部署文件..."
 
 TAR_FILE="entar-agent.tar.gz"
 
-# 打包时排除：__pycache__、local_config.py（密钥）、venv（虚拟环境）
+# 打包时只携带源码、依赖和部署配置。
+# 运行数据（data/）、向量库（knowledge_base/）、日志和本地模型必须由
+# 目标环境单独提供，防止把真实业务数据打进部署包。
 tar -czf "$TAR_FILE" \
     --exclude="__pycache__" \
     --exclude="*.pyc" \
@@ -19,8 +21,6 @@ tar -czf "$TAR_FILE" \
     --exclude=".claude" \
     --exclude="docs" \
     scripts/ \
-    data/ \
-    knowledge_base/ \
     requirements.txt \
     deploy/ \
     .dockerignore
@@ -34,3 +34,4 @@ echo ""
 echo "   在服务器上解压："
 echo "   ssh root@你的服务器IP"
 echo "   cd /opt && tar -xzf $TAR_FILE"
+echo "   运行数据请单独挂载，并配置 ENTAR_RUNTIME_DIR / ENTAR_KNOWLEDGE_BASE_DIR"

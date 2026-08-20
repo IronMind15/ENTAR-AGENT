@@ -37,6 +37,7 @@ from .extractors import extract_csv_rows, format_csv_row
 from .sync_tracker import SyncTracker
 from .task_manager import report_progress as _report_progress
 from .identity import file_sha256, stable_document_id
+from paths import DATA_ROOT, RUNTIME_DIR, STANDARDS_DIR
 
 logger = logging.getLogger("doc_mgr.engine")
 
@@ -63,20 +64,18 @@ def _get_mineru_output_dir(file_path: str) -> str:
       data/fault_codes/xxx.xlsx → data/fault_codes/mineru_output/
     """
     abs_path = os.path.abspath(file_path)
-    sep = os.sep
-    # 找到路径中的 /data/ 段
-    idx = abs_path.find(f"{sep}data{sep}")
-    if idx >= 0:
-        after_data = abs_path[idx + 6:]  # 去掉 /data/
-        top_dir = after_data.split(sep)[0]  # standards / uploads / fault_codes
-        project_root = abs_path[:idx]
+    for root in (str(RUNTIME_DIR), str(DATA_ROOT)):
+        root = os.path.abspath(root)
+        try:
+            relative = os.path.relpath(abs_path, root)
+        except ValueError:
+            continue
+        if relative == os.pardir or relative.startswith(os.pardir + os.sep):
+            continue
+        top_dir = relative.split(os.sep)[0]
         if top_dir in ("standards", "uploads", "fault_codes"):
-            return os.path.join(project_root, "data", top_dir, "mineru_output")
-    # 回退
-    return os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "..",
-        "data", "standards", "mineru_output"
-    )
+            return os.path.join(root, top_dir, "mineru_output")
+    return os.path.join(str(STANDARDS_DIR), "mineru_output")
 
 
 def check_chroma_has_file(collection: str, file_name: str) -> bool:

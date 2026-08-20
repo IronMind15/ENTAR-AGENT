@@ -17,6 +17,8 @@ import uuid
 from abc import ABC, abstractmethod
 from typing import Optional, Any
 
+from paths import KNOWLEDGE_BASE_DIR
+
 logger = logging.getLogger("doc_mgr.storage")
 
 _HIDDEN_VERSION_STATES = ["staging", "retired"]
@@ -30,9 +32,7 @@ def _visible_where(where: Optional[dict] = None) -> dict:
     return {"$and": [visible, where]}
 
 # ===== Chroma 路径（从本文件定位到 project root） =====
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.join(_SCRIPT_DIR, "..")
-CHROMA_DIR = os.path.join(_PROJECT_ROOT, "..", "knowledge_base")
+CHROMA_DIR = str(KNOWLEDGE_BASE_DIR)
 
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 

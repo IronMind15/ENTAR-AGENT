@@ -3,6 +3,23 @@
 > 📌 **本文档是项目唯一的版本记录（单一事实源）**——README.md、PROGRESS.md 的版本历史均指向本文件，发版时只在这里追加记录。
 > 相关：待办清单见 [TODO.md](TODO.md)，进度看板见 [PROGRESS.md](PROGRESS.md)。
 
+## v1.13.2（2026-08-20）
+
+**🧭 结构治理与发布边界收口**——不修改 `TODO.md` 内容，集中解决测试/生产文件混用、部署包携带运行数据、模块自行拼路径和新增功能必须修改中心注册文件等问题。
+
+### 文件管理与运行边界
+
+- 新增 `scripts/paths.py` 作为运行路径唯一入口：生产默认保持 `data/`、`logs/`、`knowledge_base/` 兼容路径；测试默认使用 `data/_test_runtime/`；部署可通过 `ENTAR_RUNTIME_DIR`、`ENTAR_KNOWLEDGE_BASE_DIR`、`ENTAR_LOG_DIR` 将运行数据移出代码目录。
+- SQLite、上传目录、看板任务/模板、日志、Chroma 存储、文档同步扫描和 MinerU 输出统一从路径层取得；静态源文件目录仍保持版本管理，运行产物不再与源数据混淆。
+- `deploy/pack.sh` 不再把真实 `data/` 或 `knowledge_base/` 打进部署包，新增无密钥的 `deploy/production.env.example`；生产运行数据和凭证由目标环境单独挂载/注入。
+- 新增 `python -m scripts.main` 稳定调用入口，同时兼容既有 `python scripts/main.py` 启动方式。
+
+### 扩展与验证
+
+- 工具、技能注册中心改为自动发现活动模块；旧 `search_standards`、`search_experience_kb` 明确排除并保留为归档参考。新增工具/技能只需新增模块和注册装饰器，减少跨文件改动。
+- 运维同步脚本统一复用路径层，补充 `scripts/README.md`、`tests/README.md` 和生产/测试边界回归。
+- 全量离线回归 **1001 项通过**；本次未修改 `TODO.md`，也未迁移、删除或覆盖现有生产运行数据。
+
 ## v1.13.1（2026-08-20）
 
 **🎯 现有能力可靠性收口**——不增加业务功能，聚焦既有功能的意图边界、真实结果呈现、失败可见性、测试隔离和生产部署保护。

@@ -9,6 +9,8 @@ import os
 import re
 import threading
 from pathlib import Path
+
+from paths import UPLOADS_DIR
 from typing import Callable, Optional
 
 from config import KNOWLEDGE_REVIEW_MODE, KNOWLEDGE_REVIEWER_STAFF_IDS
@@ -18,7 +20,7 @@ from doc_mgr.sync_tracker import SyncTracker
 
 logger = logging.getLogger("knowledge_review")
 
-_UPLOAD_ROOT = Path(__file__).parent.parent / "data" / "uploads"
+_UPLOAD_ROOT = UPLOADS_DIR
 _SUPPORTED_EXTENSIONS = {".pdf", ".xlsx", ".xls", ".md", ".docx", ".pptx", ".csv"}
 _ALLOWED_COLLECTIONS = {"standards", "error_codes", "experience_kb"}
 _COMMAND_RE = re.compile(

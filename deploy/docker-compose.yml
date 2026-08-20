@@ -11,12 +11,17 @@ services:
     volumes:
       # 代码挂载（修改后 docker restart 即可，无需 --build 重装依赖）
       - ../scripts:/app/scripts
-      # 配置文件挂载出来，方便修改 API 密钥
-      # （已包含在 scripts/ 挂载中，单独保留作为显式说明）
-      # 知识库持久化，更新 Excel 后重新同步
-      - ../knowledge_base:/app/knowledge_base
-      # 用户数据持久化（uploads / standards / user_store.db）
-      - ../data:/app/data
+      # 静态源数据只读挂载（Excel/PDF/经验/PCB/评估集）。部署包不携带 data/。
+      - ${ENTAR_STATIC_DATA_DIR:-../data}:/app/data:ro
+      # 生产运行数据与源码/静态源数据分离：uploads、SQLite、看板文件、日志。
+      - ${ENTAR_RUNTIME_HOST_DIR:-../runtime}:/var/lib/entar-agent/runtime
+      # Chroma 向量库单独持久化。
+      - ${ENTAR_KB_HOST_DIR:-../knowledge_base}:/var/lib/entar-agent/knowledge_base
+      - ${ENTAR_LOG_HOST_DIR:-../logs}:/var/log/entar-agent
     environment:
-      - HF_ENDPOINT=https://hf-mirror.com
+      ENTAR_ENV: production
+      ENTAR_RUNTIME_DIR: /var/lib/entar-agent/runtime
+      ENTAR_KNOWLEDGE_BASE_DIR: /var/lib/entar-agent/knowledge_base
+      ENTAR_LOG_DIR: /var/log/entar-agent
+      HF_ENDPOINT: https://hf-mirror.com
     restart: unless-stopped

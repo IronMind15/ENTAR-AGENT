@@ -15,11 +15,11 @@ import tempfile
 import time
 from datetime import datetime
 
+from paths import DASHBOARD_TASKS_DIR
+
 
 PROMPT_VERSION = "task-prompt-v1"
-_TASK_PROMPT_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "data", "dashboard_tasks")
+_TASK_PROMPT_DIR = str(DASHBOARD_TASKS_DIR)
 logger = logging.getLogger("dashboard.task_prompt")
 
 

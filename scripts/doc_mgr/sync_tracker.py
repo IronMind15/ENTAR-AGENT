@@ -18,13 +18,13 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
+from paths import DB_PATH as _DEFAULT_DB_PATH
+
 logger = logging.getLogger("doc_mgr.sync_tracker")
 
 # ===== 数据库路径（复用 user_store.db） =====
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.join(_SCRIPT_DIR, "..", "..")
-DB_DIR = os.path.join(_PROJECT_ROOT, "data")
-DB_PATH = os.path.join(DB_DIR, "user_store.db")
+DB_PATH = str(_DEFAULT_DB_PATH)
+DB_DIR = os.path.dirname(DB_PATH)
 
 
 class SyncTracker:

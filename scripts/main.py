@@ -15,6 +15,7 @@ import os
 import sys
 import threading
 from logging.handlers import TimedRotatingFileHandler
+from paths import LOG_DIR, ensure_runtime_dirs
 sys.path.insert(0, os.path.dirname(__file__))
 
 # 钉钉 SDK（dingtalk_stream）内部用 requests 且默认 trust_env=True 跟随系统代理。
@@ -32,8 +33,7 @@ if sys.platform == "win32":
     os.environ["PYTHONIOENCODING"] = "utf-8"
 
 # 日志目录
-_LOG_DIR = os.path.join(os.path.dirname(__file__), "..", "logs")
-os.makedirs(_LOG_DIR, exist_ok=True)
+ensure_runtime_dirs()
 
 # 统一日志配置：同时输出控制台 + 文件
 logging.basicConfig(
@@ -43,7 +43,7 @@ logging.basicConfig(
     handlers=[
         logging.StreamHandler(),                                              # 控制台
         TimedRotatingFileHandler(
-            os.path.join(_LOG_DIR, "entark.log"),
+            os.path.join(str(LOG_DIR), "entark.log"),
             encoding="utf-8",
             when="midnight",   # 每天 0 点按天轮转
             backupCount=7,     # 保留最近 7 天，更早自动删除
