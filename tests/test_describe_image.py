@@ -139,6 +139,56 @@ class DescribeImageToolTests(unittest.TestCase):
             req_body = mpost.call_args[1]["json"]
             self.assertEqual(req_body["messages"][0]["content"][1]["text"], "图里有什么参数")
 
+    # ── DeepSeek vision 复用主模型（v1.14.0） ──
+    def test_is_deepseek_vision_detection(self):
+        """主模型名含 vision 才复用；flash/pro/qwen/空 均不。"""
+        self.assertTrue(image_describe._is_deepseek_vision("deepseek-v4-flash-vision-exp"))
+        self.assertFalse(image_describe._is_deepseek_vision("deepseek-v4-flash"))
+        self.assertFalse(image_describe._is_deepseek_vision("deepseek-v4-pro"))
+        self.assertFalse(image_describe._is_deepseek_vision("qwen3.7-flash"))
+        self.assertFalse(image_describe._is_deepseek_vision(""))
+
+    def test_deepseek_vision_reuses_main_model(self):
+        """LLM_MODEL 选 vision：识图走 DeepSeek 端点 + DEEPSEEK_API_KEY，复用主模型，
+        带 thinking disabled 防思维链吃光 max_tokens，不再走专门的识图模型。"""
+        p = self._write_image(MAGIC["png"])
+        with mock.patch.object(image_describe, "LLM_MODEL", "deepseek-v4-flash-vision-exp"), \
+             mock.patch.object(image_describe._HTTP_CLIENT, "post") as mpost:
+            mpost.return_value = _FakeResp(200, {"choices": [{"message": {"content": "接线端子特写"}}]})
+            out = json.loads(image_describe.execute({"image_path": p}))
+        self.assertEqual(out["description"], "接线端子特写")
+        call = mpost.call_args
+        self.assertIn(image_describe._DEEPSEEK_VISION_URL, str(call[0][0]))
+        self.assertEqual(call[1]["headers"]["Authorization"],
+                         f"Bearer {image_describe.DEEPSEEK_API_KEY}")
+        req_body = call[1]["json"]
+        self.assertEqual(req_body["model"], "deepseek-v4-flash-vision-exp")
+        self.assertEqual(req_body["thinking"], {"type": "disabled"})
+
+    def test_deepseek_vision_missing_key(self):
+        """LLM_MODEL 选 vision 但缺 DEEPSEEK_API_KEY：报错且不调网络。"""
+        p = self._write_image(MAGIC["png"])
+        with mock.patch.object(image_describe, "LLM_MODEL", "deepseek-v4-flash-vision-exp"), \
+             mock.patch.object(image_describe, "DEEPSEEK_API_KEY", ""), \
+             mock.patch.object(image_describe._HTTP_CLIENT, "post") as mpost:
+            out = json.loads(image_describe.execute({"image_path": p}))
+        self.assertIn("DEEPSEEK_API_KEY", out.get("error", ""))
+        mpost.assert_not_called()
+
+    def test_default_still_uses_qwen(self):
+        """LLM_MODEL 未选 vision（如 deepseek-v4-flash）：识图仍走阿里云百炼，
+        不污染默认行为。"""
+        p = self._write_image(MAGIC["png"])
+        with mock.patch.object(image_describe, "LLM_MODEL", "deepseek-v4-flash"), \
+             mock.patch.object(image_describe._HTTP_CLIENT, "post") as mpost:
+            mpost.return_value = _FakeResp(200, {"choices": [{"message": {"content": "OK"}}]})
+            image_describe.execute({"image_path": p})
+        call = mpost.call_args
+        self.assertIn(image_describe._VISION_API_URL, str(call[0][0]))
+        req_body = call[1]["json"]
+        self.assertEqual(req_body["model"], image_describe.VISION_MODEL)
+        self.assertNotIn("thinking", req_body)
+
     # ── 重试与降级 ──
     def test_retry_on_5xx(self):
         p = self._write_image(MAGIC["png"])

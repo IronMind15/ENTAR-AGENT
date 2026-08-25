@@ -18,7 +18,7 @@ import time
 
 import httpx
 
-from scripts.config import (DASHBOARD_LLM_MODEL, DEEPSEEK_API_KEY, MAX_CONCURRENT_LLM, TESTING,
+from scripts.config import (DASHBOARD_LLM_MODEL, DEEPSEEK_API_KEY, LLM_MODEL, MAX_CONCURRENT_LLM, TESTING,
                     MAX_CONTEXT_ROUNDS, KEEP_CONTEXT_ROUNDS)
 from scripts.skills import BaseSkill, register
 from scripts.tools import (get_tool_definitions, execute_tool as _execute_registered_tool,
@@ -249,7 +249,7 @@ def _call_deepseek(
     thinking: bool = True,
     json_output: bool = False,
     timeout_seconds: float = 60,
-    model: str = "deepseek-v4-flash",
+    model: str | None = None,
 ) -> dict | None:
     """调用 DeepSeek API（通用封装）
 
@@ -261,6 +261,8 @@ def _call_deepseek(
     Returns:
         response message dict，或 None（调用失败时）
     """
+    if model is None:
+        model = LLM_MODEL
     if not DEEPSEEK_API_KEY:
         logger.warning("DEEPSEEK_API_KEY 未配置")
         return None
@@ -366,7 +368,7 @@ def _call_deepseek_stream(
     _t0 = time.time()
 
     body = {
-        "model": "deepseek-v4-flash",
+        "model": LLM_MODEL,
         "messages": messages,
         "temperature": 0.3,
         "max_tokens": max_tokens,

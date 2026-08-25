@@ -434,6 +434,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
       <button class="nav-item" onclick="switchTab('people', this)"><span class="nav-icon">🗂</span>按人查看</button>
       <button class="nav-item" onclick="switchTab('dashboard', this)"><span class="nav-icon">📈</span>看板状态</button>
       <button class="nav-item" onclick="switchTab('users', this)"><span class="nav-icon">👥</span>用户管理</button>
+      <button class="nav-item" onclick="switchTab('config', this)"><span class="nav-icon">⚙️</span>系统设置</button>
     </nav>
     <div class="side-footer">
       <button onclick="toggleTheme()" id="themeBtn" title="切换暗黑模式">🌙</button>
@@ -623,6 +624,17 @@ ADMIN_HTML = r"""<!DOCTYPE html>
       </div>
     </div>
   </div>
+
+  <!-- Tab: System Config（系统设置，v1.14.0） -->
+  <div id="tab-config" class="tab-content">
+    <div class="card">
+      <h3>⚙️ 系统设置 <small style="font-size:13px;color:var(--text-secondary)">密钥 / 模型名 / 密码，网页手动输入，不用改代码</small></h3>
+      <p style="font-size:13px;color:var(--text-secondary);margin:10px 0 16px">
+        留空 = 保留原值；敏感项只显示掩码。除「管理后台密码」外，其余需<strong>重启服务</strong>生效（各模块启动时读取）。
+      </p>
+      <div id="configContent"><div class="loading-spinner">加载配置项...</div></div>
+    </div>
+  </div>
   </main>
 </div>
 
@@ -658,7 +670,7 @@ function showToast(msg, type) {
 }
 
 // ===== Tabs（侧边栏导航） =====
-var TAB_TITLES = { docs: '📚 文档列表', upload: '📤 上传文件', search: '🔍 搜索测试', sync: '🔄 同步管理', people: '🗂 按人查看', dashboard: '📈 看板状态', users: '👥 用户管理' };
+var TAB_TITLES = { docs: '📚 文档列表', upload: '📤 上传文件', search: '🔍 搜索测试', sync: '🔄 同步管理', people: '🗂 按人查看', dashboard: '📈 看板状态', users: '👥 用户管理', config: '⚙️ 系统设置' };
 function switchTab(name, el) {
   document.querySelectorAll('.side-nav .nav-item').forEach(function(b) {
     b.classList.remove('active');
@@ -676,6 +688,7 @@ function switchTab(name, el) {
   if (name === 'people') { loadPeople(); }
   if (name === 'dashboard') { loadDashboardStatus(); }
   if (name === 'users') { loadUsers(); }
+  if (name === 'config') { loadConfig(); }
   // 移动端切换后收起侧边栏
   if (window.innerWidth <= 768) {
     var sb = document.getElementById('sidebar');
@@ -686,6 +699,77 @@ function switchTab(name, el) {
 // ===== 移动端侧边栏开合 =====
 function toggleSidebar() {
   document.getElementById('sidebar').classList.toggle('open');
+}
+
+// ===== System Config（系统设置） =====
+function loadConfig() {
+  var area = document.getElementById('configContent');
+  area.innerHTML = '<div class="loading-spinner">加载配置项...</div>';
+  fetch('/admin/config?password=' + encodeURIComponent(getPw()))
+    .then(function(r) { return r.json(); })
+    .then(function(items) {
+      var groupMeta = {
+        llm: {icon: '🧠', title: '大语言模型（聊天 / Agent）'},
+        dingtalk: {icon: '📨', title: '钉钉机器人'},
+        admin: {icon: '🔑', title: '管理后台密码'},
+        mineru: {icon: '📄', title: 'MinerU（扫描 PDF 识别）'},
+        contact: {icon: '👤', title: '通讯录敏感字段'},
+        vision: {icon: '🖼️', title: '识图模型（阿里云百炼千问）'}
+      };
+      var groups = {};
+      Object.keys(items).forEach(function(k) {
+        var it = items[k];
+        (groups[it.group] = groups[it.group] || []).push(it);
+      });
+      var html = '';
+      Object.keys(groupMeta).forEach(function(g) {
+        if (!groups[g] || !groups[g].length) return;
+        html += '<h4 style="margin:22px 0 10px;color:var(--text)">' + groupMeta[g].icon + ' ' + groupMeta[g].title + '</h4>';
+        groups[g].forEach(function(it) {
+          var isSecret = it.secret;
+          var ph = isSecret ? (it.set ? '（已设置，留空保持不变）' : '留空保持不变') : '';
+          html += '<div style="margin-bottom:14px">'
+            + '<label style="font-size:13px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:6px">'
+            + esc(it.label)
+            + (isSecret && it.set ? ' <span style="color:var(--text-secondary);font-weight:400;font-family:monospace">' + esc(it.masked) + '</span>' : '')
+            + '</label>'
+            + '<input type="' + (isSecret ? 'password' : 'text') + '" id="cfg-' + it.key + '" data-key="' + it.key + '"'
+            + ' placeholder="' + esc(ph) + '"'
+            + (isSecret ? '' : ' value="' + esc(it.masked) + '"')
+            + ' style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;background:var(--card);color:var(--text);outline:none;box-sizing:border-box">'
+            + '<p style="font-size:12px;color:var(--text-secondary);margin-top:4px">' + esc(it.hint)
+            + (it.immediate ? '（⚠️ 保存后立即生效）' : '') + '</p>'
+            + '</div>';
+        });
+      });
+      html += '<button onclick="saveConfig()" style="margin-top:8px;padding:10px 28px;border:none;border-radius:8px;background:var(--primary,#4361ee);color:#fff;font-size:14px;font-weight:600;cursor:pointer">💾 保存配置</button>';
+      area.innerHTML = html;
+    })
+    .catch(function(e) {
+      area.innerHTML = '<p style="color:#ef4444">加载失败: ' + esc(e.message || e) + '</p>';
+    });
+}
+
+function saveConfig() {
+  var fd = new FormData();
+  document.querySelectorAll('#configContent input[data-key]').forEach(function(inp) {
+    fd.append(inp.getAttribute('data-key'), inp.value);
+  });
+  fd.append('password', getPw());
+  fetch('/admin/config', { method: 'POST', body: fd })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.ok) {
+        var msg = '已保存';
+        if (data.immediate && data.immediate.length) msg += '（立即生效: ' + data.immediate.join(', ') + '）';
+        else msg += '（重启服务后生效）';
+        showToast(msg, 'success');
+        loadConfig();
+      } else {
+        showToast('保存失败: ' + (data.error || '未知错误'), 'error');
+      }
+    })
+    .catch(function(e) { showToast('保存失败: ' + e.message, 'error'); });
 }
 
 // ===== Escape HTML =====

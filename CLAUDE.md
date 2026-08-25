@@ -123,7 +123,7 @@ D:\ENTAR_AGENT\
 │   │   ├── dash_query.py            # 📊 看板实时查询（保留来源链接）
 │   │   ├── dash_push.py             # 📊 看板主动推送（二次确认）
 │   │   ├── contact_find.py          # 👥 钉钉通讯录员工查询（v1.7.0）
-│   │   ├── image_describe.py        # 🖼️ 图片识别（qwen3.7-flash 视觉，v1.10.0）
+│   │   ├── image_describe.py        # 🖼️ 图片识别（主对话选 DeepSeek vision 时复用主模型，否则 qwen）
 │   │   ├── doc_summarize.py         # 📄 文档总结（条件外发确认）
 │   │   ├── search_standards.py      # ⚠️ 已停用注册（v1.11.5 由 kb_search 替代，文件保留）
 │   │   └── search_experience_kb.py  # ⚠️ 已停用注册（v1.11.5 由 kb_search 替代，文件保留）
@@ -272,7 +272,7 @@ FastAPI (main.py) → 判定层 routing.py（领域互斥/歧义澄清）→ Age
 | 增强检索 | enhanced_search.py | 向量 + BM25 双路召回 RRF 融合 + bge-reranker 重排（v1.3.0） |
 | PCB 计算 | pcb_calc.py + tools/calc_pcb_trace.py | 54 类 PCB 计算器，全本地秒回（v1.5.4 以 pcb-tools.cn 为基准） |
 | 文件接收 | file_handler.py | 钉钉文件/图片接收 → 自动下载保存到 data/uploads/ |
-| 识图能力 | image_describe.py + qwen3.7-flash | 钉钉发图自动识别描述（视觉外挂，v1.10.0）；tools/ 注册 + Claude Code vision skill；magic bytes + 路径白名单 + 5xx 重试 |
+| 识图能力 | image_describe.py（主模型复用 / qwen3.7-flash 双通道） | 钉钉发图自动识别描述（视觉外挂，v1.10.0）；识图模型二选一——主对话 `LLM_MODEL` 选了 DeepSeek 视觉模型 `deepseek-v4-flash-vision-exp`（模型名含 vision）时自动复用主模型（DEEPSEEK_API_KEY + DeepSeek 端点，关思考），否则走专门的识图模型（VISION_MODEL + DASHSCOPE_API_KEY）；tools/ 注册 + Claude Code vision skill；magic bytes + 路径白名单 + 5xx 重试 |
 | 上传直接学习 | knowledge_review.py + dingtalk_notifier.py + file_handler.py | ⏸️ 审核已停用（v1.10.2）：上传→回「帮我学习」直接入库；「我的文件」查看；v1.11.8 删除/重新学习改为二次确认；`ENTARBOSS` 管理员模式保留；旧审核代码可恢复 |
 | 崩溃恢复 | doc_mgr/recovery.py | 启动时清理/恢复遗留 staging/retired 版本数据 |
 | 自动化测试 | unittest | 1001 项通过；在原 997 项基础上增加生产/测试运行路径、部署打包边界、稳定包入口和自动发现回归；覆盖文档引擎、同步追踪、PCB、安全/版本替换、并发路由、通讯录、反馈/Prompt/引用、识图、PDF 路由、看板完整证据链/变化优先/真实标题/安全渲染/语义分页/重复调度、通用工具二次确认、v1.11.9 审查修复 5 项回归，v1.12.0 注册中心 fail-fast/tripwire 无旧名残留/能力清单完整性/判定层领域让位与查询链路，v1.12.5 消息流多消息协议/兜底拆条/逐源组装/关键源展开 + 幻觉护栏/每源独立总结，以及订阅实时源解析与 owner 隔离（C6）/文件夹逐个解读全部子文档与部分失败保留记录（C8）+ v1.12.7 任务级源选择（新文档不自动入任务）/留档每任务 30 次/源增删与历史回放端到端 + v1.12.8 审查修复（BM25 缓存失效/调度窗口/模板 key 穿越/推送重试）+ 按人查看聚合与 Web 用户层移除 tripwire + v1.12.9 看板操作意图 LLM 分类治本 + v1.13.1 任务提示词快照/监测状态/调度结果状态与管理端展示 |

@@ -51,22 +51,18 @@ except ImportError:
 
 
 def load_token() -> str | None:
-    """读取 MinerU Token（优先级：local_config > config.yaml > 环境变量）"""
-    # 1. 优先从 local_config.py 读取（统一凭证管理入口）
+    """读取 MinerU Token（优先级：env > /admin 系统设置 > local_config > config.yaml）"""
+    # 0. 统一配置链路：环境变量 > admin_config.json（/admin「系统设置」网页填的）
+    #    > local_config.py（由 scripts.config 汇总读取）。网页填的覆盖本地，
+    #    接手人无需改代码配 MinerU 密钥。
     try:
-        _local_path = Path(__file__).parent / "local_config.py"
-        if _local_path.exists():
-            with open(_local_path, "r", encoding="utf-8") as _f:
-                for _line in _f:
-                    _line = _line.strip()
-                    if _line.startswith("MINERU_TOKEN") and "=" in _line:
-                        _val = _line.split("=", 1)[1].strip().strip('"').strip("'")
-                        if _val:
-                            return _val
+        from scripts.config import MINERU_TOKEN as _cfg_token
+        if _cfg_token:
+            return _cfg_token
     except Exception:
         pass
 
-    # 2. 读 ~/.mineru/config.yaml（mineru-open-api auth 生成的）
+    # 1. 读 ~/.mineru/config.yaml（mineru-open-api auth 生成的）
     config_path = Path.home() / ".mineru" / "config.yaml"
     if config_path.exists():
         with open(config_path, "r") as f:

@@ -2,9 +2,10 @@
 统一配置读取模块
 
 所有技能模块统一通过本模块获取配置，避免各模块各自读取 local_config.py。
-读取优先级：环境变量 > local_config.py 文件
+读取优先级：环境变量 > admin_config.json（/admin「系统设置」网页填的）> local_config.py
 """
 
+import json
 import os
 import logging
 import sys
@@ -53,13 +54,41 @@ def _read_from_file(key: str) -> str:
     return ""
 
 
+def _read_overrides() -> dict:
+    """读取 data/admin_config.json（/admin「系统设置」网页填的覆盖值）。
+
+    仅本模块 import 时执行一次；保存后需重启服务生效（ADMIN_PASSWORD
+    除外——保存时会 setattr 热更新，见 scripts/admin_config.py）。
+    测试模式不读取，防回归测试意外依赖本机网页配置。
+    """
+    if _TESTING:
+        return {}
+    try:
+        from scripts.paths import RUNTIME_DIR
+        path = os.path.join(str(RUNTIME_DIR), "admin_config.json")
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        logger.warning(f"读取 admin_config.json 出错: {e}")
+        return {}
+
+
+# 网页「系统设置」填写的覆盖值（import 时加载；除 ADMIN_PASSWORD 外重启生效）
+_OVERRIDES: dict = _read_overrides()
+
+
 def _get_config(key: str) -> str:
-    """获取配置值：环境变量优先，其次是 local_config.py"""
+    """获取配置值：环境变量 > admin_config.json（网页填的）> local_config.py"""
     val = os.environ.get(key, "")
     if val:
         return val
     if _TESTING:
         return _TEST_DEFAULTS.get(key, "")
+    if _OVERRIDES and _OVERRIDES.get(key):
+        return str(_OVERRIDES[key])
     return _read_from_file(key)
 
 
@@ -74,10 +103,16 @@ IS_PRODUCTION: bool = APP_ENV in {"production", "prod"}
 # DeepSeek API
 DEEPSEEK_API_KEY: str = _get_config("DEEPSEEK_API_KEY")
 
+# 主对话 LLM 模型名（/admin「系统设置」可改，需重启生效；看板另有 DASHBOARD_LLM_MODEL）。
+# DeepSeek 三选一：flash（快·纯文本）/ pro（旗舰·纯文本）/ flash-vision-exp（视觉·能看图）。
+# 选 vision 时识图自动复用主模型（见 tools/image_describe.py），不再走专门的识图模型。
+LLM_MODEL: str = _get_config("LLM_MODEL") or "deepseek-v4-flash"
+
 # DeepSeek 并发请求上限（多人同时问 LLM 时限制并发，防费用失控 / 429）
 MAX_CONCURRENT_LLM: int = 20
 
 # 看板执行模型与主对话 Agent 解耦；默认保持现有模型，部署时可单独替换。
+# 同样三选一（flash / pro / flash-vision-exp）；看板纯文本，选 vision 不启用看图。
 DASHBOARD_LLM_MODEL: str = _get_config("DASHBOARD_LLM_MODEL") or "deepseek-v4-flash"
 
 # 钉钉 Stream 模式机器人凭证
@@ -128,7 +163,13 @@ ADMIN_MASTER_CODE: str = _get_config("ADMIN_MASTER_CODE") or "ENTARBOSS"
 #   mineru → 全部走 MinerU（旧行为，MinerU 优先、本地回退），出问题可一键切回
 PDF_ROUTING: str = _get_config("PDF_ROUTING") or "auto"
 
-# 阿里云百炼 DashScope（千问视觉识图）
+# MinerU（扫描 PDF 识别）——纳入统一配置链路后，/admin「系统设置」网页可填。
+# mineru_extract.load_token 优先从这里读（env > admin_config.json > local_config）。
+MINERU_TOKEN: str = _get_config("MINERU_TOKEN")
+
+# 阿里云百炼 DashScope（千问视觉识图）。
+# 仅当主对话 LLM_MODEL 未选 DeepSeek 视觉模型（flash-vision-exp）时启用；
+# 选了则识图自动复用主模型（DEEPSEEK_API_KEY 调 DeepSeek 端点），这两个配置可留空。
 DASHSCOPE_API_KEY: str = _get_config("DASHSCOPE_API_KEY")
 VISION_MODEL: str = _get_config("VISION_MODEL") or "qwen3.7-flash"
 

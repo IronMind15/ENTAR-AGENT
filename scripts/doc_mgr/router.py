@@ -1290,3 +1290,31 @@ async def reset_system_prompt(password: str = Form("", description="管理员密
 
     logger.info("System prompt 已重置为文件默认值")
     return JSONResponse({"ok": True, "content": content})
+
+
+# ===== 系统设置（配置覆盖，v1.14.0） =====
+
+@router.get("/config")
+def get_admin_config(password: str = Query("", description="管理员密码")):
+    """系统设置页数据：各配置项掩码状态，由 /admin「系统设置」tab fetch 渲染。"""
+    if not _verify_admin_access(password):
+        raise HTTPException(401, "密码错误")
+    from scripts.admin_config import get_status
+    return get_status()
+
+
+@router.post("/config")
+async def save_admin_config(request: Request, password: str = Form("", description="管理员密码")):
+    """保存系统设置：白名单内 key 写入 data/admin_config.json（原子写）。
+
+    - 留空 = 不修改该项；未知 key 静默忽略
+    - ADMIN_PASSWORD 保存后立即生效（setattr 热更新，鉴权每次现读）
+    - 其余密钥需重启服务生效（各模块 import 快照）
+    """
+    if not _verify_admin_access(password):
+        raise HTTPException(401, "密码错误")
+    form = await request.form()
+    values = {k: str(v) for k, v in form.items() if k != "password"}
+    from scripts.admin_config import save_config
+    result = save_config(values)
+    return JSONResponse({"ok": True, **result})

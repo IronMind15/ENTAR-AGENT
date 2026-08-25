@@ -86,7 +86,7 @@ def _call_llm(messages: list[dict], max_tokens: int = 1000) -> str | None:
             "Authorization": f"Bearer {api_key}",
         }
         body = {
-            "model": "deepseek-v4-flash",
+            "model": getattr(cfg, "LLM_MODEL", "deepseek-v4-flash"),
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": 0.3,

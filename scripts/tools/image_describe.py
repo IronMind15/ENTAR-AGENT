@@ -1,7 +1,12 @@
 """
 工具：image_describe（原 describe_image，v1.12.0 改名）
-识别图片内容 — 把图片发给有视觉能力的模型（阿里云百炼千问 qwen3.7-flash），取回文字描述。
-底层模型（DeepSeek）无原生视觉，收到图片时通过本工具"借看"（参考 claude-vision-skill 思路）。
+识别图片内容 — 把图片发给有视觉能力的模型，取回文字描述。
+
+识图模型二选一（v1.14.0 起）：
+  1. 主对话 LLM_MODEL 若选了 DeepSeek 视觉模型（模型名含 vision，
+     deepseek-v4-flash-vision-exp），识图**直接复用主模型**，不再走专门的识图模型；
+  2. 否则走阿里云百炼千问（VISION_MODEL，默认 qwen3.7-flash）。
+参考 claude-vision-skill 思路；DeepSeek vision 请求默认关思考，防思维链吃光 max_tokens。
 """
 
 import base64
@@ -15,13 +20,15 @@ from scripts.paths import UPLOADS_DIR
 
 import httpx
 
-from scripts.config import DASHSCOPE_API_KEY, VISION_MODEL
+from scripts.config import DASHSCOPE_API_KEY, DEEPSEEK_API_KEY, LLM_MODEL, VISION_MODEL
 from scripts.tools import register
 
 logger = logging.getLogger("tool.vision")
 
 # 阿里云百炼 OpenAI 兼容端点
 _VISION_API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+# 主对话模型为 DeepSeek 视觉模型时的识图端点（OpenAI 兼容，国内 API 直连）
+_DEEPSEEK_VISION_URL = "https://api.deepseek.com/chat/completions"
 # 项目约定：trust_env=False 绕开 Clash 系统代理对国内 API 的劫持
 _HTTP_CLIENT = httpx.Client(timeout=60, trust_env=False)
 # 与 agent.py 一致的可重试状态码
@@ -96,13 +103,50 @@ def detect_image_mime(data: bytes):
     return None
 
 
-def _call_vision(body: dict):
-    """调用千问视觉 API，指数退避重试，返回描述文本；失败返回 None。"""
+def _is_deepseek_vision(model: str) -> bool:
+    """主对话模型是否为 DeepSeek 视觉模型（模型名含 vision，如 deepseek-v4-flash-vision-exp）。
+
+    选中后识图复用主模型，不再走专门的识图模型（VISION_MODEL / qwen3.7-flash）。
+    """
+    return "vision" in (model or "").lower()
+
+
+def _vision_provider() -> dict:
+    """决定识图调用哪个模型/端点。
+
+    主对话模型若选了 DeepSeek 视觉模型，识图直接复用主模型（用 DEEPSEEK_API_KEY
+    调 DeepSeek 端点）；否则走阿里云百炼千问 VISION_MODEL。
+
+    Returns:
+        {"url", "api_key", "model", "extra"}；对应密钥未配置时返回 {"error": "..."}。
+    """
+    if _is_deepseek_vision(LLM_MODEL):
+        if not DEEPSEEK_API_KEY:
+            return {"error": "识图需复用主模型（当前 LLM_MODEL 为 DeepSeek 视觉模型），但缺少 DEEPSEEK_API_KEY"}
+        return {
+            "url": _DEEPSEEK_VISION_URL,
+            "api_key": DEEPSEEK_API_KEY,
+            "model": LLM_MODEL,
+            # 识图不需要思维链；V4 思考模型开着会把 max_tokens 吃光导致正文空
+            "extra": {"thinking": {"type": "disabled"}},
+        }
+    if not DASHSCOPE_API_KEY:
+        return {"error": "识图功能未配置（缺少 DASHSCOPE_API_KEY），图片已保存但无法识别"}
+    return {
+        "url": _VISION_API_URL,
+        "api_key": DASHSCOPE_API_KEY,
+        "model": VISION_MODEL,
+        "extra": {},
+    }
+
+
+def _call_vision(url: str, api_key: str, body: dict):
+    """调用视觉 API（OpenAI 兼容：百炼千问 / DeepSeek vision），指数退避重试，失败返回 None。"""
     for attempt in range(1, 4):
         try:
             r = _HTTP_CLIENT.post(
-                _VISION_API_URL,
-                headers={"Authorization": f"Bearer {DASHSCOPE_API_KEY}"},
+                url,
+                headers={"Authorization": f"Bearer {api_key}"},
                 json=body,
             )
         except (httpx.TimeoutException, httpx.RequestError):
@@ -167,13 +211,14 @@ def execute(args: dict) -> str:
     if not mime:
         return json.dumps({"error": "无法识别的图片格式（支持 PNG/JPEG/GIF/WebP/BMP）"}, ensure_ascii=False)
 
-    if not DASHSCOPE_API_KEY:
-        return json.dumps({"error": "识图功能未配置（缺少 DASHSCOPE_API_KEY），图片已保存但无法识别"}, ensure_ascii=False)
+    provider = _vision_provider()
+    if provider.get("error"):
+        return json.dumps({"error": provider["error"]}, ensure_ascii=False)
 
     b64 = base64.b64encode(data).decode("ascii")
     question = (args.get("question") or "").strip() or "请描述这张图片的内容"
     body = {
-        "model": VISION_MODEL,
+        "model": provider["model"],
         "messages": [{
             "role": "user",
             "content": [
@@ -182,9 +227,10 @@ def execute(args: dict) -> str:
             ],
         }],
         "max_tokens": 1024,
+        **provider.get("extra", {}),
     }
 
-    content = _call_vision(body)
+    content = _call_vision(provider["url"], provider["api_key"], body)
     if content:
         logger.info(f"  识图成功: {p} ({mime}, {len(data)} bytes)")
         return json.dumps({"description": content, "image_path": p}, ensure_ascii=False)

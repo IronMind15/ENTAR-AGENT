@@ -22,7 +22,7 @@ import httpx
 # 共享 HTTP 客户端（复用连接，避免每次建新连接）
 _HTTP_CLIENT = httpx.Client(timeout=15, trust_env=False)
 
-from scripts.config import DEEPSEEK_API_KEY
+from scripts.config import DEEPSEEK_API_KEY, LLM_MODEL
 from scripts.skills import BaseSkill, register
 from scripts.doc_mgr.storage import get_store
 from scripts.skills.enhanced_search import enhanced_query, parse_query_results
@@ -89,7 +89,7 @@ def call_deepseek(prompt: str, max_tokens: int = 200) -> str:
                 "https://api.deepseek.com/chat/completions",
                 headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
                 json={
-                    "model": "deepseek-v4-flash",
+                    "model": LLM_MODEL,
                     "messages": [
                         {"role": "system", "content": "你是一个只输出关键词的工具，不要解释，不要多余内容。"},
                         {"role": "user", "content": prompt},
