@@ -16,7 +16,7 @@ display=..., user_desc=...)，DEFINITION["name"] 同步改新名（避免注册�
 import json
 import logging
 
-from tools import register  # 恢复为独立工具时 @register 装饰器用（当前停用，未使用）
+from scripts.tools import register  # 恢复为独立工具时 @register 装饰器用（当前停用，未使用；v1.13.4 修正命名空间 tools→scripts.tools）
 
 logger = logging.getLogger("tool.standards")
 

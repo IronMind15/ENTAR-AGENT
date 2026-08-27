@@ -75,21 +75,26 @@ def _render_tools(tools: list[dict]) -> str:
     lines = ["## 🤖 LLM 工具（function calling，由注册中心生成）", ""]
     if tools and "error" in tools[0]:
         return lines[0] + "\n\n" + "> " + tools[0]["error"] + "\n"
-    # 按板块分组（SECTOR_ORDER 顺序）
+    # 按板块分组（SECTOR_ORDER 顺序）。
+    # 审查修复（v1.13.4）：SECTOR_ORDER/SECTOR_LABELS 复用 tools 注册中心副本，
+    # 此前手写同一份 dict/tuple——两处维护易漂移（新增板块只改注册中心即可）。
+    try:  # 独立运行 + 单点降级
+        from scripts.tools import SECTOR_ORDER, SECTOR_LABELS
+    except Exception:  # pragma: no cover — 降级路径
+        SECTOR_ORDER = ("kb", "calc", "dash", "contact", "image", "doc")
+        SECTOR_LABELS = {
+            "kb": "📚 知识库", "calc": "🧮 计算", "dash": "📊 项目看板",
+            "contact": "👥 通讯录", "image": "🖼️ 图片", "doc": "📄 文档",
+        }
     by_sector: dict[str, list[dict]] = {}
     for t in tools:
         by_sector.setdefault(t.get("sector") or "_", []).append(t)
-    sector_label = {
-        "kb": "📚 知识库", "calc": "🧮 计算", "dash": "📊 项目看板",
-        "contact": "👥 通讯录", "image": "🖼️ 图片", "doc": "📄 文档",
-    }
-    order = ("kb", "calc", "dash", "contact", "image", "doc")
-    for sector in order:
+    for sector in SECTOR_ORDER:
         metas = by_sector.get(sector)
         if not metas:
             continue
         metas.sort(key=lambda m: m["name"])
-        lines.append(f"### {sector_label.get(sector, sector)}")
+        lines.append(f"### {SECTOR_LABELS.get(sector, sector)}")
         lines.append("")
         for m in metas:
             confirm = "（写操作：执行前须用户确认）" if m.get("confirm") else ""

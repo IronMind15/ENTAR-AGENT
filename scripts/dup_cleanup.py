@@ -59,9 +59,11 @@ if missing:
     sys.exit(1)
 
 # 备份清单到项目 data/ 下（记录本次清理）
-with open('data/dup_cleanup_v1.11.9.json', 'w', encoding='utf-8') as f:
+# v1.13.4：相对路径改绝对（此前依赖运行 CWD，换目录执行会写丢）
+_cleanup_log = os.path.join(_PROJECT_ROOT, "data", "dup_cleanup_v1.11.9.json")
+with open(_cleanup_log, 'w', encoding='utf-8') as f:
     json.dump({'deleted_ids': del_ids, 'plan': del_summary}, f, ensure_ascii=False, indent=1)
-print("  清单已备份到 data/dup_cleanup_v1.11.9.json")
+print(f"  清单已备份到 {_cleanup_log}")
 
 # 执行删除
 before = len(ids)

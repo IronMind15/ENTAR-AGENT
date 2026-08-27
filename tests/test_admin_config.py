@@ -1,4 +1,4 @@
-"""「系统设置」配置覆盖测试（v1.14.0）
+"""「系统设置」配置覆盖测试（v1.13.4）
 
 覆盖：白名单校验 / 留空不覆盖 / 掩码回显 / 原子写回读 / setattr 热更新 /
       get_status 结构 / config 读取优先级（env > admin_config.json > local_config.py）/

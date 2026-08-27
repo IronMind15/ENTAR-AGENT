@@ -139,7 +139,7 @@ class DescribeImageToolTests(unittest.TestCase):
             req_body = mpost.call_args[1]["json"]
             self.assertEqual(req_body["messages"][0]["content"][1]["text"], "图里有什么参数")
 
-    # ── DeepSeek vision 复用主模型（v1.14.0） ──
+    # ── DeepSeek vision 复用主模型（v1.13.4） ──
     def test_is_deepseek_vision_detection(self):
         """主模型名含 vision 才复用；flash/pro/qwen/空 均不。"""
         self.assertTrue(image_describe._is_deepseek_vision("deepseek-v4-flash-vision-exp"))

@@ -100,10 +100,15 @@ def call_deepseek(prompt: str, max_tokens: int = 200) -> str:
             )
             if r.status_code == 200:
                 body = r.json()
-                if body:
+                if body and body.get("choices"):
                     # content 可能为 None，兼容处理
                     content = body["choices"][0]["message"].get("content") or ""
                     return content.strip()
+                # 审查修复（v1.13.4）：200 但无有效 choices——此前 IndexError 落到
+                # 外层 except 被吞并误报「非 200」。改为明确日志 + break（响应结构
+                # 异常，重试无意义）。
+                logger.warning("DeepSeek API 200 但响应无有效 choices")
+                break
             if r.status_code in _RETRYABLE_STATUS and attempt < max_attempts:
                 logger.warning(
                     f"DeepSeek API 返回 {r.status_code}（第 {attempt}/{max_attempts} 次），稍后重试")

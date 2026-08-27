@@ -192,13 +192,19 @@ def enhanced_query(collection: str, query_text: str, n_results: int = 5,
         logger.error(f"向量检索失败: {e}")
         return _empty_result()
 
-    vec_ids = vector_res.get("ids", [[]])[0] or []
+    # 审查修复（v1.13.4）：.get("ids", [[]])[0] 在「键存在但为空列表」时抛
+    # IndexError（[[]] 默认值不生效）。改为「键不存在或空 → 空列表」的统一兜底。
+    _rows = vector_res.get("ids") or []
+    vec_ids = (_rows[0] if _rows else []) or []
     if not vec_ids:
         return vector_res  # 无候选，直接返回（保持原结构）
 
-    vec_docs = vector_res.get("documents", [[]])[0] or []
-    vec_metas = vector_res.get("metadatas", [[]])[0] or []
-    vec_dists = vector_res.get("distances", [[]])[0] or []
+    _rows = vector_res.get("documents") or []
+    vec_docs = (_rows[0] if _rows else []) or []
+    _rows = vector_res.get("metadatas") or []
+    vec_metas = (_rows[0] if _rows else []) or []
+    _rows = vector_res.get("distances") or []
+    vec_dists = (_rows[0] if _rows else []) or []
 
     candidates: dict = {}
     for i, cid in enumerate(vec_ids):

@@ -758,7 +758,8 @@ def list_sync_files(password: str = Query("", description="管理员密码")):
                         "last_synced_at": status.get("last_synced_at", ""),
                     })
         result["directories"][dir_key] = {
-            "path": rel_dir,
+            # 目录绝对路径（v1.13.4 修复：此前误引用未定义变量 rel_dir → NameError → 500）
+            "path": abs_dir,
             "default_collection": default_coll,
             "files": files,
         }
@@ -1292,7 +1293,7 @@ async def reset_system_prompt(password: str = Form("", description="管理员密
     return JSONResponse({"ok": True, "content": content})
 
 
-# ===== 系统设置（配置覆盖，v1.14.0） =====
+# ===== 系统设置（配置覆盖，v1.13.4） =====
 
 @router.get("/config")
 def get_admin_config(password: str = Query("", description="管理员密码")):

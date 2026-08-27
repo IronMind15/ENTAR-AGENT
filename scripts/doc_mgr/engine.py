@@ -379,7 +379,7 @@ def process_file(file_path: str, file_name: Optional[str] = None,
         ".pdf": "standards",
         ".xlsx": "error_codes",
         ".xls": "error_codes",
-        ".md": "standards",
+        ".md": "standards",  # 口径声明（v1.13.4）：同步/上传管道默认标准库；上传学习的 .md 走 experience_kb（knowledge_review.default_collection），有意差异非漂移
         ".txt": "standards",
         ".docx": "standards",
         ".pptx": "standards",

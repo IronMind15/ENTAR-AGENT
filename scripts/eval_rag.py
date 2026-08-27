@@ -107,8 +107,11 @@ def run_mode(mode: str, cases: list, topk: int) -> dict:
             collection, query_text=q, n_results=topk,
             use_hybrid=opts["use_hybrid"], use_rerank=opts["use_rerank"],
         )
-        docs = results.get("documents", [[]])[0] or []
-        metas = results.get("metadatas", [[]])[0] or []
+        # 审查修复（v1.13.4）：防「键存在但为空列表」时 [0] IndexError
+        _docs_rows = results.get("documents") or []
+        docs = (_docs_rows[0] if _docs_rows else []) or []
+        _metas_rows = results.get("metadatas") or []
+        metas = (_metas_rows[0] if _metas_rows else []) or []
         retrieved = [str(m.get(key, "")) for m in metas] if metas else []
 
         rank = _first_rank(retrieved, expected)

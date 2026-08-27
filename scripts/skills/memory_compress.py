@@ -98,6 +98,11 @@ def _call_llm(messages: list[dict], max_tokens: int = 1000) -> str | None:
                     resp = client.post(url, json=body, headers=headers)
                     resp.raise_for_status()
                     data = resp.json()
+                    if not data.get("choices"):
+                        # 审查修复（v1.13.4）：200 但无有效 choices——此前 IndexError
+                        # 被外层 except 吞后按「调用失败」重试。改为明确日志 + break。
+                        logger.warning("压缩 LLM 200 但响应无有效 choices")
+                        break
                     content = data["choices"][0]["message"].get("content")
                     return content or None
             except Exception as e:

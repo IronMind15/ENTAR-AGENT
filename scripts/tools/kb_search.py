@@ -80,8 +80,10 @@ def execute(args: dict) -> str:
     try:
         from scripts.tools import get_user_centers
         user_centers = get_user_centers()
-    except Exception:
-        pass
+    except Exception as e:
+        # 审查修复（v1.13.4）：此前静默吞掉——中心隔离（部门可见性）会无声失效，
+        # 直接按全 public 放行。改为记 warning 可追溯。
+        logger.warning(f"读取用户中心失败，知识库可见性按无限制处理: {e}")
     visible = get_visible_knowledge_bases(user_centers)
 
     # 目标库集合

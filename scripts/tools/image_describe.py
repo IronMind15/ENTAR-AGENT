@@ -2,7 +2,7 @@
 工具：image_describe（原 describe_image，v1.12.0 改名）
 识别图片内容 — 把图片发给有视觉能力的模型，取回文字描述。
 
-识图模型二选一（v1.14.0 起）：
+识图模型二选一（v1.13.4 起）：
   1. 主对话 LLM_MODEL 若选了 DeepSeek 视觉模型（模型名含 vision，
      deepseek-v4-flash-vision-exp），识图**直接复用主模型**，不再走专门的识图模型；
   2. 否则走阿里云百炼千问（VISION_MODEL，默认 qwen3.7-flash）。

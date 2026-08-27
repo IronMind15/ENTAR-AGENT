@@ -43,8 +43,14 @@ class MakeSnapshotTests(unittest.TestCase):
 
     def test_json_serializable(self):
         import json
-        snap = make_snapshot([_res()])
-        json.dumps(snap)  # 不抛异常
+        snap = make_snapshot([_res()])[0]
+        # 审查修复（v1.13.4）：此前仅 json.dumps 不抛异常（弱断言）。
+        # 补真实行为断言——快照可 JSON round-trip，且关键字段往返后不丢。
+        dumped = json.dumps(snap)
+        loaded = json.loads(dumped)
+        self.assertEqual(loaded["status_counts"], snap["status_counts"])
+        self.assertEqual(loaded["attention"], snap["attention"])
+        self.assertIn("normal", loaded)
 
     def test_long_text_not_in_attention_snapshot(self):
         """只有标题+状态进关注快照（changes_only 去噪），易变长文本不进"""

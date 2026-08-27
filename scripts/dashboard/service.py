@@ -133,8 +133,10 @@ def load_all_available_sources(user_id: str = "") -> list:
         for cand in get_candidate_store().list_all_enabled(user_id):
             if cand.kind in ("notable", "workbook", "doc", "folder"):
                 sources.append(build_dynamic_source(cand))
-    except Exception:
-        pass
+    except Exception as e:
+        # 审查修复（v1.13.4）：此前静默吞掉——用户绑定的动态源可能「无声消失」，
+        # 只剩静态配置源且无任何线索。改为记 warning 可追溯。
+        logger.warning(f"动态数据源枚举失败，仅返回静态配置源: {e}")
     return sources
 
 

@@ -148,12 +148,20 @@ class CapabilityManifestTests(unittest.TestCase):
             self.assertNotIn(old, md)
 
     def test_render_regexes_compilable(self):
-        """登记表 regex 对象都能编译出可用 pattern"""
+        """登记表 regex 对象都能编译出可用 pattern（补显式断言，失败可见命令名）"""
         import scripts.capability_manifest as cm
+        checked = 0
         for c in cm.collect_bot_commands():
             rx = c.get("regex")
-            if rx is not None:
-                re.compile(rx.pattern if hasattr(rx, "pattern") else rx)
+            if rx is None:
+                continue
+            pat = rx.pattern if hasattr(rx, "pattern") else rx
+            self.assertTrue(pat, f"命令 {c.get('id')} regex 为空")
+            compiled = re.compile(pat)  # 编译失败抛异常 → 断言带上下文
+            self.assertEqual(compiled.pattern, pat,
+                             f"命令 {c.get('id')} 编译往返不一致")
+            checked += 1
+        self.assertGreater(checked, 0, "bot 命令登记表不应为空")
 
 
 if __name__ == "__main__":

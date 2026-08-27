@@ -259,8 +259,9 @@ def _trace_ampacity_table():
     global _TRACE_AMPACITY
     if _TRACE_AMPACITY is None:
         try:
-            from pathlib import Path
-            p = Path(__file__).resolve().parents[2] / "data" / "pcb" / "tables" / "trace_ampacity_1oz_10c.json"
+            # v1.13.4：改用 paths.PCB_DIR 统一入口（此前手拼路径绕过 paths.py）
+            from scripts.paths import PCB_DIR
+            p = PCB_DIR / "tables" / "trace_ampacity_1oz_10c.json"
             _TRACE_AMPACITY = json.loads(p.read_text(encoding="utf-8"))
         except Exception:
             _TRACE_AMPACITY = []
@@ -1274,8 +1275,9 @@ def _copper_ampacity_table():
     global _COPPER_AMPACITY
     if _COPPER_AMPACITY is None:
         try:
-            from pathlib import Path
-            p = Path(__file__).resolve().parents[2] / "data" / "pcb" / "tables" / "copper_busbar_ampacity.json"
+            # v1.13.4：改用 paths.PCB_DIR 统一入口（此前手拼路径绕过 paths.py）
+            from scripts.paths import PCB_DIR
+            p = PCB_DIR / "tables" / "copper_busbar_ampacity.json"
             _COPPER_AMPACITY = json.loads(p.read_text(encoding="utf-8"))
         except Exception:
             _COPPER_AMPACITY = {"data": []}

@@ -625,7 +625,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- Tab: System Config（系统设置，v1.14.0） -->
+  <!-- Tab: System Config（系统设置，v1.13.4） -->
   <div id="tab-config" class="tab-content">
     <div class="card">
       <h3>⚙️ 系统设置 <small style="font-size:13px;color:var(--text-secondary)">密钥 / 模型名 / 密码，网页手动输入，不用改代码</small></h3>

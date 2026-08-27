@@ -47,7 +47,13 @@ def resolve_reviewer_staff_ids(_uploader_user_id: str = "",
 
 
 def default_collection(file_name: str) -> str:
-    """给审核人提供默认目标库；仍可在批准口令中显式覆盖。"""
+    """给审核人提供默认目标库；仍可在批准口令中显式覆盖。
+
+    口径声明（v1.13.4）：本函数是「上传学习」路径的默认库——用户上传的
+    经验类 Markdown 默认进 experience_kb；而 doc_mgr 同步/上传管道（engine.py
+    default_collections）的 .md 默认进 standards。两条路径语义不同（经验 vs
+    标准），此差异是**有意设计**，非漂移——禁止随意合并两处映射。
+    """
     ext = Path(file_name).suffix.lower()
     if ext in {".xlsx", ".xls"}:
         return "error_codes"

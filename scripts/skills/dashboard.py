@@ -574,6 +574,8 @@ class DashboardSkill(BaseSkill):
             s.template_id = tpl.key
             service.ensure_task_prompt(s, force=True)
             store.update(s)
+        # 授权链路声明（v1.13.4 审查注记）：此样例推送依赖用户主动的「切换模板」
+        # 指令顺带外发，无独立二次确认；如需对「立即外发」单独确认，在此扩展。
         note = cls._push_sample(owned[0])
         return {"answer": f"✅ 已将看板切换为「{tpl.name}」模板。{note}",
                 "source": "dashboard"}

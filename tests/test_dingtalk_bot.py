@@ -223,6 +223,35 @@ class ProcessTextRoutingTests(unittest.TestCase):
         finally:
             _admin_sessions.discard("admin1")
 
+    def test_admin_enter_re_binds_configured_master_code(self):
+        """管理员口令正则动态引用 config.ADMIN_MASTER_CODE（v1.13.4 修复：
+        此前写死 ^ENTARBOSS$，local_config 覆盖不生效）"""
+        import re
+        from scripts.skills.dingtalk_bot import _ADMIN_ENTER_RE, ADMIN_MASTER_CODE
+        self.assertEqual(_ADMIN_ENTER_RE.pattern,
+                         f"^{re.escape(ADMIN_MASTER_CODE)}$")
+        self.assertTrue(_ADMIN_ENTER_RE.match(ADMIN_MASTER_CODE))
+        self.assertFalse(_ADMIN_ENTER_RE.match("wrong-password"))
+
+    def test_admin_enter_re_follows_overridden_master_code(self):
+        """覆盖 config.ADMIN_MASTER_CODE 后重载模块：旧默认口令失效、新口令生效"""
+        import importlib
+        import re
+        import scripts.config as cfg
+        import scripts.skills.dingtalk_bot as bot
+        overridden = "Secr3t#K$y"  # 含正则元字符，验证 re.escape 按字面匹配
+        try:
+            with mock.patch.object(cfg, "ADMIN_MASTER_CODE", overridden):
+                reloaded = importlib.reload(bot)
+                self.assertEqual(reloaded._ADMIN_ENTER_RE.pattern,
+                                 f"^{re.escape(overridden)}$")
+                self.assertTrue(reloaded._ADMIN_ENTER_RE.match(overridden))
+                self.assertFalse(reloaded._ADMIN_ENTER_RE.match("ENTARBOSS"))
+                self.assertFalse(reloaded._ADMIN_ENTER_RE.match("Secr3t#K$yy"))
+                self.assertFalse(reloaded._ADMIN_ENTER_RE.match("Secr3t#x$y"))
+        finally:
+            importlib.reload(bot)  # 恢复模块默认口令状态
+
 
 class ProcessToThreadTests(unittest.IsolatedAsyncioTestCase):
     """process() 将慢操作放行到 asyncio.to_thread，不阻塞事件循环"""

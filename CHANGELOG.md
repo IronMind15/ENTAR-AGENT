@@ -3,6 +3,40 @@
 > 📌 **本文档是项目唯一的版本记录（单一事实源）**——README.md、PROGRESS.md 的版本历史均指向本文件，发版时只在这里追加记录。
 > 相关：待办清单见 [TODO.md](TODO.md)，进度看板见 [PROGRESS.md](PROGRESS.md)。
 
+## v1.13.4（2026-08-27）
+
+**🔐 八荣八耻全盘审查治理包**——按「工作八荣八耻」对全仓做合规审查并落实：管理员口令覆盖失效（默认口令泄露风险）根修；吞异常与 Chroma 空列表边界收敛；.md 双库口径显式声明；能力清单渲染复用注册中心；样例推送授权链路注记；路径统一与停用文件命名空间修正；弱测试补断言与 3 个零覆盖模块补测。另并入本次审查前已修未发的文档管理目录路径 NameError 修复（v1.13.3 漏网，随本版发布）。
+
+### 安全修复（P0）
+
+- `dingtalk_bot._ADMIN_ENTER_RE` 此前**写死** `^ENTARBOSS$`，`config.ADMIN_MASTER_CODE`（local_config 可覆盖）从未被任何代码消费——部署方以为改了配置、实际口令永远默认，管理员模式（可查看全部/删改任意文件）存在默认口令泄露风险。改为动态引用 `ADMIN_MASTER_CODE`（`re.escape` 防口令含正则元字符误解析）；提示文案与能力清单 trigger 同步动态化；修正注释拼写 `ENTERBOSS`→`ENTARBOSS`。补回归测试：默认接线 + 覆盖配置后重载模块旧口令失效、新口令生效（含元字符边界）。
+
+### 可靠性修复（P1）
+
+- `dashboard/service.py` 动态数据源枚举失败此前 `except: pass`——用户绑定的动态源会**无声消失**只剩静态源。改 `logger.warning` 可追溯。
+- `tools/kb_search.py` 读取用户中心失败此前静默吞掉——部门可见性隔离（`get_visible_knowledge_bases`）会无声失效直接按全 public 放行。改 `logger.warning`。
+- `skills/enhanced_search.py` / `eval_rag.py` 的 `.get("ids", [[]])[0]` 在「键存在但为空列表」时抛 IndexError（`[[]]` 默认值不生效）。改为「键不存在或空 → 空列表」统一兜底。
+- `doc_mgr/router.py` 管理端同步目录列表的 `path` 字段此前误引用未定义变量 `rel_dir` → NameError → 500（v1.13.3 发布前已修未发，随本版并入）：改回正确绝对路径 `abs_dir`，补回归。
+
+### 口径与一致性（P1）
+
+- `knowledge_review.default_collection`（上传学习 `.md`→experience_kb）与 `engine.default_collections`（同步/上传管道 `.md`→standards）的差异确认为**有意语义**（经验 vs 标准），两处加口径声明注释互指，禁止随意合并——消除「注释自认不一致」的漂移认知。
+- `capability_manifest._render_tools` 的手写 `sector_label`/`order` 副本改为复用 tools 注册中心 `SECTOR_ORDER/SECTOR_LABELS`（带独立运行降级），消除两处维护漂移。实测输出与磁盘版本逐字节一致（仅末尾空行），无行为变化。
+- `skills/dashboard.py` 切换模板后立即外发样例推送（`_push_sample`），依赖用户「切换模板」指令顺带授权、无独立二次确认。加授权链路声明注释（不改行为；如需单独确认在此扩展），消除「主动外发类写操作在技能层无确认」的认知盲区。
+
+### 代码治理（P2）
+
+- `agent.py` 工具段标记 `_TOOL_SECTION_MARKER` 复用注册中心定义，删除双处字面量（原 tools/__init__ 与 agent 各写一份）。
+- `pcb_calc.py` 载流表两处路径绕过 `paths.py` 手拼 `data/pcb/tables`，改用 `paths.PCB_DIR` 统一入口；`dup_cleanup.py` 备份清单相对路径 `data/...` 改绝对（此前依赖运行 CWD）。
+- 停用文件 `search_standards.py` / `search_experience_kb.py` 裸 `from tools import register` 修正命名空间为 `scripts.tools`（恢复使用时才可解析）。
+- `error_query.py` / `memory_compress.py` 的 `choices[0]` 未判空——200 但无有效 choices 时此前 IndexError 被外层 except 吞并误报；改为明确日志 + break，响应结构异常不再重试。
+
+### 测试补强（P2）
+
+- 弱测试补断言：`test_dashboard_alerts.test_json_serializable` 从「仅 dumps 不抛异常」改为 JSON round-trip 后关键字段不丢；`test_tool_registry_manifest.test_render_regexes_compilable` 加显式断言 + 失败可见命令名。
+- 零覆盖模块补测 3 项：新增 `test_excel_extractor.py`（safe_str/真实临时 xlsx 提取/空行跳过/异常路径）、`test_kb_file_manage.py`（删除/重学分支、源文件删除失败如实提示、缺身份/目标拒绝、非法 action）、`test_error_query_format.py`（故障码正则、行编号、精确/语义结果格式化与距离阈值标签）。
+- 全量离线回归 **1082 项通过**（原 1051 + 新增 31）。
+
 ## v1.13.3（2026-08-27）
 
 **📊 看板体验收口**——按 8/26 实习收尾行动方案推进：幻觉护栏补将来时盲区；看板绑定透明（确认草稿/查看订阅逐条列源）、任务与数据源编号动态重排；总结改 LLM 一句话总览 + 证据瘦身 + [查看原文] 链接；发钉钉文档改「先收录→主动问去向」；dash_query 实时查询与定时推送口径统一。

@@ -29,7 +29,9 @@ from dingtalk_stream import (
 )
 from dingtalk_stream.frames import CallbackMessage
 
-from scripts.config import DINGTALK_CLIENT_ID, DINGTALK_CLIENT_SECRET
+from scripts.config import (
+    DINGTALK_CLIENT_ID, DINGTALK_CLIENT_SECRET, ADMIN_MASTER_CODE,
+)
 # v1.12.1（M3）：确认词统一收口到 pending_context（类型作用域），
 # confirm_learn 登记项引用 learn 专属补充确认词（manifest/tripwire 消费）
 from scripts.pending_context import _LEARN_EXTRA_CONFIRM_RE  # noqa: E402
@@ -121,7 +123,7 @@ _user_locks: dict[str, tuple[asyncio.AbstractEventLoop, asyncio.Lock]] = {}
 
 # ===== v1.10.2 上传学习 / 我的文件 / 删除 / 管理员模式 =====
 # 管理员会话（内存态，重启失效）。口令由 config.ADMIN_MASTER_CODE 配置，
-# 默认 ENTERBOSS，可在 local_config.py 覆盖。
+# 默认 ENTARBOSS，可在 local_config.py 覆盖（_ADMIN_ENTER_RE 动态引用，覆盖真实生效）。
 _admin_sessions: set[str] = set()
 
 # 「帮我学习」触发：匹配「帮我学习 / 学习一下 / 入库 / 帮我入库 / 学习这个文件」，
@@ -142,7 +144,9 @@ _DELETE_RE = re.compile(r"^(?:删除|删掉)\s*(?:学习\s*)?(.+?)\s*$")
 # 「重新学习 X」/「重学 X」
 _RELEARN_RE = re.compile(r"^(?:重新学习|重学)\s*(.+?)\s*$")
 # 管理员：进入 / 退出 / 查看全部
-_ADMIN_ENTER_RE = re.compile(r"^ENTARBOSS$")
+# v1.13.4 修复：口令动态引用 config.ADMIN_MASTER_CODE（此前写死默认值，
+# local_config 覆盖不生效；重命名后 re.escape 防口令含正则元字符时误解析）。
+_ADMIN_ENTER_RE = re.compile(r"^" + re.escape(ADMIN_MASTER_CODE) + r"$")
 _ADMIN_EXIT_RE = re.compile(r"^(?:退出管理员|退出管理)$")
 _ADMIN_LIST_ALL_RE = re.compile(r"^(?:查看全部文件|全部文件)$")
 
@@ -676,7 +680,7 @@ class ErrorQueryHandler(ChatbotHandler):
 
         # 2. 管理员查看全部文件
         if _ADMIN_LIST_ALL_RE.match(t):
-            answer = ("该功能仅管理员可用，请先发送口令 ENTERBOSS。"
+            answer = (f"该功能仅管理员可用，请先发送口令 {ADMIN_MASTER_CODE}。"
                       if not is_admin else
                       _format_my_files(list_files_for_user(user_id, is_admin=True),
                                        is_admin=True))
@@ -1481,7 +1485,7 @@ _BOT_COMMANDS: list[dict] = [
      "trigger": "重新学习 1 / 重学 技术协议.pdf", "regex": _RELEARN_RE,
      "desc": "强制重新解析入库覆盖索引（kb_file_manage 二次确认）", "status": "enabled"},
     {"id": "admin_enter", "sector": "admin", "name": "进入管理员",
-     "trigger": "ENTARBOSS", "regex": _ADMIN_ENTER_RE,
+     "trigger": ADMIN_MASTER_CODE, "regex": _ADMIN_ENTER_RE,
      "desc": "管理员模式（可查看全部文件、删改任意用户文件）", "status": "enabled"},
     {"id": "admin_exit", "sector": "admin", "name": "退出管理员",
      "trigger": "退出管理员 / 退出管理", "regex": _ADMIN_EXIT_RE,

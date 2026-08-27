@@ -22,7 +22,8 @@ from scripts.config import (DASHBOARD_LLM_MODEL, DEEPSEEK_API_KEY, LLM_MODEL, MA
                     MAX_CONTEXT_ROUNDS, KEEP_CONTEXT_ROUNDS)
 from scripts.skills import BaseSkill, register
 from scripts.tools import (get_tool_definitions, execute_tool as _execute_registered_tool,
-                   get_tool_display_map, is_write_tool, render_tool_prompt)
+                   get_tool_display_map, is_write_tool, render_tool_prompt,
+                   _TOOL_SECTION_MARKER)
 
 logger = logging.getLogger("agent")
 
@@ -136,7 +137,7 @@ def _needs_fake_exec_correction(query: str, content: str,
 # ===== 工具段归一化（v1.12.0：工具段永远由注册中心生成） =====
 # 旧版 system prompt 里手写的工具段没有这个标记，无法定位删除；
 # 新版统一追加 _TOOL_SECTION_MARKER 包裹的注册中心生成段，读侧按标记切掉旧段。
-_TOOL_SECTION_MARKER = "===== 工具能力（由注册中心自动生成，勿手动编辑）====="
+# v1.13.4：标记复用注册中心定义（tools/__init__.py），不再双处维护同一字面量。
 
 # 旧工具名 → 新工具名（v1.12.0 改名映射，读侧幂等 replace）。
 # 用于归一化 DB 里遗留的旧 prompt：工具段会被强制生成覆盖，规则段里残留的旧名
