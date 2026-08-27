@@ -13,6 +13,7 @@ import re
 
 from scripts.dashboard import service
 from scripts.dashboard import subscription_commands as sub_cmd
+from scripts.dashboard.config_model import KIND_LABELS
 from scripts.dashboard.subscription_store import Subscription, get_subscription_store
 from scripts.skills import BaseSkill, register
 
@@ -137,7 +138,8 @@ class DashboardSkill(BaseSkill):
             subs = store.list_for_owner(uid)
             if not subs:
                 return {"answer": "您还没有订阅看板，无需删除。", "source": "dashboard"}
-            pending = {"intent": "delete", "sub_ids": [s.id for s in subs]}
+            pending = {"intent": "delete", "sub_ids": [s.id for s in subs],
+                       "titles": [s.title for s in subs]}
             sub_cmd.set_pending(uid, pending)
             return {"answer": sub_cmd.render_confirmation(pending), "source": "dashboard"}
 
@@ -267,7 +269,8 @@ class DashboardSkill(BaseSkill):
             paused = [s for s in store.list_for_owner(uid) if not s.enabled]
             if not paused:
                 return {"answer": cls._resume_subscription(uid), "source": "dashboard"}
-            pending = {"intent": "resume", "sub_ids": [s.id for s in paused]}
+            pending = {"intent": "resume", "sub_ids": [s.id for s in paused],
+                       "titles": [s.title for s in paused]}
             sub_cmd.set_pending(uid, pending)
             return {"answer": sub_cmd.render_confirmation(pending), "source": "dashboard"}
 
@@ -277,7 +280,8 @@ class DashboardSkill(BaseSkill):
             if not subs:
                 return {"answer": "您还没有订阅看板，无需删除。说「帮我推个看板」即可开通。",
                         "source": "dashboard"}
-            pending = {"intent": "delete", "sub_ids": [s.id for s in subs]}
+            pending = {"intent": "delete", "sub_ids": [s.id for s in subs],
+                       "titles": [s.title for s in subs]}
             sub_cmd.set_pending(uid, pending)
             return {"answer": sub_cmd.render_confirmation(pending), "source": "dashboard"}
 
@@ -301,7 +305,8 @@ class DashboardSkill(BaseSkill):
             active = [s for s in store.list_for_owner(uid) if s.enabled]
             if not active:
                 return {"answer": cls._stop_subscription(uid), "source": "dashboard"}
-            pending = {"intent": "stop", "sub_ids": [s.id for s in active]}
+            pending = {"intent": "stop", "sub_ids": [s.id for s in active],
+                       "titles": [s.title for s in active]}
             sub_cmd.set_pending(uid, pending)
             return {"answer": sub_cmd.render_confirmation(pending), "source": "dashboard"}
 
@@ -639,8 +644,10 @@ class DashboardSkill(BaseSkill):
                 else:
                     state = "未重复创建"
                 sub_cmd.clear_pending(user_id)
+                # v1.13.3：不再展示数据库自增 id（删任务后留洞会误导）；如需
+                # 定位，用户可「查看看板」看动态序号。
                 return {
-                    "answer": f"✅ 已有相同看板订阅（编号 {duplicate.id}），{state}。",
+                    "answer": f"✅ 已有相同的看板订阅，{state}。",
                     "source": "dashboard",
                 }
             sub.id = store.create(sub)
@@ -862,8 +869,11 @@ class DashboardSkill(BaseSkill):
             store.update(sub)
             service.sync_task_prompt_file(sub)
             sub_cmd.clear_pending(user_id)
+            # v1.13.3：动态位置序号回报，不展示数据库自增 id
+            pos = pending.get("sub_position")
+            target = f"第 {pos} 个任务" if pos else "该任务"
             return {"answer":
-                    f"✅ 已更新任务编号 {sub.id} 的固定提示词（版本 {sub.task_prompt_version}，"
+                    f"✅ 已更新{target}的固定提示词（版本 {sub.task_prompt_version}，"
                     f"哈希 {sub.task_prompt_hash}）。下一次看板推送会先原样发出这份提示词，"
                     "再发送本次文档总结和最终来源链接。",
                     "source": "dashboard"}
@@ -942,16 +952,27 @@ class DashboardSkill(BaseSkill):
         if not subs:
             return "您还没有订阅每日看板。说「帮我推个看板」即可开通。"
         lines = ["您的看板订阅："]
-        for s in subs:
+        # v1.13.3：任务序号 = 动态位置（删除任务后自动重排），与「编辑第 N 个
+        # 任务提示词」「第 N 个订阅」的解析序号一致，不再是数据库自增 id。
+        for index, s in enumerate(subs, 1):
             status = "✅ 运行中" if s.enabled else "⏸️ 已暂停"
-            lines.append(f"- {s.title}（{status}）")
+            lines.append(f"{index}. {s.title}（{status}）")
             lines.append(f"  · 时间：{sub_cmd.format_weekdays(s.weekdays)} "
                          f"{s.push_hour:02d}:{s.push_minute:02d}")
             try:
-                src_names = "、".join(x.name for x in service.resolve_subscription_sources(s))
+                resolved = service.resolve_subscription_sources(s)
             except Exception:
-                src_names = ""
-            lines.append(f"  · 数据源：{src_names or '（未配置）'}")
+                resolved = []
+            # v1.13.3：逐条列源（名称 + 类型），让「任务绑了哪几个源」一眼可辨
+            if resolved:
+                lines.append(f"  · 绑定 {len(resolved)} 个数据源：")
+                for i, src in enumerate(resolved, 1):
+                    label = KIND_LABELS.get(getattr(src, "kind", ""), "")
+                    name = getattr(src, "name", "") or "数据源"
+                    lines.append(f"    {i}. {name}"
+                                 + (f"（{label}）" if label else ""))
+            else:
+                lines.append("  · 数据源：（未配置）")
             lines.append(f"  · 接收人：{len(s.recipients)} 人")
             lines.append(f"  · 模板：{cls._template_label(s)}")
             lines.append(f"  · 任务提示词：{s.task_prompt_hash or '待首次执行固化'}")
@@ -979,13 +1000,13 @@ class DashboardSkill(BaseSkill):
             lines.append("")
             lines.append("说「看板模板」查看可用模板，或「用周报模板」切换输出格式。")
         overlaps = []
-        for index, left in enumerate(subs):
+        for index, left in enumerate(subs, 1):
             if not left.enabled:
                 continue
             # v1.12.7（D1）：重合度按任务绑定解析的有效来源集合判断（每个
             # 任务绑定自己的源，实时算以任务为边界）。
             left_sources = service.effective_source_keys(left)
-            for right in subs[index + 1:]:
+            for j, right in enumerate(subs[index:], index + 1):
                 if not right.enabled:
                     continue
                 if (left.push_hour, left.push_minute, left.weekdays or "") != (
@@ -995,10 +1016,11 @@ class DashboardSkill(BaseSkill):
                 union = left_sources | right_sources
                 score = len(left_sources & right_sources) / len(union) if union else 1.0
                 if score >= 0.5:
-                    overlaps.append((left.id, right.id, round(score * 100)))
+                    overlaps.append((index, j, round(score * 100)))
         if overlaps:
             lines.extend(["", "⚠️ 发现可能重复的订阅："])
-            lines.extend(f"- 编号 {a} 与 {b}：同一时间、来源重合 {score}%"
+            # v1.13.3：用动态位置序号（第 N 个），不展示数据库自增 id
+            lines.extend(f"- 第 {a} 个与第 {b} 个：同一时间、来源重合 {score}%"
                          for a, b, score in overlaps)
             lines.append("如需清理，可说「删除看板」，我会列出数量并再次确认。")
         return "\n".join(lines)
@@ -1050,13 +1072,17 @@ class DashboardSkill(BaseSkill):
                 service.ensure_task_prompt(sub)
                 store.update(sub)
             lines.extend([
-                "", f"任务 {index}：{sub.title}（编号 {sub.id}）",
+                "", f"任务 {index}：{sub.title}",
                 f"提示词版本：{sub.task_prompt_version or 'task-prompt-v1'}",
                 f"提示词哈希：{sub.task_prompt_hash or '未生成'}",
                 "执行方式：每次运行临时读取本提示词和本次文档数据；本次完成后丢弃临时上下文。",
                 "---",
                 sub.task_prompt or "（尚未生成，下一次执行时会固化）",
             ])
+        lines.append("")
+        # v1.13.3：任务序号是动态位置（删除任务后自动重排），编辑用「编辑第 N 个任务…」
+        lines.append("任务序号按当前顺序动态排列，删除任务后自动重排，不占用编号。"
+                     "编辑用「编辑第 N 个任务提示词改成：……」")
         return "\n".join(lines)
 
     @classmethod
@@ -1066,29 +1092,36 @@ class DashboardSkill(BaseSkill):
         subs = store.list_for_owner(user_id)
         if not subs:
             return {"answer": "您还没有看板任务，无法编辑提示词。", "source": "dashboard"}
-        requested_id = int(parsed.get("task_id") or 0)
-        if requested_id:
-            sub = next((item for item in subs if item.id == requested_id), None)
-            if not sub:
-                return {"answer": f"未找到编号 {requested_id} 的您的看板任务。"
-                                  "先说「查看看板任务提示词」查看可编辑任务编号。",
+        requested = int(parsed.get("task_id") or 0)
+        # v1.13.3：编号 = 动态位置序号（list_for_owner 顺序 1..N），删除任务
+        # 后自动重排，已删除任务不占用编号——不再拿序号直接当数据库 id（删过
+        # 任务后 id 留洞会指错任务）。
+        if requested:
+            if 1 <= requested <= len(subs):
+                sub = subs[requested - 1]
+            else:
+                return {"answer": f"未找到第 {requested} 个您的看板任务。"
+                                  "先说「查看看板任务提示词」查看当前任务序号。",
                         "source": "dashboard"}
         elif len(subs) == 1:
             sub = subs[0]
         else:
-            choices = "；".join(f"编号 {item.id}：{item.title}" for item in subs)
+            choices = "；".join(f"第{i}个：{item.title}"
+                                for i, item in enumerate(subs, 1))
             return {"answer": "您有多个看板任务，请指定要改哪一个：" + choices + "。\n"
-                              "例如：编辑编号 3 的看板任务提示词改成：……",
+                              "例如：编辑第 3 个任务提示词改成：……",
                     "source": "dashboard"}
         if not sub.task_prompt:
             service.ensure_task_prompt(sub)
             store.update(sub)
             service.sync_task_prompt_file(sub)
+        position = subs.index(sub) + 1
         new_prompt = (parsed.get("task_prompt") or "").strip()
         if not new_prompt:
-            return {"answer": f"当前任务编号 {sub.id} 的固定提示词如下：\n\n{sub.task_prompt}\n\n"
+            return {"answer": f"第 {position} 个任务（{sub.title}）的固定提示词如下：\n\n"
+                              f"{sub.task_prompt}\n\n"
                               "请使用「编辑看板任务提示词改成：完整新提示词」提交新版本。"
-                              "若有多个任务，请加“编辑编号 N 的…”。",
+                              "若有多个任务，请加“编辑第 N 个的…”。",
                     "source": "dashboard"}
         if len(new_prompt) < 20:
             return {"answer": "新的提示词太短。请至少写清楚要关注什么、如何排序或输出什么，"
@@ -1096,7 +1129,7 @@ class DashboardSkill(BaseSkill):
         if len(new_prompt) > 4000:
             return {"answer": "新的提示词超过 4000 个字符，请精简后再提交。", "source": "dashboard"}
         pending = {"intent": "edit_task_prompt", "sub_id": sub.id,
-                   "task_prompt": new_prompt}
+                   "sub_position": position, "task_prompt": new_prompt}
         sub_cmd.set_pending(user_id, pending)
         return {"answer": sub_cmd.render_confirmation(pending), "source": "dashboard"}
 

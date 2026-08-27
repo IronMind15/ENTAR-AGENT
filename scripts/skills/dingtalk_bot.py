@@ -810,6 +810,11 @@ class ErrorQueryHandler(ChatbotHandler):
         v1.11.4：返回 (回复文本, 本次登记候选 id 列表)——候选 id 供
         「做每日看板」只取本次识别的文档（不再混入历史候选）。
         无 URL / 导入失败返回 None。
+
+        v1.13.3（建议4）：回复改「先收录 → 主动问去向」流——header 显示
+        「已收录 N 份文档」，逐份列名字/类型/条数 + 可读预览（不再 JSON 整块），
+        末尾给下一步入口（帮我学习 / 做成每日看板）；用户已有看板任务时主动
+        询问新收录文档是否要绑定到最近任务，保证信息源与任务能绑定。
         """
         try:
             from scripts.dingtalk_doc_client import get_doc_client
@@ -832,6 +837,7 @@ class ErrorQueryHandler(ChatbotHandler):
         learned_hint = False
         last_records = []
         cand_ids = []
+        doc_count = 0
         # v1.11.3：不再截断到 5 个——识别只读概要（SUMMARY_RECORD_LIMIT 条/20 块）字少，
         # 发多少识别多少；_MAX_DOC_URLS=50 仅防异常超长输入
         for url in urls[:_MAX_DOC_URLS]:
@@ -866,24 +872,41 @@ class ErrorQueryHandler(ChatbotHandler):
                     + (f"\n{summary}" if summary else "")
                     + "\n回复「把这个文件夹做成每日看板」，每次推送自动解读文件夹内全部文档。")
                 continue
+            doc_count += 1
             replies.append(
-                f"📑 {result.get('name') or kind_name}（{kind_name}）· 概要 · 共 {len(records)} 条记录"
+                f"{doc_count}. 《{result.get('name') or kind_name}》（{kind_name}）"
+                f"· 共 {len(records)} 条记录"
                 + (f"\n{summary}" if summary else ""))
             learned_hint = True
             last_records = records
 
         if not replies:
             return ("📑 已识别钉钉文档链接。", cand_ids)
-        msg = "\n\n".join(replies)
+        # v1.13.3（建议4）：先收录 → 再主动问去向，避免「发完文档只甩个概要」观感差。
+        # header 报收录份数，逐份列名/类型/条数 + 可读预览；末尾给下一步入口。
+        # 用户已有看板任务时主动询问新收录文档是否绑定到最近任务，保证信息源与任务能绑定。
+        header = f"📑 已收录 {doc_count} 份文档：" if doc_count else "📑 文档读取情况："
+        msg = header + "\n" + "\n".join(replies)
         if learned_hint:
-            # v1.11.2：入库提示详细说明——入库是什么、进哪个库、有什么好处
+            guide = [
+                "",
+                "📋 接下来怎么用（回复任一即可）：",
+                "· 「帮我学习」→ 存入企业知识库，可用自然语言检索",
+                "· 「做成每日看板」→ 新建看板任务并绑定这些文档",
+                "· 或直接告诉我用途",
+            ]
+            try:
+                from scripts.dashboard.subscription_store import get_subscription_store
+                task_count = len(get_subscription_store().list_for_owner(user_id))
+            except Exception:
+                task_count = 0
+            if task_count:
+                guide.append(
+                    f"· 你已有 {task_count} 个看板任务——新收录文档尚未绑定任务，"
+                    "回复「把《文档名》加进看板」可加入最近的看板任务")
             keyword = self._first_record_keyword(last_records)
-            msg += (
-                "\n\n📚 这份内容可存入企业知识库（标准文档库）：\n"
-                f"· 入库后可用自然语言检索，比如问「{keyword}」就能命中\n"
-                "· 看板不受影响——看板每天实时拉取文档最新数据，不进知识库\n"
-                "回复「帮我学习」直接入库。"
-            )
+            guide.append(f"（入库后可用自然语言检索，比如问「{keyword}」就能命中）")
+            msg += "\n".join(guide)
         return (msg, cand_ids)
 
     def _handle_doc_link_with_kanban(self, text: str, user_id: str,
@@ -943,13 +966,17 @@ class ErrorQueryHandler(ChatbotHandler):
 
     @staticmethod
     def _doc_preview(records: list[dict], limit: int = 3) -> str:
-        """文档前几条记录预览（用于回复摘要）"""
+        """文档前几条记录预览（用于回复摘要）
+
+        v1.13.3（建议4）：从 json.dumps 整块 JSON 改为「字段：值」分号分隔，
+        钉钉里不再是一坨 `{"名称": "A", ...}`，一眼可读。
+        """
         lines = []
         for i, rec in enumerate(records[:limit], 1):
             cells = rec.get("cells") or rec.get("fields") or rec
             if isinstance(cells, dict):
-                first = {k: str(v)[:40] for k, v in list(cells.items())[:4]}
-                lines.append(f"  {i}. {json.dumps(first, ensure_ascii=False)}")
+                parts = [f"{k}：{str(v)[:40]}" for k, v in list(cells.items())[:4]]
+                lines.append(f"  {i}. " + "；".join(parts))
             else:
                 lines.append(f"  {i}. {str(cells)[:100]}")
         return "\n".join(lines)

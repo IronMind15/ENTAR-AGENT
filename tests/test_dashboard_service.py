@@ -16,6 +16,7 @@ from scripts.dashboard.service import (  # noqa: E402
     resolve_subscription_sources, source_resolution_warnings,
 )
 from scripts.dashboard.subscription_store import Subscription  # noqa: E402
+from scripts.tools.dash_query import _task_prompt_for_query  # noqa: E402
 
 
 class BuildDynamicSourceTests(unittest.TestCase):
@@ -315,6 +316,69 @@ class CollectAndParsePartialFailureTests(unittest.TestCase):
         # 失败信息同时进 errors，报告可提示不完整
         self.assertEqual(len(errors), 1)
         self.assertIn("1/2 份子文档读取失败", errors[0])
+
+
+class DashQueryTaskPromptTests(unittest.TestCase):
+    """v1.13.3（P4 口径统一）：dash_query 实时查询与定时推送同口径
+
+    ——用户仅有唯一启用任务时注入其固定提示词快照；多任务/无任务/快照未
+    固化时退 llm_pipeline 默认整理指令。
+    """
+
+    def _sub(self, enabled=True, task_prompt="", spec=True, sub_id=1):
+        return Subscription(
+            id=sub_id, owner_user_id="u1", enabled=enabled,
+            task_prompt=task_prompt,
+            task_prompt_spec={"key": "daily"} if spec else {},
+        )
+
+    @mock.patch("scripts.dashboard.subscription_store.get_subscription_store")
+    def test_single_enabled_subscription_injects_task_prompt(self, mock_store):
+        mock_store.return_value.list_for_owner.return_value = [
+            self._sub(task_prompt="固定提示词A")]
+        self.assertEqual("固定提示词A", _task_prompt_for_query("u1"))
+
+    @mock.patch("scripts.dashboard.subscription_store.get_subscription_store")
+    def test_multiple_enabled_subscriptions_fall_back_to_generic(self, mock_store):
+        mock_store.return_value.list_for_owner.return_value = [
+            self._sub(task_prompt="A", sub_id=1),
+            self._sub(task_prompt="B", sub_id=2)]
+        self.assertEqual("", _task_prompt_for_query("u1"))
+
+    @mock.patch("scripts.dashboard.subscription_store.get_subscription_store")
+    def test_disabled_only_subscription_falls_back(self, mock_store):
+        mock_store.return_value.list_for_owner.return_value = [
+            self._sub(enabled=False, task_prompt="A")]
+        self.assertEqual("", _task_prompt_for_query("u1"))
+
+    @mock.patch("scripts.dashboard.subscription_store.get_subscription_store")
+    def test_missing_prompt_spec_falls_back(self, mock_store):
+        mock_store.return_value.list_for_owner.return_value = [
+            self._sub(task_prompt="A", spec=False)]
+        self.assertEqual("", _task_prompt_for_query("u1"))
+
+    def test_empty_user_id_falls_back(self):
+        self.assertEqual("", _task_prompt_for_query(""))
+
+    def test_execute_injects_task_prompt_when_single_task(self):
+        import json
+        from scripts.tools import set_current_user_id
+        from scripts.tools.dash_query import execute as dash_exec
+        set_current_user_id("u1")
+        sub = self._sub(task_prompt="固定提示词A")
+        with mock.patch("scripts.dashboard.service.load_all_available_sources",
+                        return_value=[mock.Mock(key="doc_1")]), \
+             mock.patch("scripts.dashboard.service.collect_and_parse",
+                        return_value=([{"name": "看板", "source_key": "doc_1"}], [])), \
+             mock.patch("scripts.dashboard.subscription_store.get_subscription_store") \
+                 as mock_store, \
+             mock.patch("scripts.dashboard.service.assemble",
+                        return_value="看板正文") as mock_assemble:
+            mock_store.return_value.list_for_owner.return_value = [sub]
+            result = json.loads(dash_exec({}))
+        self.assertEqual("看板正文", result["dashboard"])
+        self.assertEqual("固定提示词A",
+                         mock_assemble.call_args.kwargs.get("task_prompt"))
 
 
 if __name__ == "__main__":

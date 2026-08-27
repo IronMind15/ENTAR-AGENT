@@ -148,17 +148,19 @@ class LlmPipelineTests(unittest.TestCase):
 
         def fake_llm(prompt, max_tokens=4000):
             if '"stage": "reduce"' in prompt:
+                # 16 条结论（refs 循环复用 r0..r7）：证据已瘦身到 100 字短预览，
+                # 需足够多的结论数才能超过单条消息上限，验证分页而非退回原文。
                 claims = [{
-                    "text": f"事项{i}已有可核验的精炼结论" + "，需持续跟进" * 50,
-                    "level": "risk", "refs": [f"future_board:r{i}"],
-                    "evidence": [{"ref": f"future_board:r{i}", "field": "详细进展"}],
-                } for i in range(8)]
+                    "text": f"事项{i}已有可核验的精炼结论" + "，需持续跟进" * 60,
+                    "level": "risk", "refs": [f"future_board:r{i % 8}"],
+                    "evidence": [{"ref": f"future_board:r{i % 8}", "field": "详细进展"}],
+                } for i in range(16)]
                 return json.dumps({"claims": claims}, ensure_ascii=False)
             return json.dumps({"selected_refs": [f"future_board:r{i}" for i in range(8)]})
 
         report = build_dashboard_report([parsed], None, fake_llm,
                                         batch_size=20, max_batch_chars=100000)
-        self.assertEqual(8, report.verification["accepted_claims"])
+        self.assertEqual(16, report.verification["accepted_claims"])
         self.assertEqual(0, report.verification["fallback_claims"])
         self.assertGreater(report.verification["message_pages"], 1)
         self.assertTrue(any("事项7已有可核验的精炼结论" in page for page in report.messages))
@@ -187,7 +189,10 @@ class LlmPipelineTests(unittest.TestCase):
         report = build_dashboard_report([new], make_snapshot([old]), fake_llm,
                                         batch_size=1, max_batch_chars=100000)
         map_payloads = [p for p in prompts if '"stage": "map"' in p]
-        self.assertIn('"priority": "changed"', map_payloads[0])
+        # 并发线程完成顺序不确定，map_payloads[0] 不能假定是提交序；
+        # 确定性断言：变化记录带 priority=changed 进入 map 输入（未被存量挤掉）。
+        self.assertIn('"priority": "changed"', " ".join(map_payloads))
+        self.assertIn("今天完成", " ".join(map_payloads))
         self.assertIn("重点今天完成", report.text)
 
     def test_table_source_never_leaks_pipe_markdown_after_fallback(self):
@@ -272,6 +277,71 @@ class LlmPipelineTests(unittest.TestCase):
         )
         self.assertIn("数据完整性提醒", report.text)
         self.assertIn("质量问题表：文档权限不足", report.text)
+
+
+class LlmAnalysisAndLinkTests(unittest.TestCase):
+    """v1.13.3（建议3）：LLM 一句话总览 + 结论级来源链接 + 证据短预览"""
+
+    def _parsed(self, progress="今天完成"):
+        return parse_source_records(_source(), [
+            {"recordId": "r1", "fields": {
+                "name": "重点", "progress": progress, "owner": "张三"}}])
+
+    def _fake_llm(self, headline=""):
+        def fake_llm(prompt, max_tokens=4000):
+            if '"stage": "reduce"' in prompt:
+                payload = {"claims": [{
+                    "text": "重点今天完成", "level": "update",
+                    "refs": ["future_board:r1"],
+                    "evidence": [{"ref": "future_board:r1", "field": "详细进展"}],
+                }]}
+                if headline:
+                    payload["headline"] = headline
+                return json.dumps(payload, ensure_ascii=False)
+            return json.dumps({"selected_refs": ["future_board:r1"]})
+        return fake_llm
+
+    def test_llm_headline_used_when_cites_source_name(self):
+        """总览引用来源名 → 成为今日要点（LLM 分析上线）"""
+        report = build_dashboard_report(
+            [self._parsed()], None,
+            self._fake_llm("未来新增看板：版本上线是今日重点"),
+            batch_size=1, max_batch_chars=100000)
+        self.assertIn("📌 今日要点：未来新增看板：版本上线是今日重点", report.text)
+
+    def test_llm_headline_dropped_when_no_source_cited(self):
+        """总览不引用任何来源 → 回退确定性统计，不采纳无依据的自由文本"""
+        report = build_dashboard_report(
+            [self._parsed()], None, self._fake_llm("今日一切正常，无需关注"),
+            batch_size=1, max_batch_chars=100000)
+        self.assertNotIn("今日一切正常", report.text)
+        self.assertIn("暂无业务字段变化", report.text)
+
+    def test_llm_headline_dropped_when_cites_invalid_source(self):
+        """总览引用不存在的来源 → 丢弃，防编造来源"""
+        report = build_dashboard_report(
+            [self._parsed()], None, self._fake_llm("fake_source 出现异常"),
+            batch_size=1, max_batch_chars=100000)
+        self.assertNotIn("fake_source 出现异常", report.text)
+
+    def test_claim_line_carries_source_link(self):
+        """结论级 [查看原文](url)——老板点开来源核对细节"""
+        report = build_dashboard_report(
+            [self._parsed()], None, self._fake_llm(),
+            batch_size=1, max_batch_chars=100000)
+        self.assertIn(
+            "- 🔵 重点今天完成 [S1-R1] [查看原文]"
+            "(https://alidocs.dingtalk.com/i/nodes/node-1)",
+            report.text)
+
+    def test_claim_evidence_is_slim_preview(self):
+        """依据原值压缩为短预览，不再整段 dump 原文"""
+        long_progress = "关键进展" * 120
+        report = build_dashboard_report(
+            [self._parsed(progress=long_progress)], None, self._fake_llm(),
+            batch_size=1, max_batch_chars=100000)
+        self.assertIn("关键进展" * 25 + "…", report.text)
+        self.assertNotIn("关键进展" * 30, report.text)
 
 
 if __name__ == "__main__":

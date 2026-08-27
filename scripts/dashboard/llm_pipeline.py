@@ -146,7 +146,7 @@ def _prompt(stage: str, payload: dict, task_prompt: str = "") -> str:
     output_schema = (
         {"selected_refs": ["source_key:record_id"]}
         if stage == "map" else {
-            "headline": "一句话总览",
+            "headline": "一句话总览（必须引用至少一个来源的 source_key 或来源名）",
             "claims": [{
                 "text": "可直接给老板看的精准结论",
                 "level": "risk|decision|update|info",
@@ -162,6 +162,7 @@ def _prompt(stage: str, payload: dict, task_prompt: str = "") -> str:
             "只依据输入数据，不补写、猜测或美化不存在的事实",
             "map阶段只筛选最值得上报的记录ID，不写结论；无论输入多少记录，最多返回8个ID",
             "reduce阶段每条结论必须带 refs；记录结论用 source_key:record_id",
+            "reduce阶段 headline 必须引用至少一个输入来源（source_key 或来源名），否则系统丢弃该总览回退统计",
             "聚合结论可引用 source_key，并明确统计口径",
             "evidence 只填写输入中真实存在的 ref 和字段名；字段原值由系统自动回填",
             "识别重要进展、风险、阻塞、待决策事项和负责人，不因缺少状态列而判定正常",
@@ -202,6 +203,29 @@ def _selected_refs(value: dict) -> list[str]:
     if not isinstance(refs, list):
         return []
     return [str(ref) for ref in refs[:8] if str(ref).strip()]
+
+
+def _extract_headline(value: dict, results: list[dict], labels: dict) -> str:
+    """从 reduce 结果取 LLM 一句话总览；必须引用至少一个来源，否则回退系统统计。
+
+    v1.13.3（建议3）：今日要点由 LLM 分析生成，但守住反幻觉底线——总览必须
+    引用输入中真实存在的来源（source_key / 来源名 / S 标签），否则丢弃。
+    返回已净化的纯文本（去表格竖线等），长度 ≤200。
+    """
+    if not isinstance(value, dict):
+        return ""
+    headline = str(value.get("headline") or "").strip()
+    if not headline or len(headline) > 200:
+        return ""
+    tokens = [str(r.get("source_key") or "") for r in results] \
+        + [str(r.get("name") or "") for r in results]
+    for token in tokens:
+        if token and token in headline:
+            return _plain_text(headline, 200)
+    for label in set(labels.values()):
+        if label and label in headline:
+            return _plain_text(headline, 200)
+    return ""
 
 
 def _preferred_evidence_field(fields: dict) -> tuple[str, object] | None:
@@ -376,16 +400,39 @@ def _claim_source_names(claim: dict, valid_refs: dict) -> list[str]:
     return names
 
 
-def _claim_lines(claims: list[dict], labels: dict, icons: dict) -> list[str]:
-    """渲染一组结论的列表行（不含标题）；证据原值用句边界截断。"""
+def _claim_source_link(claim: dict, valid_refs: dict) -> str:
+    """结论引用的来源原文链接（按 refs 顺序去重，最多 2 条）。
+
+    v1.13.3（建议3）：结论级 [查看原文](url)——老板点开来源核对细节，
+    报告不再把整段原文 dump 进来；来源无 url（如规则/兜底来源）返回空串。
+    """
+    urls = []
+    for ref in claim.get("refs", []):
+        evidence = (valid_refs.get(ref, {}) or {}).get("evidence", {}) or {}
+        url = str(evidence.get("source_url") or "").strip()
+        if url and url not in urls:
+            urls.append(url)
+    return " ".join(f"[查看原文]({u})" for u in urls[:2])
+
+
+def _claim_lines(claims: list[dict], labels: dict, icons: dict,
+                 valid_refs: dict | None = None) -> list[str]:
+    """渲染一组结论的列表行（不含标题）
+
+    v1.13.3（建议3）：证据原值从 400 字长截断改为 100 字短预览——长 dump 让
+    报告像罗列源数据而非分析；细节由结论级 [查看原文] 链接承载。
+    """
     lines = []
     for claim in claims[:12]:
         refs = " ".join(f"[{labels[r]}]" for r in claim["refs"] if r in labels)
         claim_text = _plain_text(claim.get("text", ""), 360)
-        lines.append(f"- {icons.get(claim.get('level'), '•')} {claim_text} {refs}".rstrip())
+        link = _claim_source_link(claim, valid_refs or {})
+        line = (f"- {icons.get(claim.get('level'), '•')} {claim_text} {refs}"
+                + (f" {link}" if link else "")).rstrip()
+        lines.append(line)
         evidence_parts = []
         for evidence in claim.get("evidence", [])[:2]:
-            value = _truncate_sentence(evidence.get("value", ""), 400)
+            value = _truncate_sentence(evidence.get("value", ""), 100)
             evidence_parts.append(f"{_plain_text(evidence.get('field'), 40)}：{value}")
         if evidence_parts:
             lines.append("  - 依据原值：" + "；".join(evidence_parts))
@@ -421,7 +468,7 @@ def _render_claims_block(title: str, claims: list[dict], labels: dict, icons: di
             cross = [c for names, c in names_by_claim if len(names) > 1]
             if not cross:
                 return []
-            return [f"## {title}"] + _claim_lines(cross, labels, icons)
+            return [f"## {title}"] + _claim_lines(cross, labels, icons, valid_refs)
         # group_by_source：只渲染单来源结论、按数据源顺序分表；
         # 跨来源结论由「总体结论」区（cross_source_only）负责，不在此重复
         grouped: dict[str, list] = {}
@@ -433,18 +480,18 @@ def _render_claims_block(title: str, claims: list[dict], labels: dict, icons: di
         lines = [f"## {title}"]
         if grouped.get("总体"):
             lines.append("### 📊 总体")
-            lines.extend(_claim_lines(grouped["总体"], labels, icons))
+            lines.extend(_claim_lines(grouped["总体"], labels, icons, valid_refs))
         source_order = [str(r.get("name") or "") for r in (results or [])]
         for name in source_order:
             if grouped.get(name):
                 lines.append(f"### {name}")
-                lines.extend(_claim_lines(grouped[name], labels, icons))
+                lines.extend(_claim_lines(grouped[name], labels, icons, valid_refs))
         for name, group_claims in grouped.items():
             if name not in ("总体",) and name not in source_order:
                 lines.append(f"### {name}")
-                lines.extend(_claim_lines(group_claims, labels, icons))
+                lines.extend(_claim_lines(group_claims, labels, icons, valid_refs))
         return lines
-    return [f"## {title}"] + _claim_lines(filtered, labels, icons)
+    return [f"## {title}"] + _claim_lines(filtered, labels, icons, valid_refs)
 
 
 def _render(results: list[dict], claims: list[dict], labels: dict,
@@ -509,7 +556,8 @@ def _render(results: list[dict], claims: list[dict], labels: dict,
         blocks.append([f"📌 今日要点：{headline or default_headline}"])
     if not rendered_claims:
         blocks.append(_render_claims_block(
-            "重点更新", claims, labels, icons, show_empty_fallback=True))
+            "重点更新", claims, labels, icons, show_empty_fallback=True,
+            valid_refs=valid_refs))
     text = "\n\n".join("\n".join(block) for block in blocks).strip() + "\n"
     return text
 
@@ -622,7 +670,8 @@ def build_dashboard_report(results: list[dict], old_snapshot: list[dict] | None,
     batch_size = batch_size or int(os.getenv("DASHBOARD_LLM_BATCH_SIZE", "250"))
     max_batch_chars = max_batch_chars or int(
         os.getenv("DASHBOARD_LLM_BATCH_CHARS", "220000"))
-    selected_refs, rejected, repaired_evidence_claims, headline = [], 0, 0, ""
+    selected_refs, rejected, repaired_evidence_claims = [], 0, 0
+    llm_headline = ""
     map_completed = 0
     llm_errors = 0
     if llm_func:
@@ -691,6 +740,7 @@ def build_dashboard_report(results: list[dict], old_snapshot: list[dict] | None,
                         "instruction": reduce_instruction,
                     }, task_prompt), max_tokens=5000)
                 reduced = _json_object(reduce_future.result(timeout=remaining))
+                llm_headline = _extract_headline(reduced, results, labels)
                 final_claims, reduce_rejected, repaired_evidence_claims = _verify(
                     _claims(reduced), valid_refs)
                 rejected += reduce_rejected
@@ -711,7 +761,8 @@ def build_dashboard_report(results: list[dict], old_snapshot: list[dict] | None,
     used_fallback = not final_claims
     if used_fallback:
         final_claims = _fallback_claims_from_units(analysis_units)
-    # 总览由确定性变更统计生成，不采用无独立证据结构的自由文本。
+    # 今日要点优先用 LLM 一句话总览（须引用来源，见 _extract_headline）；
+    # 校验不过或无 LLM 时回退到确定性变更统计，不采用无独立证据结构的自由文本。
     kind_counts: dict[str, int] = {}
     for change in change_by_ref.values():
         kind = change.get("change", "updated")
@@ -721,9 +772,10 @@ def build_dashboard_report(results: list[dict], old_snapshot: list[dict] | None,
         for kind, label in (("added", "新增"), ("updated", "更新"), ("removed", "移除")):
             if kind_counts.get(kind):
                 parts.append(f"{label} {kind_counts[kind]} 条")
-        headline = "，".join(parts) + "；以下仅展示可回溯原值的重点"
+        fallback_headline = "，".join(parts) + "；以下仅展示可回溯原值的重点"
     else:
-        headline = "与上次快照相比暂无业务字段变化；以下为持续事项摘要"
+        fallback_headline = "与上次快照相比暂无业务字段变化；以下为持续事项摘要"
+    headline = llm_headline or fallback_headline
     render_errors = list(collection_errors or []) + (
         [f"AI 整理完成 {map_completed}/{len(batches) if llm_func else 0} 个数据批次，"
          f"另有 {llm_errors} 个批次/阶段未完成；报告仅保留已通过原值核验的结论。"]

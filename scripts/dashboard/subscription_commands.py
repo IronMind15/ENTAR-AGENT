@@ -137,7 +137,12 @@ _EDIT_TASK_PROMPT_SUFFIX_RE = re.compile(
 _EDIT_TASK_PROMPT_REQUEST_RE = re.compile(
     r"^(?:我想|我要|帮我|请)?\s*(?:编辑|修改|调整|重写)"
     r"(?:看板)?(?:任务)?(?:提示词|任务指令|总结指令)\s*$")
-_TASK_ID_RE = re.compile(r"(?:任务|编号)\s*#?\s*(?P<id>\d+)")
+# v1.13.3：任务编号 = 动态位置序号（删除任务后自动重排），不再是数据库自增
+# id（删除后留洞会指错任务）。支持「第 N 个任务」「第 N 个订阅」与旧的
+# 「任务 N」「编号 N」两种说法；无论哪种，parse 统一取出序号 N。
+_TASK_ID_RE = re.compile(
+    r"(?:第\s*(?P<pos>\d+)\s*(?:个)?\s*(?:看板)?(?:任务|订阅)?|"
+    r"(?:任务|编号)\s*#?\s*(?P<id>\d+))")
 # 明确的即时演示/模拟推送由 Agent 的 dash_push 工具承接（工具会二次确认外发）。
 # 必须早于「推给」接收人正则，防「现在推给我一个演示」被误改为接收人设置。
 _IMMEDIATE_PUSH_RE = re.compile(
@@ -317,10 +322,13 @@ def parse_edit_task_prompt(text: str) -> Optional[dict]:
     request_only = _EDIT_TASK_PROMPT_REQUEST_RE.match(raw)
     if not desc and not suffix and not request_only:
         return None
-    task_id = _TASK_ID_RE.search(raw)
+    m = _TASK_ID_RE.search(raw)
+    num = (m.group("pos") or m.group("id")) if m else None
     return {
         "intent": "edit_task_prompt",
-        "task_id": int(task_id.group("id")) if task_id else 0,
+        # v1.13.3：task_id = 动态位置序号（第 N 个），删除任务后自动重排，
+        # 不再直接当数据库 id 用。
+        "task_id": int(num) if num else 0,
         "task_prompt": ((desc.group("desc") if desc else suffix.group("desc")) or "")
         .strip(" ：:，,") if (desc or suffix) else "",
     }
@@ -870,26 +878,57 @@ def format_spec_summary(section_spec: list) -> str:
     return " / ".join(titles[:8]) if titles else "（无章节）"
 
 
-def _format_sources(data_sources: list) -> str:
+def _source_items(data_sources: list) -> list[tuple[str, str]]:
+    """数据源 key 列表 → [(名称, 类型标签), ...]（v1.13.3 逐条列源用）
+
+    doc_<id> 键查候选最新信息（名称/类型，候选被删标「已失效」）；非 doc_
+    键走 dashboard_sources.json 静态配置。之前确认草稿/订阅状态把全部源
+    合并成一行，用户看不出「这个任务到底绑了哪几个源」，删除/调整时无从
+    对应——逐条渲染后一眼可辨。
+    """
+    items: list[tuple[str, str]] = []
     try:
-        from .config_model import load_sources
+        from .config_model import KIND_LABELS, load_sources
         from .doc_candidates import get_candidate_store
-        by_key = {s.key: s.name for s in load_sources()}
+        sources = load_sources()
+        by_key = {s.key: s.name for s in sources}
+        kind_by_key = {s.key: s.kind for s in sources}
         store = get_candidate_store()
-        names = []
         for k in data_sources:
             if isinstance(k, str) and k.startswith("doc_"):
                 try:
                     cand = store.get(int(k[len("doc_"):]))
-                    names.append(cand.name or f"文档{cand.node_id[:8]}"
-                                 if cand else k)
                 except Exception:
-                    names.append(k)
+                    cand = None
+                if cand:
+                    label = KIND_LABELS.get(cand.kind, cand.kind or "")
+                    items.append((cand.name or f"文档{cand.node_id[:8]}", label))
+                else:
+                    items.append((k, "已失效"))
             else:
-                names.append(by_key.get(k, k))
-        return "、".join(names) if names else "（未配置数据源）"
+                label = KIND_LABELS.get(kind_by_key.get(k, ""), "")
+                items.append((by_key.get(k, k), label))
     except Exception:
-        return "、".join(str(k) for k in data_sources)
+        items = [(str(k), "") for k in data_sources]
+    return items or [("（未配置数据源）", "")]
+
+
+def _format_sources(data_sources: list) -> str:
+    """数据源 key 列表 → 合并一行「a、b、c」（历史调用点/旧行为保兼容）"""
+    return "、".join(name for name, _ in _source_items(data_sources))
+
+
+def _append_task_titles(lines: list, pending: dict) -> None:
+    """确认草稿里按动态序号（第 N 个）列出待操作任务标题（v1.13.3）
+
+    pending 里带 titles（list_for_owner 顺序）时逐条编号展示；删除任务后
+    序号自动重排，不占用编号。旧 pending（无 titles）时静默跳过，兼容测试。
+    """
+    titles = pending.get("titles") or []
+    if not titles:
+        return
+    for i, title in enumerate(titles, 1):
+        lines.append(f"  {i}. {title}")
 
 
 def render_confirmation(pending: dict, current=None) -> str:
@@ -901,7 +940,10 @@ def render_confirmation(pending: dict, current=None) -> str:
         sources = pending.get("data_sources") or []
         lines.append("好的，我可以为您开通每日项目看板推送，请确认：")
         lines.append("")
-        lines.append(f"📋 数据板块：{_format_sources(sources)}")
+        items = _source_items(sources)
+        lines.append(f"📋 数据板块（共 {len(items)} 个文件源）：")
+        for i, (name, label) in enumerate(items, 1):
+            lines.append(f"  {i}. {name}" + (f"（{label}）" if label else ""))
         lines.append("📌 该任务固定跟踪以上文件源；之后新发布的文档需主动说「把这个文档加进看板」才会纳入。")
         lines.append(f"⏰ 推送时间：{format_weekdays(pending.get('weekdays', ''))} "
                      f"{pending.get('push_hour', 9):02d}:{pending.get('push_minute', 0):02d}")
@@ -914,7 +956,10 @@ def render_confirmation(pending: dict, current=None) -> str:
         sources = pending.get("data_sources") or []
         lines.append("好的，将按以下文档做每日看板，请确认：")
         lines.append("")
-        lines.append(f"📋 数据板块：{_format_sources(sources)}")
+        items = _source_items(sources)
+        lines.append(f"📋 数据板块（共 {len(items)} 个文件源）：")
+        for i, (name, label) in enumerate(items, 1):
+            lines.append(f"  {i}. {name}" + (f"（{label}）" if label else ""))
         lines.append("📌 该任务固定跟踪以上文件源；之后新发布的文档需主动说「把这个文档加进看板」才会纳入。")
         lines.append(f"⏰ 推送时间：{format_weekdays(pending.get('weekdays', ''))} "
                      f"{pending.get('push_hour', 9):02d}:{pending.get('push_minute', 0):02d}")
@@ -949,7 +994,8 @@ def render_confirmation(pending: dict, current=None) -> str:
     elif intent == "delete":
         count = len(pending.get("sub_ids") or [])
         target = f" {count} 个" if count else ""
-        lines.append(f"好的，将删除您的{target}看板订阅（此操作不可恢复，历史推送配置一并清除）。")
+        lines.append(f"好的，将删除您的{target}看板订阅（此操作不可恢复，历史推送配置一并清除）：")
+        _append_task_titles(lines, pending)
         lines.append("回复「确认」删除；如果只是想暂停，说「停掉看板」即可。")
 
     elif intent == "set_per_source":
@@ -978,12 +1024,14 @@ def render_confirmation(pending: dict, current=None) -> str:
 
     elif intent == "stop":
         count = len(pending.get("sub_ids") or [])
-        lines.append(f"好的，将停止您的 {count} 个每日看板订阅。")
+        lines.append(f"好的，将停止您的 {count} 个每日看板订阅：")
+        _append_task_titles(lines, pending)
         lines.append("回复「确认」停止；如果只是想调整，直接告诉我要改什么（如「改到10点」）。")
 
     elif intent == "resume":
         count = len(pending.get("sub_ids") or [])
-        lines.append(f"好的，将恢复您的 {count} 个每日看板订阅。")
+        lines.append(f"好的，将恢复您的 {count} 个每日看板订阅：")
+        _append_task_titles(lines, pending)
         lines.append("回复「确认」恢复推送；回复「取消」则保持暂停。")
 
     elif intent == "set_template":
@@ -1009,7 +1057,10 @@ def render_confirmation(pending: dict, current=None) -> str:
         lines.append("回复「确认」覆盖保存；回复「取消」则不改动。")
 
     elif intent == "edit_task_prompt":
-        lines.append(f"好的，将覆盖任务编号 {pending.get('sub_id')} 的固定提示词。")
+        # v1.13.3：sub_position = 动态序号（第 N 个任务），不再展示数据库 id
+        pos = pending.get("sub_position")
+        lines.append(f"好的，将覆盖第 {pos} 个看板任务的固定提示词。"
+                     if pos else "好的，将覆盖该看板任务的固定提示词。")
         lines.append("新的提示词如下：")
         lines.append("---")
         lines.append((pending.get("task_prompt") or "")[:1200])

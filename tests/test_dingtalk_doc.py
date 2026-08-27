@@ -170,14 +170,18 @@ class BotDocLinkTests(unittest.TestCase):
             answer, _ = handler._handle_dingtalk_doc_link(
                 "https://alidocs.dingtalk.com/i/nodes/n1", "u1", "s1")
         self.assertIsNotNone(answer)
-        # v1.11.3：回复改为「名字（类型）· 概要」格式
-        self.assertIn("概要", answer)
+        # v1.13.3：回复改为「先收录 → 主动问去向」流（header 报份数 + 可读预览）
+        self.assertIn("已收录", answer)
+        self.assertIn("接下来怎么用", answer)
         self.assertIn("AI表格", answer)
         self.assertIn("帮我学习", answer)
-        # 交互原则：只主动问学习，不推销推送/订阅
+        # 交互原则：只主动问学习/绑定，不推销推送/订阅
         self.assertNotIn("每日推送", answer)
         self.assertNotIn("订阅", answer)
-        # v1.11.2：主动说明看板与知识库的区别（看板实时拉取、不进库），不算推销
+        # 可读预览：不再是 JSON 整块
+        self.assertNotIn("{", answer)
+        self.assertIn("名称：A", answer)
+        # 看板入口存在（做成每日看板 / 加进看板）
         self.assertIn("看板", answer)
 
     def test_doc_link_read_failure(self):
@@ -294,7 +298,7 @@ class BotDocLinkTests(unittest.TestCase):
             mock_get.return_value.read_document.return_value = fake
             answer = handler._handle_doc_link_with_kanban(
                 "看看这份 https://alidocs.dingtalk.com/i/nodes/n1", "u1", "s1")
-        self.assertIn("概要", answer)
+        self.assertIn("已收录", answer)
         m_create.assert_not_called()
 
     def test_interactive_card_with_kanban_merges(self):
@@ -317,6 +321,66 @@ class BotDocLinkTests(unittest.TestCase):
         call_text = call.kwargs.get("text") if call.kwargs else call[0][1]
         self.assertIn("已识别并纳入", call_text)
         self.assertIn("做每日看板，请确认", call_text)
+
+    # ===== v1.13.3（建议4）：先收录 → 主动问去向 =====
+
+    def test_doc_link_reply_uses_收录_header_and_numbering(self):
+        """多份文档逐份编号 + header 报总份数（不再无编号堆「📑」前缀）"""
+        handler = self._make_handler()
+        fakes = [{"ok": True, "kind": "notable", "node_id": f"n{i}",
+                  "name": f"数据表{i}",
+                  "records": [{"fields": {"名称": f"名{i}"}}], "message": "ok"}
+                 for i in (1, 2)]
+        with patch("scripts.dingtalk_doc_client.get_doc_client") as mock_get:
+            mock_get.return_value.resolve_operator_id.return_value = "union1"
+            mock_get.return_value.read_document.side_effect = fakes
+            answer, _ = handler._handle_dingtalk_doc_link(
+                "两份：https://alidocs.dingtalk.com/i/nodes/n1 "
+                "https://alidocs.dingtalk.com/i/nodes/n2", "u1", "s1")
+        self.assertIn("已收录 2 份文档", answer)
+        self.assertIn("1. 《数据表1》", answer)
+        self.assertIn("2. 《数据表2》", answer)
+
+    def test_doc_preview_readable_not_json(self):
+        """预览是「字段：值」分号分隔，不再是一坨 JSON"""
+        from scripts.skills.dingtalk_bot import ErrorQueryHandler
+        records = [{"fields": {"名称": "A", "状态": "滞后", "负责人": "张三"}}]
+        preview = ErrorQueryHandler._doc_preview(records)
+        self.assertNotIn("{", preview)
+        self.assertIn("名称：A", preview)
+        self.assertIn("状态：滞后", preview)
+        self.assertIn("负责人：张三", preview)
+
+    def test_proactive_unbound_ask_shown_when_user_has_tasks(self):
+        """用户已有看板任务 → 主动询问新收录文档是否绑定到最近任务"""
+        handler = self._make_handler()
+        fake = {"ok": True, "kind": "notable", "node_id": "n1",
+                "records": [{"fields": {"名称": "A"}}], "message": "ok"}
+        with patch("scripts.dingtalk_doc_client.get_doc_client") as mock_get, \
+             patch("scripts.dashboard.subscription_store.get_subscription_store") as m_store:
+            m_store.return_value.list_for_owner.return_value = [object(), object()]
+            mock_get.return_value.resolve_operator_id.return_value = "union1"
+            mock_get.return_value.read_document.return_value = fake
+            answer, _ = handler._handle_dingtalk_doc_link(
+                "https://alidocs.dingtalk.com/i/nodes/n1", "u1", "s1")
+        self.assertIn("你已有 2 个看板任务", answer)
+        self.assertIn("加进看板", answer)
+
+    def test_proactive_unbound_ask_hidden_without_tasks(self):
+        """用户没有看板任务 → 不出现「把《文档名》加进看板」的绑定入口"""
+        handler = self._make_handler()
+        fake = {"ok": True, "kind": "notable", "node_id": "n1",
+                "records": [{"fields": {"名称": "A"}}], "message": "ok"}
+        with patch("scripts.dingtalk_doc_client.get_doc_client") as mock_get, \
+             patch("scripts.dashboard.subscription_store.get_subscription_store") as m_store:
+            m_store.return_value.list_for_owner.return_value = []
+            mock_get.return_value.resolve_operator_id.return_value = "union1"
+            mock_get.return_value.read_document.return_value = fake
+            answer, _ = handler._handle_dingtalk_doc_link(
+                "https://alidocs.dingtalk.com/i/nodes/n1", "u1", "s1")
+        self.assertIn("接下来怎么用", answer)
+        self.assertNotIn("你已有", answer)
+        self.assertNotIn("加进看板", answer)
 
 
 class ListSheetsTests(unittest.TestCase):
@@ -692,7 +756,7 @@ class BotDocLinkKindDocTests(unittest.TestCase):
             mock_get.return_value.read_document.return_value = fake
             answer, _ = handler._handle_dingtalk_doc_link(
                 "https://alidocs.dingtalk.com/i/nodes/n1", "u1", "s1")
-        self.assertIn("概要", answer)
+        self.assertIn("已收录", answer)
         self.assertIn("文档", answer)  # kind 映射 doc→文档
         self.assertIn("帮我学习", answer)
         cand = self._cand.get_pending("u1")
@@ -912,7 +976,7 @@ class BotSummaryModeTests(unittest.TestCase):
         self.assertEqual(calls[0][0], "u1")
         self.assertEqual(calls[0][1], "user")
         self.assertEqual(calls[1][1], "assistant")
-        self.assertIn("概要", calls[1][2])  # 助理记忆含文档识别回复
+        self.assertIn("已收录", calls[1][2])  # 助理记忆含文档识别回复
 
     def test_interactive_card_writes_memory(self):
         from unittest import mock as _mock

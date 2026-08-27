@@ -65,6 +65,23 @@ class FakeExecCorrectionUnitTests(unittest.TestCase):
         self.assertFalse(_needs_fake_exec_correction(
             "我昨天删的那个文件在哪", "该文件已删除。", write_tool_used=False))
 
+    # ===== v1.13.3：将来时承诺盲区（2026-08-14 袁会荧实测「按之前的那个来」
+    # → LLM 零工具编造「将重新开通」；完成态护栏只拦「已…」，将来时漏网） =====
+    def test_future_tense_stop_promise_corrected(self):
+        # 口语操作「帮我停掉这个」+ 将来时承诺 → 必须纠偏
+        self.assertTrue(_needs_fake_exec_correction(
+            "帮我停掉这个", "好的，将停用该看板。", write_tool_used=False))
+
+    def test_future_tense_confirm_corrected(self):
+        # 「确认修改」+「将为您调整订阅」→ 将来时承诺 → 必须纠偏
+        self.assertTrue(_needs_fake_exec_correction(
+            "确认修改", "将为您调整订阅。", write_tool_used=False))
+
+    def test_future_tense_pure_query_not_corrected(self):
+        # 纯查询「查一下XX」+「我会帮您查看」→ 无写操作动词 → 不误伤
+        self.assertFalse(_needs_fake_exec_correction(
+            "查一下故障代码", "我会帮您查看。", write_tool_used=False))
+
 
 class FakeExecCorrectionIntegrationTests(unittest.TestCase):
     """集成：mock LLM 无写操作工具调用 → 幻觉回答被追加纠偏"""
@@ -88,6 +105,21 @@ class FakeExecCorrectionIntegrationTests(unittest.TestCase):
         r = self._handle("今天天气怎么样")
         self.assertNotIn(_FAKE_EXEC_CORRECTION, r["answer"])
         self.assertIn("天气不错", r["answer"])
+
+    # ===== v1.13.3：将来时承诺端到端（零工具 + 将来时 → 追加纠偏） =====
+    @mock.patch("scripts.skills.agent._call_deepseek",
+                return_value={"content": "好的，将停用该看板。", "tool_calls": None})
+    def test_future_tense_gets_correction(self, mock_llm):
+        r = self._handle("帮我停掉这个")
+        self.assertIn("本轮我未执行任何写操作", r["answer"])
+        self.assertIn("正式确认流程", r["answer"])
+
+    @mock.patch("scripts.skills.agent._call_deepseek",
+                return_value={"content": "我会帮您查看。", "tool_calls": None})
+    def test_future_tense_query_no_correction(self, mock_llm):
+        r = self._handle("查一下故障代码")
+        self.assertNotIn(_FAKE_EXEC_CORRECTION, r["answer"])
+        self.assertIn("帮您查看", r["answer"])
 
 
 if __name__ == "__main__":

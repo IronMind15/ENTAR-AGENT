@@ -137,6 +137,27 @@ class DashboardTaskPromptTests(unittest.TestCase):
         self.assertEqual("edit_task_prompt", parsed["intent"])
         self.assertEqual("", parsed["task_prompt"])
 
+    # ===== v1.13.3：任务编号 = 动态位置序号（删除任务后自动重排） =====
+    def test_edit_prompt_position_number_forms(self):
+        """「第 N 个任务/订阅」→ task_id 取位置序号，兼容旧「任务/编号 N」"""
+        cases = [
+            ("编辑第 3 个任务提示词改成：先写唯一最重要的风险，再列出需要协调的人。", 3),
+            ("编辑第2个看板订阅的提示词改成：先写唯一最重要的风险，再列出需要协调的人。", 2),
+            ("编辑第 1 个提示词改成：先写唯一最重要的风险，再列出需要协调的人。", 1),
+        ]
+        for text, expected in cases:
+            parsed = parse_edit_task_prompt(text)
+            self.assertEqual("edit_task_prompt", parsed["intent"], text)
+            self.assertEqual(expected, parsed["task_id"], text)
+            self.assertIn("唯一最重要的风险", parsed["task_prompt"], text)
+
+    def test_edit_prompt_legacy_number_form_keeps_extracting(self):
+        """旧「编辑编号 7 的…」写法仍提取 7（解析层兼容，位置语义由技能层落地）"""
+        text = ("编辑编号 7 的看板任务提示词改成："
+                "先写唯一最重要的风险，再列出负责人、需要协调的人和截止时间。")
+        parsed = parse_edit_task_prompt(text)
+        self.assertEqual(7, parsed["task_id"])
+
 
 if __name__ == "__main__":
     unittest.main()

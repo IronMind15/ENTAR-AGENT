@@ -476,6 +476,19 @@ class HandleDocCreateTests(unittest.TestCase):
     @mock.patch("scripts.skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
     @mock.patch("scripts.skills.dashboard.DashboardSkill._push_sample", return_value="已推送")
     @mock.patch("scripts.skills.dashboard.DashboardSkill._user_template_hint", return_value="")
+    def test_query_status_lists_sources_per_line(self, m_hint, m_push, mock_staff):
+        """v1.13.3：订阅状态逐条列出绑定源（名称 + 类型），绑定透明"""
+        self._seed_candidates()
+        DashboardSkill._handle_doc_create("u1", source_candidate_ids=[1, 2])
+        DashboardSkill.handle("确认", user_id="u1")
+        r = DashboardSkill.handle("我的看板几点推送", user_id="u1")
+        self.assertIn("绑定 2 个数据源", r["answer"])
+        self.assertIn("1. 研发项目现况表（AI表格）", r["answer"])
+        self.assertIn("2. 整机测试问题（AI表格）", r["answer"])
+
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._staff_id_of", return_value="staff001")
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._push_sample", return_value="已推送")
+    @mock.patch("scripts.skills.dashboard.DashboardSkill._user_template_hint", return_value="")
     def test_doc_create_flow(self, m_hint, m_push, mock_staff):
         self._seed_candidates()
         # 1. 说「按这几个文档做每日看板」→ 反问
@@ -1260,6 +1273,90 @@ class PushHistorySkillTests(unittest.TestCase):
     def test_handle_history_no_subscription(self):
         r = DashboardSkill.handle("看上次的看板", user_id="nobody")
         self.assertIn("还没有订阅看板", r["answer"])
+
+
+class EditTaskPromptPositionTests(unittest.TestCase):
+    """v1.13.3：任务编号动态重排——删除任务后序号自动重排，不占用编号。
+
+    显示（状态/任务提示词列表）与解析（编辑第 N 个）统一按 list_for_owner
+    当前顺序 1..N，数据库自增 id 只在内部使用，不再作为用户可见编号。
+    """
+
+    def setUp(self):
+        self.patch_pending = mock.patch("scripts.pending_context._pending", {})
+        self.patch_pending.start()
+        self.addCleanup(self.patch_pending.stop)
+        import tempfile
+        from scripts.dashboard.subscription_store import SubscriptionStore
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self._db_path = path
+        self._store = SubscriptionStore(db_path=path)
+        self.patch_store = mock.patch("scripts.skills.dashboard.get_subscription_store",
+                                      return_value=self._store)
+        self.patch_store.start()
+        self.addCleanup(self.patch_store.stop)
+        # 不写真实 data/dashboard_tasks/ 目录
+        self.patch_sync = mock.patch("scripts.dashboard.service.sync_task_prompt_file",
+                                     return_value="")
+        self.patch_sync.start()
+        self.addCleanup(self.patch_sync.stop)
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self):
+        self._store.close()
+        for suffix in ("", "-wal", "-shm"):
+            p = self._db_path + suffix
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+
+    def _add_task(self, title: str, owner: str = "u1") -> int:
+        from scripts.dashboard.subscription_store import Subscription
+        sub = Subscription(owner_user_id=owner, owner_staff_id="s1",
+                           owner_union_id=owner, data_sources=["doc_1"],
+                           title=title)
+        return self._store.create(sub)
+
+    def test_deleted_task_does_not_occupy_number(self):
+        """删中间任务后重排：编辑「第 2 个」指向当前第 2 个，不指向已删 id"""
+        self._add_task("任务甲")
+        self._add_task("任务乙")
+        self._add_task("任务丙")
+        self._store.delete(2)  # 删除任务乙 → 剩 [甲(id1), 丙(id3)]
+        parsed = {"intent": "edit_task_prompt", "task_id": 2,
+                  "task_prompt": "先写唯一最重要的风险，再列出需要协调的人和截止时间，尽量精简。"
+                                 "这是一段超过二十字的提示词以通过长度校验。"}
+        r = DashboardSkill._handle_edit_task_prompt("u1", parsed)
+        self.assertIn("第 2 个", r["answer"])
+        from scripts.dashboard.subscription_commands import get_pending
+        pending = get_pending("u1")
+        # 位置 2 = 任务丙（id=3），不是已删除的任务乙（id=2）
+        self.assertEqual(3, pending["sub_id"])
+
+    def test_query_status_renumbers_after_delete(self):
+        """查看看板：删中间任务后序号重排为 1..N（不跳号、不占位）"""
+        self._add_task("任务甲")
+        self._add_task("任务乙")
+        self._add_task("任务丙")
+        self._store.delete(2)
+        r = DashboardSkill.handle("我的看板几点推送", user_id="u1")
+        self.assertIn("1. 任务甲", r["answer"])
+        self.assertNotIn("任务乙", r["answer"])   # 已删除不占编号
+        self.assertIn("2. 任务丙", r["answer"])   # 丙重排为第 2 个
+
+    def test_edit_prompt_confirmation_uses_position(self):
+        """编辑确认草稿显示「第 N 个任务」，不暴露数据库自增 id"""
+        self._add_task("任务甲")
+        self._add_task("任务乙")
+        parsed = {"intent": "edit_task_prompt", "task_id": 1,
+                  "task_prompt": "先写最重要的结论，再列出需要协调的人和风险，按优先级排序。"
+                                 "这是一段超过二十字的提示词以通过长度校验。"}
+        r = DashboardSkill._handle_edit_task_prompt("u1", parsed)
+        self.assertIn("第 1 个", r["answer"])
+        self.assertNotIn("编号 1", r["answer"])   # 不再用数据库 id 当编号
 
 
 if __name__ == "__main__":

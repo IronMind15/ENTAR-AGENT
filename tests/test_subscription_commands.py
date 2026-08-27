@@ -290,6 +290,47 @@ class RenderConfirmationTests(unittest.TestCase):
         text = sc.render_confirmation(pending)
         self.assertIn("仅数据有变化时推送", text)
 
+    # ===== v1.13.3：确认草稿逐条列源（绑定透明，不再合并一行） =====
+    @mock.patch("scripts.dashboard.config_model.load_sources",
+                return_value=_FIXTURE_SOURCES)
+    def test_create_confirmation_lists_sources_per_line(self, mock_load):
+        """create 草稿逐条列源：总数 + 序号 + 名称 + 类型标签"""
+        pending = {"intent": "create",
+                   "data_sources": ["project_status", "test_issues"],
+                   "push_hour": 9, "push_minute": 0, "weekdays": "",
+                   "alert_mode": "always"}
+        text = sc.render_confirmation(pending)
+        self.assertIn("数据板块（共 2 个文件源）", text)
+        self.assertIn("1. 研发项目现况表（AI表格）", text)
+        self.assertIn("2. 整机下线测试问题（AI表格）", text)
+
+    def test_doc_create_confirmation_lists_sources_per_line(self):
+        """doc_create 草稿逐条列源（候选名称 + 类型标签）"""
+        class _Cand:
+            id = 1
+            name = "研发项目现况表"
+            node_id = "n1"
+            kind = "workbook"
+        with mock.patch("scripts.dashboard.doc_candidates.get_candidate_store") as m_store:
+            m_store.return_value.get.return_value = _Cand()
+            pending = {"intent": "doc_create", "data_sources": ["doc_1"],
+                       "push_hour": 9, "push_minute": 0, "weekdays": "",
+                       "alert_mode": "always"}
+            text = sc.render_confirmation(pending)
+        self.assertIn("数据板块（共 1 个文件源）", text)
+        self.assertIn("1. 研发项目现况表（在线表格）", text)
+
+    def test_doc_create_confirmation_marks_missing_candidate(self):
+        """候选已被删除 → 仍逐条列出并标「已失效」，不静默消失"""
+        with mock.patch("scripts.dashboard.doc_candidates.get_candidate_store") as m_store:
+            m_store.return_value.get.return_value = None
+            pending = {"intent": "doc_create", "data_sources": ["doc_99"],
+                       "push_hour": 9, "push_minute": 0, "weekdays": "",
+                       "alert_mode": "always"}
+            text = sc.render_confirmation(pending)
+        self.assertIn("数据板块（共 1 个文件源）", text)
+        self.assertIn("doc_99（已失效）", text)
+
     def test_stop_confirmation(self):
         text = sc.render_confirmation({"intent": "stop"})
         self.assertIn("停止", text)

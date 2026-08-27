@@ -157,7 +157,9 @@ def render_prompt_message(sub) -> str:
     prompt = (getattr(sub, "task_prompt", "") or "").strip()
     return "\n".join([
         "📜 本次看板任务固定提示词",
-        f"任务：{getattr(sub, 'title', '每日项目看板')}（编号 {getattr(sub, 'id', 0)}）",
+        # v1.13.3：不再展示数据库自增 id（删除任务后留洞，与「编号=位置」
+        # 语义冲突，会误导用户以为任务编号缺号）
+        f"任务：{getattr(sub, 'title', '每日项目看板')}",
         f"版本：{getattr(sub, 'task_prompt_version', '') or PROMPT_VERSION}",
         f"哈希：{getattr(sub, 'task_prompt_hash', '') or '未生成'}",
         "说明：以下提示词会随本次文档数据一起发送给看板执行模型；本次完成后不保留临时上下文。",

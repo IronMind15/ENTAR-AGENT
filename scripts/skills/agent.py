@@ -76,6 +76,13 @@ _FAKE_EXEC_DONE_RE = re.compile(
     r"✅\s*已|已(?:成功|确认)?(?:创建|删除|移除|修改|调整|推送|发送|"
     r"开通|订阅|设置|恢复|停止|保存|切换|更新|添加|启停|"
     r"生成|转达|记录|提交|完成|执行|生效)")
+# v1.13.3：将来时承诺盲区——完成态护栏（_FAKE_EXEC_DONE_RE）只拦「已…」，
+# LLM 会用「将停用」「将为您调整」等将来时承诺替代完成态（实测袁会荧
+# 「按之前的那个来」→ 零工具编造「将重新开通看板」，靠用户补「确认」才落地）。
+# 将来时 + 写操作动词同样进纠偏；不用孤立「会」字，防「我会帮您查看」误伤。
+_FAKE_EXEC_FUTURE_RE = re.compile(
+    r"(?:将|马上|即将|稍后)[^。！？\n]{0,6}?(?:停用|删除|取消|修改|调整|推送|发送|"
+    r"开通|恢复|创建|停止|更新|添加|移出|移除)")
 # 用户下达执行/确认指令的触发词：确认/执行类 + 命令式写操作动词。
 # 动词要求命令式结构（帮我删/把XX删/删掉…），孤立动词字（「我昨天删的文件」）
 # 是陈述/询问历史，不算执行指令——防复述历史被误纠偏。
@@ -95,13 +102,18 @@ _FAKE_EXEC_CORRECTION = (
 
 def _needs_fake_exec_correction(query: str, content: str,
                                 write_tool_used: bool) -> bool:
-    """完成态写操作声明，但本轮无写操作工具执行 → 纠偏。
+    """完成态/将来时写操作声明，但本轮无写操作工具执行 → 纠偏。
 
     v1.12.6（B4）：原判定 `tools_used`（本轮是否调过任何工具）太宽——只读工具
     （kb_search/contact_find/dash_query 等）的调用不能证明写操作已执行。实测 LLM
     调了 contact_find（查通讯录）后继续编造「看板维护转达工单」，护栏因 tools_used
     =True 放行。改为只认「写操作工具已执行」（policy.confirm 工具 + 二次确认）：
     只调了只读工具却声称「已创建/已删除/已推送」→ 仍是幻觉，强制纠偏。
+
+    v1.13.3：补将来时承诺盲区——完成态护栏漏掉「将停用」「将为您调整」等
+    将来时承诺（实测袁会荧「按之前的那个来」→ LLM 零工具编造「将重新开通」）。
+    现在完成态（_FAKE_EXEC_DONE_RE）**或**将来时承诺（_FAKE_EXEC_FUTURE_RE）
+    命中即进后续判定，两道闸（has_instruction / has_emphasis_done）保持不变。
 
     触发条件（满足其一即可，防止复述历史被误纠偏）：
     - 用户下达了执行/确认指令（「确认修改」「帮我删掉XX」）——这是明确的写请求；
@@ -110,7 +122,8 @@ def _needs_fake_exec_correction(query: str, content: str,
     """
     if write_tool_used:
         return False  # 真执行过写操作（带二次确认）→ 完成态声明有依据，不硬拦
-    if not _FAKE_EXEC_DONE_RE.search(content):
+    if not (_FAKE_EXEC_DONE_RE.search(content)
+            or _FAKE_EXEC_FUTURE_RE.search(content)):
         return False
     has_instruction = (_ACTION_CONFIRM_RE.search(query)
                        or _ACTION_VERB_RE.search(query))

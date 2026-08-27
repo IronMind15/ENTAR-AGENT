@@ -60,6 +60,12 @@ class PushConfig:
     weekdays: str = ""                  # ""=每天；"1,5"=周一、周五（0-6）
 
 
+# 文档类型 → 中文标签（v1.13.3：确认草稿/订阅状态逐条列源共用，
+# 不再在 subscription_commands / dashboard / bot 各自内联一份）
+KIND_LABELS = {"notable": "AI表格", "workbook": "在线表格",
+               "doc": "文档", "folder": "文件夹"}
+
+
 # ===== 加载与缓存（mtime 感知） =====
 _lock = threading.Lock()
 _cached_sources: Optional[list[SourceConfig]] = None
